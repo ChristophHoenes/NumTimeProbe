@@ -13,14 +13,14 @@
 	},
 	// Specify which devices you want to use (e.g "device=0")
 	"runArgs": [
-		"--ipc=host"
-	//	"--gpus",
-	//	"device=CHANGE_ME"
+		"--ipc=host",
+		"--gpus",
+		"device=6"
 	],
 	// Optionally mount cache files like HuggingFace datasets cache. The user directory inside the container is /home/mamba/
-	// "mounts": [
-	// 	"source=/choenes/.cache,target=/home/mamba/.cache,type=bind"
-	// ],
+	"mounts": [
+		"source=/home/choenes/.cache,target=/home/mamba/.cache,type=bind"
+	],
 	"remoteEnv": {
 		"WANDB_API_KEY": "${localEnv:WANDB_API_KEY}"
 	},
