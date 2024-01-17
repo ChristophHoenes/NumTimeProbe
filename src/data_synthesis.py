@@ -7,8 +7,7 @@ import logging
 import pickle
 import re
 import warnings
-from datetime import datetime
-from pathlib import Path, PurePath
+from pathlib import PurePath
 from typing import Tuple, List, Dict, Union, Optional, Literal
 
 import numpy as np
@@ -17,6 +16,7 @@ from datasets import Dataset, load_dataset
 from pandasql import sqldf
 from tqdm import tqdm
 
+from data_caching import save_version, caching
 from sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
     SQLConditionTemplate, SQLOverClauseTemplate,
@@ -958,19 +958,6 @@ def execute_sql(query: str, dataframe: pd.DataFrame
             print('table:\n', dataframe.head(5))
             raise e
     return query_result
-
-
-def clear_cache(cache_path: str = '../data/NumTabQA/.cache',
-                prefix: Optional[str] = None,
-                postfix: Optional[str] = None,
-                keep_latest: bool = True
-                ) -> None:
-    cache_path_obj = Path(cache_path)
-    cache_versions = sorted(cache_path_obj.glob((prefix or '') + '*' + (postfix or '')))
-    for v, version in enumerate(cache_versions):
-        if keep_latest and v == (len(cache_versions) - 1):
-            break
-        version.unlink()
 
 
 def main():
