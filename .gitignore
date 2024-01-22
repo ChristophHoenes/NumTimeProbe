@@ -1,4 +1,5 @@
 data/**/*
+pickle_workarounds/
 
 # experiment output logs
 wandb/
