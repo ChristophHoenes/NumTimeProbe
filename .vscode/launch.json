@@ -11,6 +11,33 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": true
-        }
+        },
+        {
+            "name": "Train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "args": [
+                "--model", "tapex",
+                "--accelerator", "auto",
+                "--effective_batch_size", "128",
+                "--batch_size_per_device", "64",
+                "--lr", "1e-3",
+                "--gas", "5",
+                "--val_frequency", "0.25",
+                "--max_sequence_length", "512",
+                "--workers", "4",
+                "--compile", "True",
+                "--val_before_training", "True",
+                "--padding", "max_length",
+                "--fast_dev_run", "True",
+            ],
+            "env": {
+                "WANDB_MODE": "online"
+            }
+        },
     ]
 }
