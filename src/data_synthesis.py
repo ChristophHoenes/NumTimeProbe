@@ -306,6 +306,21 @@ class Table:
                     # all empty values are marked as such via double single quotes
                     row[v] = "''"
 
+    def prepare_for_pickle(self):
+        # weakref cannot be pickled, hence replace it with default value
+        self._dataframe = lambda: None
+
+    def to_state_dict(self):
+        return {
+            'table_id': self._table_id,
+            'table_name': self.table_name,
+            'source_name': self._source,
+            'source_split': self._source_split,
+            'data_dict': self._data_dict,
+            'deduplicated_column_names': self.column_names,
+            'inferred_column_types': self._inferred_column_types,
+        }
+
     def __len__(self):
         return self.size[1]
 
@@ -345,6 +360,10 @@ class TableQuestion:
             self._alternative_answers = [query_result.iloc[row, 0]
                                          for row in range(1, len(query_result))]
         self._answer = query_result.iloc[0, 0] if len(query_result) > 0 else None
+
+    def prepare_for_pickle(self):
+        # remove weak reference
+        self._table.prepare_for_pickle()
 
 
 class QuestionTemplate:
@@ -764,7 +783,33 @@ class TableQuestionDataSet:
 
     def to_huggingface(self) -> Dataset:
         """Creates a huggingface datasets.Dataset from the questions in this dataset."""
-        raise NotImplementedError
+        logger.info('Grouping questions by table...')
+        questions_by_table = {}
+        for question in tqdm(self._questions):
+            if questions_by_table.get(question._table._table_id) is None:
+                questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
+                                                                 # TODO handle string conversion elsewhere
+                                                                 'answers': [str(question._answer)]}
+            else:
+                questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
+                # TODO handle string conversion elsewhere
+                questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
+        table = []
+        questions = []
+        answers = []
+        logger.info('Grouping questions by table...')
+        for table_id, content_dict in tqdm(questions_by_table.items()):
+            table.append(self._tables[table_id].to_state_dict())
+            questions.append(content_dict['questions'])
+            answers.append(content_dict['answers'])
+        return Dataset.from_dict({
+            'table': table,
+            'questions': questions,
+            'answers': answers,
+        })
+
+    def to_json(self):
+        return json.dumps(self, default=lambda x: x.__dict__, sort_keys=True, indent=4)
 
     def _initialize_questions(self,
                               question_templates: QuestionTemplate,
@@ -807,6 +852,10 @@ class TableQuestionDataSet:
         self._questions = [question for question in self._questions
                            if question._answer is not None]
 
+    def prepare_for_pickle(self):
+        # removes weakrefs
+        for table in self._tables.values():
+            table.prepare_for_pickle()
 
 
 # TODO refactor -> break into smaller subfunctions per strategy and post processing
