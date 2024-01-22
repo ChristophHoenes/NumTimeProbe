@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 
 # TODO replace asserts with proper Exceprions
 
+# TODO maybe to utils
+def name_id_mapping(names: List[str], both_ways: bool = False):
+    name2id = {name: idx for idx, name in enumerate(names)}
+    if both_ways:
+        id2name = {idx: name for name, idx in name2id.items()}
+        return name2id, id2name
+    return name2id
 
 
 class Table:
@@ -59,8 +66,7 @@ class Table:
                                        ]
         self._make_true_numeric()  # removes commas (e.g 10,000.99 -> 10000.99)
         self._preprocess_cells()   # handles trailing whitespaces and empty values
-        self._col2idx = {col_name: i for i, col_name in enumerate(self.column_names)}
-        self._idx2col = {idx: name for name, idx in self._col2idx.items()}
+        self._col2idx, self._idx2col = name_id_mapping(self.column_names, both_ways=True)
         self._table_id = hashlib.sha256(str.encode(f'{self.size[0]}{self.size[1]}' +
                                                    ''.join(self.column_names) +
                                                    ''.join(self._inferred_column_types))
