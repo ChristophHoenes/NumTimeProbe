@@ -3,10 +3,13 @@ from __future__ import annotations
 import copy
 import hashlib
 import itertools
+import json
 import logging
-import pickle
+import logging.config
 import re
+import traceback
 import warnings
+import weakref
 from pathlib import PurePath
 from typing import Tuple, List, Dict, Union, Optional, Literal
 
@@ -16,14 +19,16 @@ from datasets import Dataset, load_dataset
 from pandasql import sqldf
 from tqdm import tqdm
 
-from data_caching import save_version, caching
-from sql_templates import (
+from src.data_caching import save_version, caching
+from src.sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
     SQLConditionTemplate, SQLOverClauseTemplate,
     MIN, MAX, AVG, SUM, NOOP, sql_template_from_components
 )
 
 
+log_file_init_path = str(PurePath(__file__).parent.parent / 'logging.ini')
+logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +44,7 @@ class Table:
                  source_split: Optional[str] = None) -> None:
         assert not (name is None and data_dict.get('name') is None), \
             "Providing a table name is mandatory!\
-            If  name is not specified in data_dict it must be passed as an argument\
+            If  name is not specified in data_dict it must be passed as an argument \
             explicitly."
         self._data_dict = data_dict
         self.table_name = name or self._data_dict['name']
@@ -91,9 +96,9 @@ class Table:
         """Determines the unique set of values occuring in a column.
 
             Args:
-                column_name (str): The name of the column to retrieve the distinct 
+                column_name (str): The name of the column to retrieve the distinct
                 values from
-                distinct (bool): Whether to include duplicate values or not 
+                distinct (bool): Whether to include duplicate values or not
                     (default:False returns columns as is without removing duplicates)
 
             Returns:
@@ -181,7 +186,7 @@ class Table:
                 type (str): The datatype for which the columns should be returned
 
             Returns:
-                list: List of strings containing all the column names that are of 
+                list: List of strings containing all the column names that are of
                     data type 'type' or list of int with their respective indices
         """
         if names:
@@ -211,7 +216,7 @@ class Table:
 
         """
         # TODO try finding patterns of column repetitions and assign them to leftmost
-        # (first column before the pattern) 
+        # (first column before the pattern)
         # e.g team1, score, players, team2, score, players, team3, score, ...
         # and concattenate names if they result in different pairs
         # e.g team1, team1_score, team1_players, team2, team2_score, ...
@@ -224,9 +229,9 @@ class Table:
             if while_counter > while_killswitch:
                 raise Exception(
                     f"""
-                    Unusual depth of correlated/duplicated column names 
+                    Unusual depth of correlated/duplicated column names
                     ({original_column_names}) detected!
-                    Consider using different extension_string or a higher number of 
+                    Consider using different extension_string or a higher number of
                     while_killswitch.
                     """
                 )
@@ -304,9 +309,9 @@ class TableQuestion:
         query_result = execute_sql(self._sql_query, self._table.pandas_dataframe)
         if len(query_result) > 1:
             warnings.warn("Query result of dataframe returned multiple rows."
-                            "Queries that result in a unique answer should be "
-                            "preferred."
-                            )
+                          "Queries that result in a unique answer should be "
+                          "preferred."
+                          )
             self._alternative_answers = [query_result.iloc[row, 0]
                                          for row in range(1, len(query_result))]
         self._answer = query_result.iloc[0, 0] if len(query_result) > 0 else None
@@ -330,10 +335,10 @@ class QuestionTemplate:
         self.operators = sql_allowed_operators
         self.conditions = sql_conditions  # ([SQLCondition('{col2}', '>=', '{col3}')])
         # function to get all variables with regex {.+} out of overall sql template
-        # function to get all possible assignments for variable (col names of table - 
-        # crosscheck shema for type and if same value allowed simultaneously for 
+        # function to get all possible assignments for variable (col names of table -
+        # crosscheck shema for type and if same value allowed simultaneously for
         # different vars, value sampler for condition value) -> or simplify:
-        # must create new template with explicit same var name to add such questions 
+        # must create new template with explicit same var name to add such questions
         self._schema = schema
         # schema variables (list of cols with each having allowed types)
 
@@ -352,12 +357,12 @@ class QuestionTemplate:
                 template (str): The SQL template to infer the value columns from
 
             Returns:
-                dict: Dict with keys being the value variable names and values being the 
-                    associated column names 
+                dict: Dict with keys being the value variable names and values being the
+                    associated column names
 
             Todos:
-                - modify docstring to hav no Args and no Returns but description to 
-                    modify _schema only 
+                - modify docstring to hav no Args and no Returns but description to
+                    modify _schema only
 
         # after var names from template are known
         value_var_column_var_map = {condition.value:condition.condition_column for condition in self.conditions}
@@ -375,7 +380,7 @@ class QuestionTemplate:
         variables = find_template_variables(sql_template)
         """
         # the following computes the cartesian product of  column_names^(len(variables))
-        # -> exponential in num variables and a lot of duplicate column assignments for 
+        # -> exponential in num variables and a lot of duplicate column assignments for
         # different variables
         column_assignments = list(itertools.product(
             *[table.column_names for i in range(len(variables))]
@@ -456,15 +461,15 @@ class QuestionTemplate:
         # considering dependent sampling
         # 1. list of value variables
         # value_variables = [condition.value.strip(['{', '}']) for condition in self.conditions]
-        value_variables = [variable for variable in variables 
+        value_variables = [variable for variable in variables
                             if schema[variable]['type'] == 'value']
         # 2. get column names for every variable or dependent variable compound
-        # (need extra schema argument?) that comply to dtype constraint 
+        # (need extra schema argument?) that comply to dtype constraint
         # Tuple(len=value_vars, items=Tuple(len<=col_names, items=str))
         # a) retrieve dependent value vars
         dependent_val_vars = [set([elem for elem in tup]) for tup in schema['dependent_values']]
         # b) get col names as tuples
-        dependent_col_vars = 
+        dependent_col_vars =
         # c) determine and add single cols
         singles = list(set(value_variables) - set().union(*a_n_b))
         a_n_b = [tuple(elem) for elem in a_n_b]
@@ -502,7 +507,7 @@ class QuestionTemplate:
         if len(sample_values) > 0:
             # TODO retrieve variables' values and compute product (or smarter sampling
             #  strategy - maybe let have value generators always follow systematic pattern
-            #  and then multiple shuffleings of same values can be added if shuffled 
+            #  and then multiple shuffleings of same values can be added if shuffled
             #  behavior is desired and then mix with zip)
             zip(sample_values.values())
             all_assignments = [tuple(*assignment, *value)
@@ -535,7 +540,7 @@ class QuestionTemplate:
                               for variable in self._schema['variables'].keys()
                               if self._schema['variables'][variable]['type'] == 'value'
                               ]
-            used_datatypes = set([dtype 
+            used_datatypes = set([dtype
                                   for var_dtypes in used_datatypes
                                   for dtype in var_dtypes])
             # TODO create Value samplers for every column
@@ -562,14 +567,14 @@ class QuestionTemplate:
                                                                      table
                                                                      )
                 """
-                # Variable assignment idea, replaced by function above 
+                # Variable assignment idea, replaced by function above
                 for variable in find_template_variables(sql_template):
                     if self._schema[variable]['type'] == 'column':
                         for datatype in self._schema[variable]['allowed_dtypes']:
                             for col_id in table.columns_by_type(datatype, name=False):
                                 if co
                     if self._schema[variable]['type'] == 'value':
-                        # TODO move value iterator initializations outside of 
+                        # TODO move value iterator initializations outside of
                         # variable loop
                         for var_value in ValueIterator():
                             var_assignments[variable] = var_value
@@ -585,7 +590,7 @@ class QuestionTemplate:
                 if create_alternatives:
                     compiled_alternatives = [self._nl_template.format(**dict(assignment,
                                                                              op=alt))
-                                             for assignment in var_assignments 
+                                             for assignment in var_assignments
                                              for alt in operator.text_alternatives
                                              ]
                     compiled_nl_questions += compiled_alternatives
@@ -634,7 +639,7 @@ class QuestionTemplate:
                     # case with single numeric condition (if available)
                     # TODO find values to compare -> percentiles(may be easy if column is coded as histogram), percentiles + noise (only in one direction + or - depending on >< operator)
                     # for num_col_comp in num_cols:
-                    #    # TODO decide if this constraint is desired pro avoids weird questions con can miss interesting questions like wht is the next highest number after 5, 
+                    #    # TODO decide if this constraint is desired pro avoids weird questions con can miss interesting questions like wht is the next highest number after 5,
                     #    #if num_col == num_col_comp:
                     #    #    continue
                     #    condition_template =
@@ -674,7 +679,7 @@ class TableQuestionDataSet:
 
     @property
     def questions(self) -> List[TableQuestion]:
-        """Property containing a shallow copy of the list of questions 
+        """Property containing a shallow copy of the list of questions
             in the dataset.
         """
         return copy.copy(self._questions)
@@ -694,11 +699,11 @@ class TableQuestionDataSet:
         """Adds a new artifact to the dataset while preserving integrity.
 
             Raises:
-                TypeError: When type of artifact is not either Table, QuestionTemplate 
+                TypeError: When type of artifact is not either Table, QuestionTemplate
                   or TableQuestion
 
             Todos:
-                - Add support of lists 
+                - Add support of lists
                   (entails checking that lists contain same object type)
         """
         if isinstance(artifact, Table):
@@ -738,7 +743,7 @@ class TableQuestionDataSet:
                               ) -> List[TableQuestion]:
         """Creates the quelstions from the datasets' question templates and tables.
 
-            The TableQuestionDataSet can also be created incrementally. If either 
+            The TableQuestionDataSet can also be created incrementally. If either
             self._question_templates or self._tables are empty returns an empty list.
             After initiallization the dataset can also be extended.
 
@@ -796,11 +801,11 @@ def sample_values(table: Table,
             ...
 
         Returns:
-            list: List of column value samples formatted as strings 
+            list: List of column value samples formatted as strings
 
         Todos:
             - finish Args docstring
-            - implement dtype assertions 
+            - implement dtype assertions
                 e.g. no interpolation possible for discrete (str) values
             - refactor strategy functions
     """
@@ -832,7 +837,7 @@ def sample_values(table: Table,
     if isinstance(column_names, str):
         column_names = [column_names]
 
-    # default of max_samples for value_pool='percentiles' is 11 values 
+    # default of max_samples for value_pool='percentiles' is 11 values
     # (from 0th-100th percentile in steps of 10 percent)
     # else no constraint on number of samples
     if max_samples is None:
@@ -948,7 +953,7 @@ def execute_sql(query: str, dataframe: pd.DataFrame
     if query is None:
         raise ValueError("Can only compute the answer to a question if the \
                             corresponding sql_query to answer is available!"
-                            )
+                         )
     else:
         df = dataframe  # renaming for sqldf to find table
         try:
@@ -991,8 +996,8 @@ def main():
                                              else '')
                                           )
                                    )
-            logger.info("Processing first %i tables of the test set...", num_tables)
-            # use dict comprehension to get a unique set of tables 
+            logger.info("Processing first %s tables of the test set...", str(num_tables or 'all'))
+            # use dict comprehension to get a unique set of tables
             # by using _table_id as key duplicates are overridden
             test_tables = {(tab := Table(dataset[i]['table'],
                                          source_name=base_dataset_name,
