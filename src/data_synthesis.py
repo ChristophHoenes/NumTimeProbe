@@ -54,6 +54,9 @@ class Table:
             If  name is not specified in data_dict it must be passed as an argument \
             explicitly."
         self._data_dict = data_dict
+        # function instead of default value because uses weak reference after init
+        # which requires calling (parentheses) for access
+        self._dataframe = lambda: None
         self.table_name = name or self._data_dict['name']
         self._preprocess_column_names()  # fills empty column names
         self.column_names = tuple(
@@ -72,17 +75,38 @@ class Table:
                                                    ''.join(self._inferred_column_types))
                                         ).hexdigest()
 
+    def from_state_dict(cls, state_dict):
+        """ Creates empty instance and loads the serialized values from the state_dict
+            instead of recomputing them.
+        """
+        instance = cls.__new__(cls)
+        instance._data_dict = state_dict['data_dict']
+        instance._dataframe = lambda: None
+        instance.table_name = state_dict['table_name']
+        instance.column_names = state_dict['deduplicated_column_names']
+        instance._source = state_dict['source_name']
+        instance._source_split = state_dict['source_split']
+        instance._inferred_column_types = state_dict['inferred_column_types']
+        instance._col2idx, instance._idx2col = name_id_mapping(instance.column_names, both_ways=True)
+        instance._table_id = state_dict['table_id']
+        return instance
+
     @property
     def pandas_dataframe(self):
         """This property transforms the internal structure of the table data into a
             pandas DataFrame.
         """
-        return pd.DataFrame.from_dict({i: row
-                                       for i, row in enumerate(self._data_dict['rows'])
-                                       },
-                                      orient='index',
-                                      columns=self.column_names
-                                      )
+        if self._dataframe() is None:
+            df = pd.DataFrame.from_dict(
+                {i: row
+                 for i, row in enumerate(self._data_dict['rows'])
+                 },
+                orient='index',
+                columns=self.column_names
+            )
+            self._dataframe = weakref.ref(df)
+            return df
+        return self._dataframe()
 
     @property
     def data_dict(self):
