@@ -7,8 +7,8 @@ channels:
   # be listed explicitly here.
   - nodefaults
 dependencies:
-  - python=3.10 # or don't specify the version and use latest stable
-  - pytorch::pytorch>=2.0 # or don't specify the version and use latest stable
+  - python>=3.10 # or don't specify the version and use latest stable
+  - pytorch::pytorch>=2.1 # or don't specify the version and use latest stable
   # CUDA only on linux and windows
   - pytorch::pytorch-cuda=11.8 # [linux]
   - pytorch::pytorch-cuda=11.8 # [win]
