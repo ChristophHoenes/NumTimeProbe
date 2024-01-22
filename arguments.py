@@ -1,6 +1,10 @@
-from typing import Literal
+import os
 from dataclasses import dataclass
 from dargparser import dArg
+from typing import Literal
+
+from loguru import logger
+from torch import multiprocessing
 
 
 @dataclass
@@ -191,4 +195,32 @@ class MiscArgs:
         default=False,
         help='Apply fix to circumvent "Too many open files" error caused by the PyTorch Dataloader when using many workers or large batches.',  # noqa: E501
         aliases="--open_files_fix",
+    )
+
+
+@dataclass
+class TokenizationArgs:
+    allow_custom_truncation: bool = dArg(
+        default=False,
+        help=("Whether special tokenizer truncation arguments should be allowed or not (default is Fales = not allowed)."),
+    )
+    query_first: bool = dArg(
+        default=True,
+        help=("Whether the question is expected to be at the beginning (default: True) or "
+              "the end of the input (if set to False)."),
+    )
+    padding: Literal['longest', 'do_not_pad', 'max_length'] = dArg(
+        default='do_not_pad',
+        help="Whether to pad all sequences to the longest provided sequence length, the max_length or not at all (default).",
+    )
+    truncation: Literal['longest_first', 'do_not_truncate', 'only_first', 'only_second'] = dArg(
+        default='do_not_truncate',
+        help=("Whether to truncate sequences that are longer than max_lenghth. "
+              "'only_first' and 'only_second' are applicable if sequences are provided as pairs "
+              "and only truncate one of the sequences for each sample."),
+    )
+    return_tensors: Literal['pt', 'tf', 'np'] = dArg(
+        default='pt',
+        help="Whether to return tensors as PyTorch = 'pt' (default), Tensorflow = 'tf' or numpy = 'np' type.",
+        aliases="--tensor_format",
     )
