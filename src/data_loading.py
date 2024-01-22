@@ -106,25 +106,6 @@ def prepare_for_tokenizer(data, model_name, **kwargs):
             )
             for table_id, content_dict in tqdm(questions_by_table.items())
         ]
-        """ deprecates packing of question and answers in single tokenizer call
-        return [
-            {'table': table.pandas_dataframe,
-             'questions': [question._nl_question
-                           for question in data._questions
-                           if question._table == table
-                           ],
-             'answers': [question._answer
-                         for question in data._questions
-                         if question._table == table
-                         ],  # TODO check if this could leak information
-             'padding': kwargs.get('padding') or True,
-             'truncation': kwargs.get('truncation') or True,
-             'max_length': kwargs.get('max_length') or 512,
-             'return_tensors': kwargs.get('return_tensors') or 'pt',
-             }
-            for table in data.tables
-        ]
-        """
     else:
         raise NotImplementedError(f"No tokenization behavior implemented for model '{model_name}'!")
 
@@ -261,22 +242,6 @@ def truncate(tokenized: dict[torch.Tensor],
                     ]
             else:
                 truncated[tokenizer_output] = tokenized[tokenizer_output]
-        """ deprecated truncation for differen data structure
-        truncated = {}
-        for tokenizer_output in fields.keys():
-            truncated[tokenizer_output] = [
-                (torch.narrow(table_question['input_ids'],
-                            -1,  # last dimension = sequence length
-                            # if query_first truncate at the end of input and vice versa
-                            0 if query_first else -1,
-                            # input and target jointly need to fit in max_num_tokens
-                            max_sequence_length - target.shape[-1]
-                            ),
-                target
-                )
-                for table_question, target in tokenized
-            ]
-        """
     elif truncation_type in (False, 'do_not_truncate'):
         # filter out sequences larger than model's max_length
         truncated = {}
@@ -351,13 +316,6 @@ def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_se
                  max_sequence_length,
                  pad_token_id,
                  )
-    """ deprecated restructuring of padded dict
-    # give targets their own dict key ('input_ids' only, other tokenizer_output irelevant)
-    padded['targets'] = [(sample[1]['input_ids'], None) for sample in padded['input_ids']]
-    # drop target part (second position of tuple) in every tokenizer_output
-    # (for 'targets' key the target information is at first position and hence preserved)
-    padded = {key: [tup[0] for tup in value_list] for key, value_list in padded}
-    """
     # fill mask tokens for target predictions
     target_dummy = torch.ones_like(padded['input_ids'][0]) * mask_token_id
     full_sequence_targets = []
@@ -398,10 +356,10 @@ class TableQADataModule(L.LightningDataModule):
             huggingface_base_dir = f"{self.dataset_name}_{self.model_name}_tokenized"
             final_processing_path = Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split
             intermediate_processing_path = Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split
-            if final_processing_path.exists() and not self.overwrite_cache and False:
+            if final_processing_path.exists() and not self.overwrite_cache and False:  # TODO remove and False kill switch
                 # load fully processed tensor dataset
                 data_split = datasets.load_from_disk(final_processing_path)
-            elif intermediate_processing_path.exists() and not self.overwrite_cache and False:
+            elif intermediate_processing_path.exists() and not self.overwrite_cache and False:  # TODO remove and False kill switch
                 # load from intermediate step (all examples) and apply custom post-processing and filtering
                 tokenized_dict = datasets.load_from_disk(intermediate_processing_path)
                 processed_sequences = post_tokenizing(tokenized_dict,
@@ -453,10 +411,6 @@ class TableQADataModule(L.LightningDataModule):
                     + huggingface_base_dir
                     + f"/{split}"
                 )
-                """ deprecated pickle serialization
-                with (Path(self.data_dir) / ('full_dict_' + tokenized_filename)).open(mode='wb') as f:
-                    pickle.dump(tokenized_dict, f)
-                """
                 processed_sequences = post_tokenizing(tokenized_dict,
                                                       self.tokenizing_args,
                                                       self.max_num_tokens,
@@ -470,11 +424,6 @@ class TableQADataModule(L.LightningDataModule):
                     + huggingface_base_dir
                     + f"/{split}"
                 )
-                """ deprecated pickle serialization
-                full_dataset_tensor = {key: torch.vstack(value) for key, value in padded.items()}
-                with (Path(self.data_dir) / ('viable_tensors_' + tokenized_filename)).open(mode='wb') as f:
-                    pickle.dump(full_dataset_tensor, f)
-                """
 
     def setup(self, stage: str):
         print('setup', stage)

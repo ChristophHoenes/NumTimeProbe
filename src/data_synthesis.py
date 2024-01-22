@@ -7,7 +7,6 @@ import json
 import logging
 import logging.config
 import re
-import traceback
 import warnings
 import weakref
 from pathlib import PurePath
@@ -333,8 +332,6 @@ class TableQuestion:
                  operator: Optional[str] = None,
                  is_from_template: bool = False
                  ) -> None:
-        # maybe make anwer class with answer related
-        # properties and a comparison function (evaluation)
         self._nl_question = nl_question
         self.alternative_phrasings = []
         self._sql_query = sql_query
@@ -367,8 +364,6 @@ class TableQuestion:
 
 
 class QuestionTemplate:
-    # Think about: would it be a good approach to use answer set programming to generate
-    # Templates/questions?
 
     def __init__(self,
                  nl_template_string,
@@ -383,61 +378,13 @@ class QuestionTemplate:
         self.main_expression = sql_main_expression  # (SQLExpression(('{col1}',)))
         self.operators = sql_allowed_operators
         self.conditions = sql_conditions  # ([SQLCondition('{col2}', '>=', '{col3}')])
-        # function to get all variables with regex {.+} out of overall sql template
-        # function to get all possible assignments for variable (col names of table -
-        # crosscheck shema for type and if same value allowed simultaneously for
-        # different vars, value sampler for condition value) -> or simplify:
-        # must create new template with explicit same var name to add such questions
         self._schema = schema
-        # schema variables (list of cols with each having allowed types)
-
-        # operator (lag, lead, last, first, over partition by order by )
-        # main expression (col, col_expression e.g. col - col, )
-        # conditions list (col comparison value, col comparison col)
-        # allow same col per category, allowed types per category
-        # how to add info above (fillers)
-
-    """
-    def infer_value_columns(self) -> Dict[Union[str, Tuple[str, ...]],
-                                          Union[str, Tuple[str, ...]]]:
-        Infers column names that are associated with a value variable in a template.
-
-            Args:
-                template (str): The SQL template to infer the value columns from
-
-            Returns:
-                dict: Dict with keys being the value variable names and values being the
-                    associated column names
-
-            Todos:
-                - modify docstring to hav no Args and no Returns but description to
-                    modify _schema only
-
-        # after var names from template are known
-        value_var_column_var_map = {condition.value:condition.condition_column for condition in self.conditions}
-        colum_var_idx_map = {col_var:idx for idx, col_var in enumerate(collumn_variables)}
-        current_col = assignment[colum_var_idx_map[value_var_column_var_map[value]]]
-        # schema[condition.value]['corresponding_column'] = condition.condition_column
-        # schema['dependent_sampling'] = List[Tuple[str, ...]]
-        # singles = value_vars - union(*schema['dependent_sampling'])
-        """
 
     def find_all_possible_assignments(self,
                                       sql_template: str,
                                       table: Table
                                       ) -> List[Dict[str, str]]:
         variables = find_template_variables(sql_template)
-        """
-        # the following computes the cartesian product of  column_names^(len(variables))
-        # -> exponential in num variables and a lot of duplicate column assignments for
-        # different variables
-        column_assignments = list(itertools.product(
-            *[table.column_names for i in range(len(variables))]
-            )
-            )
-        # requires check for every assignment and each variable pair that has the same value
-        # if it is desired for them to have the same column assigned
-        """
         # TODO filter only type 'column' variables (maybe instead get list of values from
         # conditions and difference to all variables = col_variables)
         column_variables = [variable for variable in variables
@@ -501,73 +448,6 @@ class QuestionTemplate:
                            for a, assignment in enumerate(column_assignments)
                            for value in value_assignments[a]
                            ]
-        """
-        # random idea not sure how to use
-        condition_map = {condition.value.strip(['{', '}']):
-                        condition.condition_col.strip(['{', '}'])
-                        for condition in self.conditions
-                        }
-        # considering dependent sampling
-        # 1. list of value variables
-        # value_variables = [condition.value.strip(['{', '}']) for condition in self.conditions]
-        value_variables = [variable for variable in variables
-                            if schema[variable]['type'] == 'value']
-        # 2. get column names for every variable or dependent variable compound
-        # (need extra schema argument?) that comply to dtype constraint
-        # Tuple(len=value_vars, items=Tuple(len<=col_names, items=str))
-        # a) retrieve dependent value vars
-        dependent_val_vars = [set([elem for elem in tup]) for tup in schema['dependent_values']]
-        # b) get col names as tuples
-        dependent_col_vars =
-        # c) determine and add single cols
-        singles = list(set(value_variables) - set().union(*a_n_b))
-        a_n_b = [tuple(elem) for elem in a_n_b]
-        a_n_b.extend(singles)
-        # a_n_b = new value cols -> fix naming
-        value_cols = [schema[value_var]['corresponding_column'] for value_var in value_variables]  # extracted to schema from expression
-        # 3. determine number of value assignments hard coded or heuristic (maybe dynamic)
-        num_value_samples = 10
-        # 4. sample values for each var
-        # TODO think if argument num_draws is necessary or while loop
-        values = [sample_values(table,
-                                value_col,
-                                max_samples=num_value_samples,
-                                num_draws=num_value_samples,
-                                strategy=schema['sample_strategy'],
-                                value_pool=schema['value_pool'],
-                                shuffle=True,
-                                **schema['interpolation_args'],
-                                return_indices=False
-                                )
-                for value_col in value_cols
-                ]
-        # 5. zip results
-        value_assignments = zip(*values)
-        # 6. combine with col assignments
-        all_assignments = [tuple(*assignment, *value)
-                        for assignment in column_assignments
-                        for value in value_assignments
-                        ]
-        # Meta: test inter-assignment variance over different values
-        """
-
-        """
-        # old implementation (incomplete/obsolete)
-        if len(sample_values) > 0:
-            # TODO retrieve variables' values and compute product (or smarter sampling
-            #  strategy - maybe let have value generators always follow systematic pattern
-            #  and then multiple shuffleings of same values can be added if shuffled
-            #  behavior is desired and then mix with zip)
-            zip(sample_values.values())
-            all_assignments = [tuple(*assignment, *value)
-                            for assignment in column_assignments
-                            for value in enumerate(sample_values.items())
-                            ]
-        """
-        """
-        value_variables = [condition.value.strip('{}')
-                           for condition in self.conditions]
-        """
         value_variables = [variable for variable in variables
                            if self._schema['variables'][variable]['type'] == 'value']
         ordered_variables = column_variables + value_variables
@@ -615,19 +495,6 @@ class QuestionTemplate:
                 var_assignments = self.find_all_possible_assignments(sql_template,
                                                                      table
                                                                      )
-                """
-                # Variable assignment idea, replaced by function above
-                for variable in find_template_variables(sql_template):
-                    if self._schema[variable]['type'] == 'column':
-                        for datatype in self._schema[variable]['allowed_dtypes']:
-                            for col_id in table.columns_by_type(datatype, name=False):
-                                if co
-                    if self._schema[variable]['type'] == 'value':
-                        # TODO move value iterator initializations outside of
-                        # variable loop
-                        for var_value in ValueIterator():
-                            var_assignments[variable] = var_value
-                """
                 # need list of dicts not dict of lists
                 compiled_sql_statements = [sql_template.format(**assignment)
                                            for assignment in var_assignments
@@ -656,47 +523,6 @@ class QuestionTemplate:
                 generated_questions.extend(questions)
 
         return generated_questions
-        """
-                for num_col_id in table.columns_by_type('numeric', name=False):
-                    # TODO add group by / order by  option
-                    # TODO probe column order position understanding e.g avg "of 5th
-                    # column" / "of column no. 5"
-                    column_name = table.column_names[num_col_id]
-                    sql = "SELECT " + operator['sql'] + f"(\"{column_name}\") FROM df\n" \
-                        + "WHERE true\n"
-                    nl_question = f"What is the {operator['text']}" \
-                        f"of column \"{column_name}\""
-                    generated_questions.append(TableQuestion(nl_question + "?",
-                                                             table,
-                                                             sql,
-                                                             operator['sql']
-                                                             )
-                                               )
-                    # case with single text condition
-                    for text_col_id in table.columns_by_type('text', name=False):
-                        distinct_values = table.column_values(text_col_id, distinct=True)
-                        for value in distinct_values:
-                            if operator == '' and num_rows > len(distinct_values):
-                                continue
-                            # TODO think if extra label if condition column num_rows ~= num_distinct_values -> single-lookup all aggregates same
-                            # otherwise real aggregations might be underrepresented
-                            text_condition_col_name = table.col_names[text_col_id]
-                            value_safe = value.replace("'", "''")
-                            condition_template_sql = "\t" + f"AND \"{text_condition_col_name}\" = '{value_safe}'"
-                            condition_template_text = f" where column \"{text_condition_col_name}\" has value '{value}'?"
-                            numeric_intensive_dataset.add(nl_question + condition_template_text, sql + condition_template_sql, table_name, operator, condition_columns=[text_condition_col_name], condition_types=['text'], compute_answer=compute_answer)
-                    # case with single numeric condition (if available)
-                    # TODO find values to compare -> percentiles(may be easy if column is coded as histogram), percentiles + noise (only in one direction + or - depending on >< operator)
-                    # for num_col_comp in num_cols:
-                    #    # TODO decide if this constraint is desired pro avoids weird questions con can miss interesting questions like wht is the next highest number after 5,
-                    #    #if num_col == num_col_comp:
-                    #    #    continue
-                    #    condition_template =
-                    # case with range condition on num / date (if available) special case of previous where two conditions coincide to be < and > on same column
-                    # (case with condition that requires subquery computation)
-                    # cases with 2 and 3 conditions (all permutations?)
-        return numeric_intensive_dataset
-        """
 
 
 class TableQuestionDataSet:
@@ -1126,15 +952,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    """
-    try:
-        main()
-    except Exception as e:
-        logger.info("Uncaught exception: %s", traceback.format_exc())
-        logger.info(e)
-
-    # Test if generated data can be loaded from evaluate.py (from within same package)
-    dummy_dataset = TableQuestionDataSet('dummy_dataset')
-    with open('dummy_dataset.pkl', 'wb') as f:
-        pickle.dump(dummy_dataset, f)
-    """
