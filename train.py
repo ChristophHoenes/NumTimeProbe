@@ -1,5 +1,4 @@
 import dataclasses
-import multiprocessing
 import os
 from pathlib import Path
 
@@ -15,9 +14,9 @@ from lightning.pytorch.plugins.environments import (
 )
 from lightning.pytorch.strategies import DDPStrategy
 from loguru import logger
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from transformers import PreTrainedModel
 
-from arguments import TrainingArgs, MiscArgs
+from arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from dlib.frameworks.lightning import CUDAMetricsCallback
 from dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
 from dlib.frameworks.wandb import (
@@ -132,11 +131,6 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
     args.model_log_frequency = int(args.model_log_frequency / goal_units_per_optimizer_step)
     args.lr_warmup = int(args.lr_warmup / goal_units_per_optimizer_step)
 
-    tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer_path or args.model_name_or_path, use_fast=True
-    )
-
-    vocab_size = len(tokenizer)  # NOTE: tokenizer.vocab_size returns size without added vocab
     checkpoint_callback = ModelCheckpoint(
         filename="snap-{step}-samples-{progress/samples}-{progress/tokens}-loss-{val/loss:.2f}",
         monitor="val/loss",
@@ -149,9 +143,6 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
     )
 
     ################# Construct model ##############
-    model_extra_args = dict(
-        effective_batch_size_per_step=effective_batch_size_per_step, vocab_size=vocab_size
-    )
 
     # Resume from checkpoint if specified
     if args.checkpoint_path:
