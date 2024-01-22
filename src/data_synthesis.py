@@ -711,7 +711,7 @@ class TableQuestionDataSet:
         self.name = name
         self.description = description
         self._question_templates = question_templates
-        self._tables = {table._table_id: table for table in tables}
+        self._tables = {table._table_id: table for table in (tables or [])}
         self._unanswerable_questions = []
         self._questions = self._initialize_questions(question_templates,
                                                      tables,
@@ -1049,25 +1049,14 @@ def main():
                              base_dataset_split: str = 'test',
                              num_tables: Optional[int] = None,
                              use_cache: bool = True,
-                             cache_path: str = '../data/NumTabQA/.cache'
+                             cache_path: str = './data/NumTabQA/.cache'
                              ) -> Dict[str, Table]:
-        cache_path_obj = Path(cache_path)
         cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables.pickle'
-        if cache_path_obj.exists():
-            cache_versions = sorted(cache_path_obj.glob('*' + cache_file_name))
-            latest_cache_version = cache_versions[-1] \
-                if len(cache_versions) > 0 \
-                else cache_path_obj
+        if use_cache:
+            test_tables = caching(cache_path, cache_file_name)
         else:
-            cache_path_obj.mkdir(parents=True)
-            latest_cache_version = cache_path_obj
-        if latest_cache_version.is_file() and use_cache:
-            logger.info("Loading from cache (%s)", latest_cache_version.name)
-            with latest_cache_version.open('rb') as f:
-                test_tables = pickle.load(f)
-        else:
-            logger.info("Loading %s's first %i %s split samples",
-                        base_dataset_name, num_tables, base_dataset_split)
+            logger.info("Loading %s's first %s %s split samples",
+                        base_dataset_name, str(num_tables or 'all'), base_dataset_split)
             dataset = load_dataset(base_dataset_name,
                                    split=(f'{base_dataset_split}'
                                           + (f'[:{num_tables}]'
@@ -1083,18 +1072,69 @@ def main():
                                          source_split=base_dataset_split)
                             )._table_id: tab for i in range(len(dataset))
                            }
-            save_path = cache_path_obj / (datetime.now().strftime('%y%m%d_%H%M_%S_%f_')
-                                          + cache_file_name)
-            logger.info("Writing list of tables to disk")
-            with save_path.open('wb') as f:
-                pickle.dump(test_tables, f)
+            for table in test_tables.values():
+                table.prepare_for_pickle()
+            save_version(test_tables, cache_path, cache_file_name)
         return test_tables
 
-    def create_table_question_dataset() -> TableQuestionDataSet:
-        return TableQuestionDataSet('WikiTablesBaseOperators')
+    def create_basic_table_question_dataset(tables,
+                                            name='wikitables_test',
+                                            use_cache: bool = True,
+                                            cache_path: str = './data/NumTabQA/.cache'
+                                            ) -> TableQuestionDataSet:
+        cache_file_name = f"{name}_basic_dataset.pickle"
+        if use_cache:
+            dataset = caching(cache_path, cache_file_name)
+        else:
+            base_description = \
+                """
+                Basic SQL operators min, max, avg, sum or no operation combined with a simple value lookup condition of a different column.
+                Using WikiTables test set.
 
-    return create_table_dataset()
+                """
+            nl = "What is the {op} of column {col1} given that {col2} has value {val1}?"
+            main_expr = SQLColumnExpression(("{col1}",))
+            conditions = (SQLConditionTemplate(SQLColumnExpression(('{col2}',)), '=', '{val1}'),)
+            allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])
+            schema = {
+                'variables': {
+                    'col1': {'type': 'column',
+                             'allowed_dtypes': ['numeric']
+                             },
+                    'col2': {'type': 'column',
+                             'allowed_dtypes': ['numeric', 'text']
+                             },
+                    'val1': {'type': 'value',
+                             'allowed_dtypes': ['numeric', 'text']
+                             }
+                },
+                'sample_strategy': 'random',
+                'value_pool': 'distinct_values',
+                'interpolation_args': dict()
+            }
+            basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+            dataset = TableQuestionDataSet(name + '_basic',
+                                           description=base_description,
+                                           question_templates=[basic_template],
+                                           tables=tables
+                                           )
+            save_version(dataset, cache_path, cache_file_name)
+        return dataset
+
+    return create_basic_table_question_dataset(list(create_table_dataset(use_cache=False).values()), use_cache=False)
 
 
 if __name__ == "__main__":
     main()
+    """
+    try:
+        main()
+    except Exception as e:
+        logger.info("Uncaught exception: %s", traceback.format_exc())
+        logger.info(e)
+
+    # Test if generated data can be loaded from evaluate.py (from within same package)
+    dummy_dataset = TableQuestionDataSet('dummy_dataset')
+    with open('dummy_dataset.pkl', 'wb') as f:
+        pickle.dump(dummy_dataset, f)
+    """
