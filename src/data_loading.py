@@ -3,18 +3,23 @@ import glob
 import os
 import shutil
 import tempfile
+import warnings
+from dataclasses import asdict
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Union
 
 import datasets
 import lightning as L
+import torch
 from loguru import logger
 from torch.utils.data.dataloader import DataLoader
-from transformers import DataCollatorForLanguageModeling
+from tqdm import tqdm
+from transformers import DataCollatorForLanguageModeling, TapexTokenizer
 from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
+from src.data_caching import caching
 from dlib.frameworks.pytorch import (
     get_rank,
     main_process_first,
@@ -23,6 +28,503 @@ from dlib.frameworks.pytorch import (
 
 if TYPE_CHECKING:
     from train import MiscArgs, TrainingArgs
+
+
+class WrapCustomTupleDataLoader(DataLoader):
+    def __init__(self, *args, **kwargs):
+        self.custom_tuple = kwargs.pop('custom_tuple', tuple())
+        super().__init__(*args, **kwargs)
+
+    def __iter__(self):
+        return _WrapCustomTupleDataLoaderIter(iter(self), self.custom_tuple)
+
+
+class _WrapCustomTupleDataLoaderIter:
+    """
+        Class to wrap the output of next() of any Iterator
+        (designed for Pytorch _BasicDataLoaderIter)
+        into a custom tuple.
+        The remaining functionality should stay the same as in the wrapped Iterator.
+    """
+    def __init__(self, wrapped_iter, custom_tuple=tuple()):
+        if not isinstance(custom_tuple, tuple):
+            raise ValueError(f"Argument 'custom_tuple' must be of type tuple not '{type(custom_tuple)}'!")
+        self.wrapped_iter = wrapped_iter
+        self.custom_tuple = custom_tuple
+
+    def __iter__(self):
+        return iter(self.wrapped_iter)
+
+    def __next__(self):
+        yielded_data = next(self.wrapped_iter)
+        return tuple(yielded_data, *self.custom_tuple)
+
+    def __len__(self):
+        return len(self.wrapped_iter)
+
+
+def prepare_for_tokenizer(data, model_name, **kwargs):
+    # TODO implement model specific pre-tokenizer formatting and default case
+    # TODO maybe a dict of functions instead of long if/elif/else would be cleaner
+    if model_name == 'tapex':
+        # TODO try performance with list of tables (duplicated) references as well
+        # TODO flatten each question to sample also considering alternative answers
+        logger.info("Flattening examples to tokenizer format...")
+        padding = kwargs.get('padding') or True
+        truncation = kwargs.get('truncation') or True
+        max_length = kwargs.get('max_length') or 512
+        return_tensors = kwargs.get('return_tensors') or 'pt'
+        # TODO try batch encode for significant speedup (multiple questions per table)
+        questions_by_table = {}
+        for question in data._questions:
+            if questions_by_table.get(question._table._table_id) is None:
+                questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
+                                                                 # TODO handle string conversion elsewhere
+                                                                 'answers': [str(question._answer)]}
+            else:
+                questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
+                # TODO handle string conversion elsewhere
+                questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
+        return [
+            (
+                {
+                    'table': data._tables[table_id].pandas_dataframe,
+                    'query': content_dict['questions'],
+                    'padding': padding,
+                    'truncation': truncation,
+                    'max_length': max_length,
+                    'return_tensors': return_tensors,
+                },
+                {
+                    'answer': content_dict['answers'],
+                    'padding': padding,
+                    'truncation': truncation,
+                    'max_length': max_length,
+                    'return_tensors': return_tensors,
+                    'add_special_tokens': False,
+                }
+            )
+            for table_id, content_dict in tqdm(questions_by_table.items())
+        ]
+        """ deprecates packing of question and answers in single tokenizer call
+        return [
+            {'table': table.pandas_dataframe,
+             'questions': [question._nl_question
+                           for question in data._questions
+                           if question._table == table
+                           ],
+             'answers': [question._answer
+                         for question in data._questions
+                         if question._table == table
+                         ],  # TODO check if this could leak information
+             'padding': kwargs.get('padding') or True,
+             'truncation': kwargs.get('truncation') or True,
+             'max_length': kwargs.get('max_length') or 512,
+             'return_tensors': kwargs.get('return_tensors') or 'pt',
+             }
+            for table in data.tables
+        ]
+        """
+    else:
+        raise NotImplementedError(f"No tokenization behavior implemented for model '{model_name}'!")
+
+
+def get_tokenizer(model_name, **kwargs):
+    if model_name == 'tapex':
+        return TapexTokenizer.from_pretrained("microsoft/tapex-base-finetuned-wtq")
+    elif model_name == 'omnitab':
+        return AutoTokenizer.from_pretrained("neulab/omnitab-large-finetuned-wtq")
+    else:
+        raise NotImplementedError(f"No tokenizer getter implemented for model '{model_name}'!")
+
+
+# TODO consider moving within TableQADataModule -> less arguments as most contained in self but reuse outside of class needed?
+def load_split_tensor(split: str, dataset_name: str, model_name: str, data_dir: str = './data/NumTabQA/.cache'):
+    # data_dict = pickle.load((Path(data_dir) / f"viable_tensors_{split}_{dataset_name}_{model_name}_tokenized.pickle").open('rb'))
+    path = Path(data_dir) / 'viable_tensors' / f"{dataset_name}_{model_name}_tokenized" / split
+    data_dict = datasets.Dataset.load_from_disk(path)
+    # targets_tensor = data_dict.get('targets')
+    try:
+        targets_tensor = torch.tensor(data_dict['targets'])
+    except KeyError:
+        targets_tensor = None
+    # inputs_tensors = [value for key, value in data_dict.items() if key != 'targets']
+    inputs_tensors = [torch.tensor(data_dict[col]) for col in data_dict.column_names if col != 'targets']
+    inputs_dataset = torch.utils.data.TensorDataset(*inputs_tensors)
+    if targets_tensor is not None:
+        return torch.utils.data.StackDataset(inputs_dataset, torch.utils.data.TensorDataset(targets_tensor))
+    return inputs_dataset
+
+
+def batch_end_of_sequence(batch, pad_token_id):
+    """ Returns the indices where the pad token occurs for the first time. """
+    is_padding = batch == pad_token_id
+    any_padding = is_padding.sum(dim=1) >= 1
+    first_padding = is_padding.int().argmax(dim=1)  # TODO is -1 more general?
+    return torch.where(any_padding, first_padding, batch.shape[-1])
+
+
+def cast_to_reduced_int(ints, num_values: int = None, field_name: Optional[str] = None):
+    """
+        Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.
+        If num_values is None the amount of values (e.g. vocab size) is estimated by the maximum of the
+        values in the tensor plus one (for id zero).
+    """
+    if 'mask' in field_name:
+        num_values = None
+    if num_values is None:
+        num_values = ints.max() + 1
+    if num_values <= 2:
+        cast_to = torch.bool
+    elif num_values <= 128:
+        cast_to = torch.int8
+    elif num_values <= 256 and ints.min() >= 0:
+        cast_to = torch.uint8
+    elif num_values <= 32768:
+        cast_to = torch.int16
+    elif num_values <= 2_147_483_648:
+        cast_to = torch.int32
+    else:
+        cast_to = torch.int64
+    return ints.to(cast_to)
+
+
+def unbind_table_batch(bound_table_batches, pad_token_id):
+    """ Unbind single questions and aswers from a table batch and remove batch padding. """
+    # TODO maybe remove also end of sequence token in input before target mask? - I think not
+    logger.info("Unbinding table batches...")
+    # save the end of sequence of input_ids (last id before first padding) for every batch
+    end_of_sequence_idxs = []
+    # also save the original sequence length of every batch (before removing padding)
+    input_seq_len = []
+    # manually ensure the order such that all fields are processed like input_ids except target_ids
+    # (which then changes the state of end_of_sequence_idxs & input_seq_len)
+    tokenizer_keys = list(bound_table_batches.keys())
+    tokenizer_keys.remove('input_ids')
+    tokenizer_keys.remove('targets')
+    tokenizer_keys = ['input_ids', *tokenizer_keys, 'targets']
+    for key in tokenizer_keys:
+        batches_unbound = []
+        value = bound_table_batches[key]
+        for b, batch in enumerate(value):
+            if key in ['input_ids', 'targets']:
+                # save the states of input_ids to apply them to all other fields
+                # only recompute for targets which have different sequence lengths
+                end_of_sequence_idx = batch_end_of_sequence(batch, pad_token_id)
+                end_of_sequence_idxs.append(end_of_sequence_idx)
+                input_seq_len.append(bound_table_batches['input_ids'][b].shape[-1])
+            else:
+                # lookup input_ids state
+                end_of_sequence_idx = end_of_sequence_idxs[b]
+            # test if the field is a tensor with the same sequence length as the input tokens
+            is_like_input_sequence = (
+                isinstance(bound_table_batches[key][0], torch.Tensor)
+                and bound_table_batches[key][b].shape[-1] == input_seq_len[b]
+            )  # define condition before if clause for readability
+            if is_like_input_sequence or key == 'targets':
+                # only apply padding removal for fields that relate to input_ids
+                batch_unbound = [row[:end_of_sequence_idx[i]] for i, row in enumerate(batch)]
+            else:
+                # leave unchanged
+                batch_unbound = batch
+            batches_unbound.append(batch_unbound)
+        bound_table_batches[key] = [question for table_batch in batches_unbound for question in table_batch]
+    return bound_table_batches
+
+
+def truncate(tokenized: dict[torch.Tensor],
+             truncation_type: Union[bool, str],
+             max_sequence_length: int,
+             query_first: bool = True,
+             allow_custom_truncation: bool = True,
+             ):
+    logger.info("Apply truncation strategy...")
+    # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
+    if truncation_type in (True, 'longest_first'):
+        truncated = {}
+        for tokenizer_output in tokenized.keys():
+            is_like_input_sequence = (
+                isinstance(tokenized[tokenizer_output][0], torch.Tensor)
+                and tokenized[tokenizer_output][0].shape[-1] == tokenized['input_ids'][0].shape[-1]
+            )
+            if is_like_input_sequence:
+                truncated[tokenizer_output] = [
+                    torch.narrow(
+                        table_question,
+                        -1,  # last dimension = sequence length
+                        # if query_first truncate at the end of input and vice versa
+                        0 if query_first else -1,
+                        # input and target jointly need to fit in max_num_tokens
+                        max_sequence_length - tokenized['targets'][i].shape[-1]
+                        )
+                    for i, table_question in enumerate(tokenized[tokenizer_output])
+                    ]
+            else:
+                truncated[tokenizer_output] = tokenized[tokenizer_output]
+        """ deprecated truncation for differen data structure
+        truncated = {}
+        for tokenizer_output in fields.keys():
+            truncated[tokenizer_output] = [
+                (torch.narrow(table_question['input_ids'],
+                            -1,  # last dimension = sequence length
+                            # if query_first truncate at the end of input and vice versa
+                            0 if query_first else -1,
+                            # input and target jointly need to fit in max_num_tokens
+                            max_sequence_length - target.shape[-1]
+                            ),
+                target
+                )
+                for table_question, target in tokenized
+            ]
+        """
+    elif truncation_type in (False, 'do_not_truncate'):
+        # filter out sequences larger than model's max_length
+        truncated = {}
+        for tokenizer_output in tokenized.keys():
+            truncated[tokenizer_output] = [
+                table_question
+                for i, table_question in enumerate(tokenized[tokenizer_output])
+                if tokenized['input_ids'][i].shape[-1] + tokenized['targets'][i].shape[-1] <= max_sequence_length
+            ]
+    elif allow_custom_truncation is True:
+        truncated = tokenized
+    else:
+        # for compatibility with huggingface implement only_first & only_second but not needed up to now
+        # TODO think about value error and check allowed argument values?
+        raise NotImplementedError(f"Truncation strategy '{truncation_type}' is not implemented!")
+    return truncated
+
+
+def pad(tokenized:  dict[torch.Tensor],
+        padding_type: Union[bool, str],
+        max_sequence_length: int,
+        pad_token_id: int,
+        ):
+    logger.info("Apply padding strategy...")
+    if padding_type in (True, 'max_length'):
+        padded = {}
+        for tokenizer_output in tokenized.keys():
+            is_like_input_sequence = (
+                isinstance(tokenized[tokenizer_output][0], torch.Tensor)
+                and tokenized[tokenizer_output][0].shape[-1] == tokenized['input_ids'][0].shape[-1]
+            )
+            if is_like_input_sequence and tokenizer_output:
+                if tokenizer_output != 'targets':
+                    # determine shape of tensor and alter last dimension to maximum sequence length of model
+                    tensor_shape = list(tokenized[tokenizer_output][0].shape)
+                    tensor_shape[-1] = max_sequence_length
+                    # append dummy tensor to ensure maximum length sequence is present
+                    tokenized[tokenizer_output].append(torch.zeros(tensor_shape))
+                # pad to longest sequence and unbind to list of single samples again
+                padded[tokenizer_output] = list(torch.unbind(
+                    torch.nn.utils.rnn.pad_sequence(
+                        [table_question for table_question in tokenized[tokenizer_output]],
+                        batch_first=True,
+                        # TODO check semantics of pad token for masks
+                        padding_value=float(pad_token_id) if 'mask' not in tokenizer_output else 0.,
+                    )
+                ))[:-1]  # pop dummy tensor that was previously appended
+            else:
+                # TODO think of removing unbind and instead move vstack here such that
+                # by convention after padding there is a tensor instead of a list of samples
+                padded[tokenizer_output] = tokenized[tokenizer_output]
+    elif padding_type in (False, 'do_not_pad'):
+        padded = tokenized
+    else:
+        raise NotImplementedError(f"Padding strategy '{padding_type}' is not implemented!")
+
+
+def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_sequence_length: int, pad_token_id: int, mask_token_id: int):
+    truncated = truncate(tokenized,
+                         tokenizing_args['truncation'],
+                         max_sequence_length,
+                         query_first=tokenizing_args['query_first'],
+                         allow_custom_truncation=tokenizing_args['allow_custom_truncation'],
+                         )
+
+    # save input lengths to know at what index to inject target masks for every sample
+    input_lengths = [table_question.shape[-1] for table_question in truncated['input_ids']]
+    target_lengths = [table_question.shape[-1] for table_question in truncated['targets']]
+
+    padded = pad(truncated,
+                 tokenizing_args['padding'],
+                 max_sequence_length,
+                 pad_token_id,
+                 )
+    """ deprecated restructuring of padded dict
+    # give targets their own dict key ('input_ids' only, other tokenizer_output irelevant)
+    padded['targets'] = [(sample[1]['input_ids'], None) for sample in padded['input_ids']]
+    # drop target part (second position of tuple) in every tokenizer_output
+    # (for 'targets' key the target information is at first position and hence preserved)
+    padded = {key: [tup[0] for tup in value_list] for key, value_list in padded}
+    """
+    # fill mask tokens for target predictions
+    target_dummy = torch.ones_like(padded['input_ids'][0]) * mask_token_id
+    full_sequence_targets = []
+    for i, (input_end_idx, target_length) in enumerate(zip(input_lengths, target_lengths)):
+        padded['input_ids'][i][input_end_idx:input_end_idx+target_length] = mask_token_id
+        template = torch.clone(target_dummy)
+        template[input_end_idx:input_end_idx+target_length] = padded['targets'][i][:target_length]
+        full_sequence_targets.append(template)
+    padded['targets'] = full_sequence_targets
+    return padded
+
+
+class TableQADataModule(L.LightningDataModule):
+    def __init__(self,
+                 model,
+                 tokenizing_args=None,
+                 data_dir: str = './data/NumTabQA/.cache',
+                 dataset_name='basic_dataset',
+                 overwrite_cache=False,
+                 ):
+        super().__init__()
+        self.model_specs = model.model_specs
+        # TODO test if model name is known else raise NotImplemented error
+        self.model_name = model.model_specs.model_name_or_path
+        self.tokenizing_args = asdict(tokenizing_args) or dict()
+        self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
+        self.max_num_tokens = self.tokenizing_args.get('max_length') or 512
+        self.data_dir = data_dir
+        self.dataset_name = dataset_name
+        self.overwrite_cache = overwrite_cache
+        self.splits = dict()
+
+    def prepare_data(self):
+        # download not needed as locally on disk from data_synthesis
+        # but once published download from huggingface datasets
+        for split in ['test']:  # ['train', 'validation', 'test']: <- skip other splits while developing
+            # path definitions to check for saved files
+            huggingface_base_dir = f"{self.dataset_name}_{self.model_name}_tokenized"
+            final_processing_path = Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split
+            intermediate_processing_path = Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split
+            if final_processing_path.exists() and not self.overwrite_cache and False:
+                # load fully processed tensor dataset
+                data_split = datasets.load_from_disk(final_processing_path)
+            elif intermediate_processing_path.exists() and not self.overwrite_cache and False:
+                # load from intermediate step (all examples) and apply custom post-processing and filtering
+                tokenized_dict = datasets.load_from_disk(intermediate_processing_path)
+                processed_sequences = post_tokenizing(tokenized_dict,
+                                                      self.tokenizing_args,
+                                                      self.max_num_tokens,
+                                                      self.model_specs.pad_token_id,
+                                                      self.model_specs.mask_token_id,
+                                                      )
+                # save fully processed dataset
+                datasets.Dataset.from_dict(processed_sequences).save_to_disk(
+                    self.data_dir
+                    + '/viable_tensors/'
+                    + huggingface_base_dir
+                    + f"/{split}"
+                )
+            else:
+                # load raw TableQuestionDataset and do full processing
+                base_filename = f"{split}_{self.dataset_name}.pickle"
+                data_split = caching(self.data_dir, base_filename)
+                if data_split is None:
+                    raise ValueError(f"No data split '{split}' found at {self.data_dir}! "
+                                     "Please download, or generate the requested dataset.")
+                # always disable padding and truncation - apply configuration afterwards
+                # except for special truncation strategies supported by the tokenizer
+                tokenizing_args = self.tokenizing_args.copy()
+                tokenizing_args.update({'padding': False,
+                                        'truncation': self.tokenizing_args['truncation']
+                                        if self.tokenizing_args['allow_custom_truncation'] else False
+                                        }
+                                       )
+                # transform input to format expected by tokenizer
+                tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, **tokenizing_args)
+                logger.info("Tokenize examples...")
+                tokenized = [(self.tokenizer(**table_question), self.tokenizer(**target)['input_ids'])
+                             for table_question, target in tqdm(tokenizer_inputs)]
+                # TODO remove following line after testing
+                tokenizer_outputs = tokenized[0][0].keys()
+                # convert tuple of tokenized model inputs (outputs depend on tokenizer)
+                # and target token_ids to dict of tensors and infer smallest possible int dtype to represent the ids
+                tokenized_dict = {key: [cast_to_reduced_int(sample[0][key], self.model_specs.vocab_size, field_name=key)
+                                        for sample in tokenized]
+                                  for key in tokenizer_outputs}
+                tokenized_dict['targets'] = [cast_to_reduced_int(sample[1], self.model_specs.vocab_size) for sample in tokenized]
+                tokenized_dict = unbind_table_batch(tokenized_dict, self.model_specs.pad_token_id)
+                # save raw tokenizer outputs (sequences with variable length)
+                datasets.Dataset.from_dict(tokenized_dict).save_to_disk(
+                    self.data_dir
+                    + '/full_dict/'
+                    + huggingface_base_dir
+                    + f"/{split}"
+                )
+                """ deprecated pickle serialization
+                with (Path(self.data_dir) / ('full_dict_' + tokenized_filename)).open(mode='wb') as f:
+                    pickle.dump(tokenized_dict, f)
+                """
+                processed_sequences = post_tokenizing(tokenized_dict,
+                                                      self.tokenizing_args,
+                                                      self.max_num_tokens,
+                                                      self.model_specs.pad_token_id,
+                                                      self.model_specs.mask_token_id,
+                                                      )
+                # save fully processed dataset
+                datasets.Dataset.from_dict(processed_sequences).save_to_disk(
+                    self.data_dir
+                    + '/viable_tensors/'
+                    + huggingface_base_dir
+                    + f"/{split}"
+                )
+                """ deprecated pickle serialization
+                full_dataset_tensor = {key: torch.vstack(value) for key, value in padded.items()}
+                with (Path(self.data_dir) / ('viable_tensors_' + tokenized_filename)).open(mode='wb') as f:
+                    pickle.dump(full_dataset_tensor, f)
+                """
+
+    def setup(self, stage: str):
+        print('setup', stage)
+
+        def check_dataset_type(split_name):
+            if not isinstance(self.splits[split_name], torch.utils.data.StackDataset):
+                # TODO think of using TypeError instead
+                warnings.warn(
+                    f"Dataset should have type 'torch.utils.data.StackDataset' if there are targets but is of type '{type(self.splits[split_name])}'! "
+                    "There should always be targets available check your dataset."
+                )
+                # raise TypeError(f"Dataset should have type 'torch.utils.data.StackDataset' but is of type '{type(self.splits[split_name])}'! "
+                #                "Dataset should return a variable length tuple of model inputs and the targets as torch.Tensor.")
+
+        # Assign train/val datasets for use in dataloaders
+        if stage == "fit":
+            # TODO change path arguments to 'train' and 'validation' once computed
+            self.splits['train'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            check_dataset_type('train')
+            self.splits['validation'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            check_dataset_type('validation')
+
+        # Assign test dataset for use in dataloader(s)
+        if stage == 'test':
+            self.splits['test'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            check_dataset_type('test')
+
+        if stage == 'predict':
+            self.splits['test'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            check_dataset_type('test')
+
+    def train_dataloader(self):
+        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
+            return WrapCustomTupleDataLoader(self.splits['train'], batch_size=64, custom_tuple=(None,))
+        return DataLoader(self.splits['train'], batch_size=64)
+
+    def val_dataloader(self):
+        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
+            return WrapCustomTupleDataLoader(self.splits['validation'], batch_size=64, custom_tuple=(None,))
+        return DataLoader(self.splits['validation'], batch_size=64)
+
+    def test_dataloader(self):
+        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
+            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=64, custom_tuple=(None,))
+        return DataLoader(self.splits['test'], batch_size=64)
+
+    def predict_dataloader(self):
+        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
+            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=64, custom_tuple=(None,))
+        return DataLoader(self.splits['test'], batch_size=64)
 
 
 class LMDataModule(L.LightningDataModule):
@@ -240,6 +742,7 @@ class LMDataModule(L.LightningDataModule):
         return processed_datasets
 
     def train_dataloader(self):
+        # TODO transfer common args to attribute and only do update shuffle for training
         common_args = dict(
             batch_size=self.args.batch_size_per_device,
             num_workers=self.args.workers,
