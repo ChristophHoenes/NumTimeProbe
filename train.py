@@ -27,20 +27,20 @@ from dlib.frameworks.wandb import (
     check_checkpoint_path_for_wandb,
     check_for_wandb_checkpoint_and_download_if_necessary,
 )
-from src.data_loading import LMDataModule
+from src.data_loading import TableQADataModule
 from src.helpers import (
     choose_auto_accelerator,
     choose_auto_devices,
     handle_batch_size_logic_,
     log_slurm_info,
 )
-from src.model import BasicLM
+from src.model import LightningWrapper, get_model_module
 
 
 @logger.catch(reraise=True)
 def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
     current_process_rank = get_rank()
-    args, misc_args = parsed_arg_groups
+    args, misc_args, tokenizer_args = parsed_arg_groups
 
     ################ Apply fixes ##############
     if misc_args.too_many_open_files_fix:
@@ -287,5 +287,5 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
 
 
 if __name__ == "__main__":
-    parsed_arg_groups = dargparse(dataclasses=(TrainingArgs, MiscArgs))
+    parsed_arg_groups = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
     main(parsed_arg_groups)
