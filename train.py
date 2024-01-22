@@ -160,19 +160,19 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
         )
 
         if args.resume_training:  # load weights, optimizer states, scheduler state, ...\
-            model = BasicLM.load_from_checkpoint(
+            model = LightningWrapper.load_from_checkpoint(
                 args.checkpoint_path,
                 effective_batch_size_per_step=effective_batch_size_per_step,
             )
             print(model.samples_processed)
         else:  # load only weights
-            model = BasicLM(training_args=args, **model_extra_args)
+            model = get_model_module(training_args=args)
             torch_load = torch.load(args.checkpoint_path, map_location=torch.device("cpu"))
             model.load_state_dict(torch_load["state_dict"], strict=False)
             model.samples_processed = torch.tensor(0.0)
             model.tokens_processed = torch.tensor(0.0)
     else:
-        model = BasicLM(training_args=args, **model_extra_args)
+        model = get_model_module(training_args=args)
 
     if args.train_only_embeddings:
         if get_rank() == 0:
@@ -206,7 +206,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
         model = torch.compile(model)
 
     #################### Construct dataloaders & trainer #################
-    dm = LMDataModule(training_args=args, misc_args=misc_args)
+    dm = TableQADataModule(model, tokenizing_args=tokenizer_args)
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks = [checkpoint_callback, wandb_disk_cleanup_callback, lr_monitor]
     if args.accelerator == "cuda":
@@ -246,13 +246,15 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
     if args.val_before_training and not args.resume_training:
         # TODO: we could use a new trainer with Trainer(devices=1, num_nodes=1) to prevent samples from possibly getting replicated with DistributedSampler here.  # noqa: E501
         logger.info(f"Rank {current_process_rank} | Validation before training...")
-        val_result = trainer.validate(model, dm)
+        dm.setup('fit')
+        val_result = trainer.validate(model, datamodule=dm)
+        logger.info(f"Validation Result: {val_result}.")
         print(val_result)
         if args.val_only:
             exit(0)
 
     logger.info(f"Rank {current_process_rank} | Starting training...")
-    trainer.fit(model, dm, ckpt_path=args.checkpoint_path if args.resume_training else None)
+    trainer.fit(model, datamodule=dm, ckpt_path=args.checkpoint_path if args.resume_training else None)
     if trainer.interrupted and IS_ON_SLURM:
         logger.error(
             "Detected keyboard interrupt, not trying to save latest checkpoint right now because we detected SLURM and do not want to drain the node..."
@@ -260,7 +262,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
     else:
         logger.success("Fit complete, starting validation...")
         # Validate after training has finished
-        trainer.validate(model, dm)
+        trainer.validate(model, datamodule=dm)
 
         if current_process_rank == 0:
             logger.info("Trying to save checkpoint....")
