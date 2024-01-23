@@ -19,7 +19,7 @@ from transformers import DataCollatorForLanguageModeling, TapexTokenizer
 from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from src.data_caching import caching
+from numerical_table_questions.data_caching import caching
 from dlib.frameworks.pytorch import (
     get_rank,
     main_process_first,

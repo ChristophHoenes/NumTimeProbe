@@ -18,15 +18,15 @@ from datasets import Dataset, load_dataset
 from pandasql import sqldf
 from tqdm import tqdm
 
-from src.data_caching import save_version, caching
-from src.sql_templates import (
+from numerical_table_questions.data_caching import save_version, caching
+from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
     SQLConditionTemplate, SQLOverClauseTemplate,
     MIN, MAX, AVG, SUM, NOOP, sql_template_from_components
 )
 
 
-log_file_init_path = str(PurePath(__file__).parent.parent / 'logging.ini')
+log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
@@ -877,7 +877,7 @@ def main():
                              use_cache: bool = True,
                              cache_path: str = './data/NumTabQA/.cache'
                              ) -> Dict[str, Table]:
-        cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables.pickle'
+        cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables'
         if use_cache:
             test_tables = caching(cache_path, cache_file_name)
         else:
@@ -893,12 +893,13 @@ def main():
             logger.info("Processing first %s tables of the test set...", str(num_tables or 'all'))
             # use dict comprehension to get a unique set of tables
             # by using _table_id as key duplicates are overridden
-            test_tables = {(tab := Table(dataset[i]['table'],
-                                         source_name=base_dataset_name,
-                                         source_split=base_dataset_split)
-                            )._table_id: tab for i in range(len(dataset))
-                           }
-            for table in test_tables.values():
+            test_tables = [Table(dataset[i]['table'],
+                                 source_name=base_dataset_name,
+                                 source_split=base_dataset_split
+                                 )
+                           for i in range(len(dataset))
+                           ]
+            for table in test_tables:
                 table.prepare_for_pickle()
             save_version(test_tables, cache_path, cache_file_name)
         return test_tables
@@ -908,7 +909,7 @@ def main():
                                             use_cache: bool = True,
                                             cache_path: str = './data/NumTabQA/.cache'
                                             ) -> TableQuestionDataSet:
-        cache_file_name = f"{name}_basic_dataset.pickle"
+        cache_file_name = f"{name}_basic_dataset"
         if use_cache:
             dataset = caching(cache_path, cache_file_name)
         else:
@@ -947,7 +948,7 @@ def main():
             save_version(dataset, cache_path, cache_file_name)
         return dataset
 
-    return create_basic_table_question_dataset(list(create_table_dataset(use_cache=False).values()), use_cache=False)
+    return create_basic_table_question_dataset(create_table_dataset(use_cache=False), use_cache=False)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from typing import Optional, Any
 import dill
 
 
-log_file_init_path = str(PurePath(__file__).parent.parent / 'logging.ini')
+log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def clear_cache(cache_path: str = '../data/NumTabQA/.cache',
 
 
 def save_version(obj, cache_path, cache_file_name) -> None:
-    save_path = Path(cache_path) / cache_file_name / datetime.now().strftime('%y%m%d_%H%M_%S_%f_')
+    save_path = Path(cache_path) / cache_file_name / datetime.now().strftime('%y%m%d_%H%M_%S_%f')
     logger.info(f"Writing {cache_file_name} to disk...")
     if (hasattr(obj, 'to_huggingface') and callable(obj.to_huggingface)):
         obj.to_huggingface().save_to_disk(save_path)
