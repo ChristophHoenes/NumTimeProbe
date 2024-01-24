@@ -319,6 +319,7 @@ def pad(tokenized:  dict[torch.Tensor],
         padded = tokenized
     else:
         raise NotImplementedError(f"Padding strategy '{padding_type}' is not implemented!")
+    return padded
 
 
 def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_sequence_length: int, pad_token_id: int, mask_token_id: int):
