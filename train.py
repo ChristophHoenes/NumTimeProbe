@@ -26,14 +26,14 @@ from dlib.frameworks.wandb import (
     check_checkpoint_path_for_wandb,
     check_for_wandb_checkpoint_and_download_if_necessary,
 )
-from src.data_loading import TableQADataModule
-from src.helpers import (
+from numerical_table_questions.data_loading import TableQADataModule
+from numerical_table_questions.helpers import (
     choose_auto_accelerator,
     choose_auto_devices,
     handle_batch_size_logic_,
     log_slurm_info,
 )
-from src.model import LightningWrapper, get_model_module
+from numerical_table_questions.model import LightningWrapper, get_model_module
 
 
 @logger.catch(reraise=True)
