@@ -19,7 +19,7 @@ DEVICES="NONE"
 CACHE_DIR="NONE"
 
 # Change the following image-tag to the name of your own image, if you do not want to use the default one
-IMAGE_TAG="konstantinjdobler/nlp-research-template"
+IMAGE_TAG="choenes/num_tab_qa"
 
 docker run -it \
     --user $(id -u):$(id -g) \
