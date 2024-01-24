@@ -35,27 +35,25 @@ def caching(cache_path, cache_file_name) -> Optional[Any]:
         logger.info("Creating cache directory (%s)...", cache_path_obj)
         cache_path_obj.mkdir(parents=True)
         latest_cache_version = None
-    # check if the latest version containes any arrow files
+    # detect type of cached data files and load them if available
     if latest_cache_version is not None:
-        arrow_files = [path for path in latest_cache_version.iterdir() 
+        # check if the latest version containes any arrow files
+        arrow_files = [path for path in latest_cache_version.iterdir()
                        if path.is_file() and str(path).endswith('.arrow')
                        ]
-    else:
-        arrow_files = []
-    # deteckt type of cached data files and load them
-    pickle_target = latest_cache_version / (cache_file_name + '.pickle')
-    if latest_cache_version is not None and len(arrow_files) > 0:
-        logger.info("Loading arrow from cache (%s)", latest_cache_version.name)
-        return Dataset.load_from_disk()
-    elif latest_cache_version is not None and pickle_target.is_file():
-        logger.info("Loading pickle from cache (%s)", latest_cache_version.name)
-        with pickle_target.open('rb') as f:
-            return dill.load(f)
-    else:
-        logger.info("Provided cache directory (%s) is empty. "
-                    "Delete empty directory to check for older versions.",
-                    latest_cache_version
-                    )
+        # convention for location of pickled files
+        pickle_target = latest_cache_version / (cache_file_name + '.pickle')
+        if len(arrow_files) > 0:
+            logger.info("Loading arrow from cache (%s)", latest_cache_version.name)
+            return Dataset.load_from_disk(latest_cache_version)
+        elif pickle_target.is_file():
+            logger.info("Loading pickle from cache (%s)", latest_cache_version.name)
+            with pickle_target.open('rb') as f:
+                return dill.load(f)
+    logger.info("Provided cache directory (%s) is empty. "
+                "Delete empty directory to check for older versions.",
+                latest_cache_version
+                )
 
 
 def clear_cache(cache_path: str = '../data/NumTabQA/.cache',
