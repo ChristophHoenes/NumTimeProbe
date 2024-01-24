@@ -168,14 +168,13 @@ def batch_end_of_sequence(batch, pad_token_id):
     return torch.where(any_padding, first_padding, batch.shape[-1])
 
 
-def cast_to_reduced_int(ints, num_values: int = None, field_name: Optional[str] = None):
+def cast_to_reduced_int(ints, num_values: Optional[int] = None):
     """
         Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.
         If num_values is None the amount of values (e.g. vocab size) is estimated by the maximum of the
         values in the tensor plus one (for id zero).
     """
-    if 'mask' in field_name:
-        num_values = None
+    # if num_values is None infer the coding size
     if num_values is None:
         num_values = ints.max() + 1
     if num_values <= 2:
@@ -419,14 +418,18 @@ class TableQADataModule(L.LightningDataModule):
                 logger.info("Tokenize examples...")
                 tokenized = [(self.tokenizer(**table_question), self.tokenizer(**target)['input_ids'])
                              for table_question, target in tqdm(tokenizer_inputs)]
-                # TODO remove following line after testing
-                tokenizer_outputs = tokenized[0][0].keys()
+                tokenizer_output_names = tokenized[0][0].keys()
                 # convert tuple of tokenized model inputs (outputs depend on tokenizer)
                 # and target token_ids to dict of tensors and infer smallest possible int dtype to represent the ids
-                tokenized_dict = {key: [cast_to_reduced_int(sample[0][key], self.model_specs.vocab_size, field_name=key)
-                                        for sample in tokenized]
-                                  for key in tokenizer_outputs}
-                tokenized_dict['targets'] = [cast_to_reduced_int(sample[1], self.model_specs.vocab_size) for sample in tokenized]
+                tokenized_dict = {key: [cast_to_reduced_int(sample[0][key], num_values=self.tokenizer.vocab_size)
+                                        # for tokenized (non-mask) outputs pick smallest possible int dtype for the vocab_size
+                                        if 'mask' not in key
+                                        # for masks infer the coding size (most likely binary)
+                                        else cast_to_reduced_int(sample[0][key])
+                                        for sample in tokenized
+                                        ]
+                                  for key in tokenizer_output_names}
+                tokenized_dict['targets'] = [cast_to_reduced_int(sample[1], self.tokenizer.vocab_size) for sample in tokenized]
                 tokenized_dict = unbind_table_batch(tokenized_dict, self.model_specs.pad_token_id)
                 # save raw tokenizer outputs (sequences with variable length)
                 datasets.Dataset.from_dict(tokenized_dict).save_to_disk(
