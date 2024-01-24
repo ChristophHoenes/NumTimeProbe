@@ -26,6 +26,7 @@ docker run -it \
     $([[ "$DEVICES" != "NONE" ]] && echo "--gpus=\"device=$DEVICES\"") \
     --ipc host \
     --env WANDB_API_KEY \
+    --env HF_DATASETS_CACHE='/home/mamba/.cache/' \
     -v "$(pwd)":/workspace \
     -w /workspace \
     $([ "$CACHE_DIR" != "NONE" ] && echo "--mount type=bind,source=$CACHE_DIR,target=/home/mamba/.cache") \
