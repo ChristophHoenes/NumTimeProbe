@@ -74,6 +74,7 @@ class Table:
                                                    ''.join(self._inferred_column_types))
                                         ).hexdigest()
 
+    @classmethod
     def from_state_dict(cls, state_dict):
         """ Creates empty instance and loads the serialized values from the state_dict
             instead of recomputing them.
