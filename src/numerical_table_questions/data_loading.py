@@ -20,6 +20,7 @@ from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_caching import caching
+from numerical_table_questions.data_synthesis import Table
 from dlib.frameworks.pytorch import (
     get_rank,
     main_process_first,
@@ -64,7 +65,7 @@ class _WrapCustomTupleDataLoaderIter:
 
 
 def prepare_for_tokenizer(data, model_name, **kwargs):
-    # TODO implement model specific pre-tokenizer formatting and default case
+    # TODO implement other models' specific pre-tokenizer formatting and default case
     # TODO maybe a dict of functions instead of long if/elif/else would be cleaner
     if model_name == 'tapex':
         # TODO try performance with list of tables (duplicated) references as well
@@ -74,38 +75,60 @@ def prepare_for_tokenizer(data, model_name, **kwargs):
         truncation = kwargs.get('truncation') or True
         max_length = kwargs.get('max_length') or 512
         return_tensors = kwargs.get('return_tensors') or 'pt'
-        # TODO try batch encode for significant speedup (multiple questions per table)
-        questions_by_table = {}
-        for question in data._questions:
-            if questions_by_table.get(question._table._table_id) is None:
-                questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
-                                                                 # TODO handle string conversion elsewhere
-                                                                 'answers': [str(question._answer)]}
-            else:
-                questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
-                # TODO handle string conversion elsewhere
-                questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
-        return [
-            (
-                {
-                    'table': data._tables[table_id].pandas_dataframe,
-                    'query': content_dict['questions'],
-                    'padding': padding,
-                    'truncation': truncation,
-                    'max_length': max_length,
-                    'return_tensors': return_tensors,
-                },
-                {
-                    'answer': content_dict['answers'],
-                    'padding': padding,
-                    'truncation': truncation,
-                    'max_length': max_length,
-                    'return_tensors': return_tensors,
-                    'add_special_tokens': False,
-                }
-            )
-            for table_id, content_dict in tqdm(questions_by_table.items())
-        ]
+        if not isinstance(data, datasets.Dataset):
+            questions_by_table = {}
+            for question in data._questions:
+                if questions_by_table.get(question._table._table_id) is None:
+                    questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
+                                                                     # TODO handle string conversion elsewhere
+                                                                     'answers': [str(question._answer)]}
+                else:
+                    questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
+                    # TODO handle string conversion elsewhere
+                    questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
+            return [
+                (
+                    {
+                        'table': data._tables[table_id].pandas_dataframe,
+                        'query': content_dict['questions'],
+                        'padding': padding,
+                        'truncation': truncation,
+                        'max_length': max_length,
+                        'return_tensors': return_tensors,
+                    },
+                    {
+                        'answer': content_dict['answers'],
+                        'padding': padding,
+                        'truncation': truncation,
+                        'max_length': max_length,
+                        'return_tensors': return_tensors,
+                        'add_special_tokens': False,
+                    }
+                )
+                for table_id, content_dict in tqdm(questions_by_table.items())
+            ]
+        else:
+            return [
+                (
+                    {
+                        'table': Table.from_state_dict(table_batch['table']).pandas_dataframe,
+                        'query': table_batch['questions'],
+                        'padding': padding,
+                        'truncation': truncation,
+                        'max_length': max_length,
+                        'return_tensors': return_tensors,
+                    },
+                    {
+                        'answer': table_batch['answers'],
+                        'padding': padding,
+                        'truncation': truncation,
+                        'max_length': max_length,
+                        'return_tensors': return_tensors,
+                        'add_special_tokens': False,
+                    }
+                )
+                for table_batch in tqdm(data)
+            ]
     else:
         raise NotImplementedError(f"No tokenization behavior implemented for model '{model_name}'!")
 
@@ -377,7 +400,8 @@ class TableQADataModule(L.LightningDataModule):
                 )
             else:
                 # load raw TableQuestionDataset and do full processing
-                base_filename = f"{split}_{self.dataset_name}.pickle"
+                # TODO replace 'wikitables' with variable to allow for different source datasets
+                base_filename = f"wikitables_{split}_{self.dataset_name}"
                 data_split = caching(self.data_dir, base_filename)
                 if data_split is None:
                     raise ValueError(f"No data split '{split}' found at {self.data_dir}! "
