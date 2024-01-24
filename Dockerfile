@@ -65,7 +65,7 @@ FROM ${TARGETARCH}${OS_SELECTOR} as final
 ####################################################
 ######### Adding micromamba starts here ############
 ####################################################
-USER root
+USER choenes
 
 # if your image defaults to a non-root user, then you may want to make the
 # next 3 ARG commands match the values in your image. You can get the values
