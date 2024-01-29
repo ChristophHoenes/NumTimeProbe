@@ -347,15 +347,20 @@ def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_se
 class TableQADataModule(L.LightningDataModule):
     def __init__(self,
                  model,
+                 dataset_name='basic_dataset',
+                 train_batch_size: int = 32,
+                 eval_batch_size: int = 64,
                  tokenizing_args=None,
                  data_dir: str = './data/NumTabQA/.cache',
-                 dataset_name='basic_dataset',
                  overwrite_cache=False,
                  ):
         super().__init__()
         self.model_specs = model.model_specs
         # TODO test if model name is known else raise NotImplemented error
         self.model_name = model.model_specs.model_name_or_path
+        self.dataset_name = dataset_name
+        self.train_batch_size = train_batch_size,
+        self.eval_batch_size = eval_batch_size,
         self.tokenizing_args = asdict(tokenizing_args) or dict()
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
         self.max_num_tokens = self.tokenizing_args.get('max_length') or 512
@@ -481,23 +486,23 @@ class TableQADataModule(L.LightningDataModule):
 
     def train_dataloader(self):
         if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['train'], batch_size=64, custom_tuple=(None,))
-        return DataLoader(self.splits['train'], batch_size=64)
+            return WrapCustomTupleDataLoader(self.splits['train'], batch_size=self.train_batch_size, custom_tuple=(None,))
+        return DataLoader(self.splits['train'], batch_size=self.train_batch_size)
 
     def val_dataloader(self):
-        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['validation'], batch_size=64, custom_tuple=(None,))
-        return DataLoader(self.splits['validation'], batch_size=64)
+        if isinstance(self.splits['validation'], torch.utils.data.TensorDataset):
+            return WrapCustomTupleDataLoader(self.splits['validation'], batch_size=self.eval_batch_size, custom_tuple=(None,))
+        return DataLoader(self.splits['validation'], batch_size=self.eval_batch_size)
 
     def test_dataloader(self):
         if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=64, custom_tuple=(None,))
-        return DataLoader(self.splits['test'], batch_size=64)
+            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=self.eval_batch_size, custom_tuple=(None,))
+        return DataLoader(self.splits['test'], batch_size=self.eval_batch_size)
 
     def predict_dataloader(self):
         if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=64, custom_tuple=(None,))
-        return DataLoader(self.splits['test'], batch_size=64)
+            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=self.eval_batch_size, custom_tuple=(None,))
+        return DataLoader(self.splits['test'], batch_size=self.eval_batch_size)
 
 
 class LMDataModule(L.LightningDataModule):
