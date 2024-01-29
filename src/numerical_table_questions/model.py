@@ -26,9 +26,9 @@ class OptimizerArgs:
     optimizer_class: torch.optim.Optimizer = AdamW
     kwargs: dict = field(
         default_factory=lambda: {
-            'lr': 1e-3,
+            'lr': 5e-4,
             'betas': (0.9, 0.999),
-            'epsilon': 1e-8
+            'eps': 1e-8
         }
     )
 
@@ -221,9 +221,8 @@ class LightningWrapper(L.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        optimizer = self.optimizer_args['optimizer_class'](optimizer_parameters,
-                                                           **self.optimizer_args['kwargs'])
-
+        optimizer = self.optimizer_args.optimizer_class(optimizer_parameters,
+                                                        **self.optimizer_args.kwargs)
         if self.args.lr_schedule == "reduce_on_plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer, patience=5, verbose=True
