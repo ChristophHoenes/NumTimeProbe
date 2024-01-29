@@ -264,10 +264,9 @@ def get_model_module(training_args):
                                         mask_token_id=-100,
                                         input_targets=True,
                                         loss_out_id='loss',
-                                        additional_inputs_mapping = {
+                                        input_mapping={
                                             '*': None,
-                                            'lm_labels': 'target',
-                                            'label': 'target',
+                                            'labels': lambda x, y: y,
                                             }
                                         )
     else:
