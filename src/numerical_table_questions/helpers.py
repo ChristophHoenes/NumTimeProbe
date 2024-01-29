@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 
 if TYPE_CHECKING:
     from train import TrainingArgs
@@ -105,3 +106,10 @@ def log_slurm_info():
         f"SLURM Job Name: {os.environ.get('SLURM_JOB_NAME')}, "
         f"SLURM GPUS: {gpu_identifiers}"
     )
+
+
+def log_cuda_memory_stats():
+    nvmlInit()
+    h = nvmlDeviceGetHandleByIndex(0)
+    info = nvmlDeviceGetMemoryInfo(h)
+    logger.debug(f"CUDA memory stats: utilization {info.used/info.total}, used {info.used}, 'total {info.total}, free {info.free}")

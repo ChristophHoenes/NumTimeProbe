@@ -22,6 +22,7 @@ dependencies:
   - python-json-logger
   - loguru
   - tqdm
+  - pynvml
 
   # Dev dependencies
   - black
