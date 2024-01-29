@@ -144,19 +144,12 @@ def get_tokenizer(model_name, **kwargs):
 
 # TODO consider moving within TableQADataModule -> less arguments as most contained in self but reuse outside of class needed?
 def load_split_tensor(split: str, dataset_name: str, model_name: str, data_dir: str = './data/NumTabQA/.cache'):
-    # data_dict = pickle.load((Path(data_dir) / f"viable_tensors_{split}_{dataset_name}_{model_name}_tokenized.pickle").open('rb'))
     path = Path(data_dir) / 'viable_tensors' / f"{dataset_name}_{model_name}_tokenized" / split
-    data_dict = datasets.Dataset.load_from_disk(path)
-    # targets_tensor = data_dict.get('targets')
-    try:
-        targets_tensor = torch.tensor(data_dict['targets'])
-    except KeyError:
-        targets_tensor = None
-    # inputs_tensors = [value for key, value in data_dict.items() if key != 'targets']
-    inputs_tensors = [torch.tensor(data_dict[col]) for col in data_dict.column_names if col != 'targets']
+    data_dict = datasets.Dataset.load_from_disk(path).with_format('torch')
+    inputs_tensors = [data_dict[col] for col in data_dict.column_names if col != 'targets']
     inputs_dataset = torch.utils.data.TensorDataset(*inputs_tensors)
-    if targets_tensor is not None:
-        return torch.utils.data.StackDataset(inputs_dataset, torch.utils.data.TensorDataset(targets_tensor))
+    if 'targets' in data_dict.column_names:
+        return torch.utils.data.StackDataset(inputs_dataset, data_dict['targets'])
     return inputs_dataset
 
 
