@@ -124,6 +124,9 @@ class LightningWrapper(L.LightningModule):
         if self.model_specs.input_targets and target is None:
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
+        # TODO fix in tokenikation
+        # overwrite -100 with padding token in input_ids (only mask in targets)
+        inputs[0] = torch.where(inputs[0] != -100, inputs[0], self.model_specs.pad_token_id)
         # always wrap inputs in tuple
         if isinstance(inputs, list):
             inputs = tuple(inputs)
