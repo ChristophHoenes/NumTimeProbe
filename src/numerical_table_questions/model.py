@@ -47,11 +47,57 @@ class ModelTypeInfo:
     input_targets: bool = False
     # any additional model specific arguments
     # (if key is of type int it is interpreted as positional or otherwise as keyword argument)
-    additional_inputs_mapping: dict = field(default_factory=dict)
+    input_mapping: dict = field(default_factory=dict)
 
     def __post_init__(self):
         # TODO value checks
         pass
+
+
+def order_positional_arguments(inputs, target, input_map: dict) -> tuple:
+    # this function has side effects by altering input_map
+    # integer keys in input map are used to process positional embeddings
+    integer_keys = [key for key in input_map if isinstance(key,  int)]
+    # on first call parse '*' syntax sugar for positional arguments
+    # (avoids having to list complete argument order explicitly on ModelTypeInfo initialization)
+    if '*' in input_map:
+        parsed_input_map = dict()
+        # positional arguments that are placed to a specific position of the model inputs and
+        # are not part of the inputs provided by the data loader
+        injection_positions = integer_keys  # use alias for better readability (understanding)
+        # 'injection_positions or [0]' prevents error from taking max over an empty list
+        # max(injection_positions or [0]) == 0 if injection_positions == []
+        if max(injection_positions or [0]) >= len(inputs) + len(injection_positions):
+            raise ValueError(f"Found value {max(injection_positions or [0])} in input_map keys which exceeds "
+                             f"the expected lengths ({len(inputs) + len(injection_positions)}) of positional arguments!")
+        # inject explicit fills as positional arguments in correct order
+        inject_count = 0
+        for i in range(len(inputs) + len(injection_positions)):
+            if i in injection_positions:
+                # inject argument at specified position
+                # (the argument is always obtained by evaluating a (lambda) function)
+                parsed_input_map[i] = input_map[i]
+                # counter for injected arguments
+                inject_count += 1
+            else:
+                # shift position of argument to the back by the number of preceeding injected positional arguments
+                parsed_input_map[i] = lambda x, y, idx=i-inject_count: x[idx]
+        input_map.update(parsed_input_map)
+        del input_map['*']
+    elif len(integer_keys) > 0:
+        if sorted(integer_keys) != list(range(len(integer_keys))):
+            raise ValueError(f"Integer keys in input_map must be consecutive range but are {integer_keys} instead!")
+    # could be optimized by pre-computing order and just applying it here
+    forward_args = sorted(
+        [(model_input_id,
+          inputs[data_input] if isinstance(data_input, int)
+          else data_input(inputs, target)
+          )
+         for model_input_id, data_input in input_map.items()
+         if isinstance(model_input_id, int)
+         ]
+        )
+    return [tup[1] for tup in forward_args]
 
 
 class LightningWrapper(L.LightningModule):
@@ -84,33 +130,14 @@ class LightningWrapper(L.LightningModule):
             inputs = tuple(inputs)
         elif not isinstance(inputs, tuple):
             inputs = (inputs,)
-        # shorter alias
-        input_map = self.model_specs.additional_inputs_mapping
         # use input order specified in model_specs
-        if len(input_map) > 0:
-            # on first call parse '*' syntax sugar
-            # (avoids having to list complete argument order explicitly on ModelTypeInfo initialization)
-            if '*' in input_map.keys():
-                explicit_fills = [key for key in input_map if isinstance(key,  int)]
-                parsed_input_map = dict()
-                inject_count = 0
-                for i in range(len(inputs) + len(explicit_fills)):
-                    if i not in explicit_fills:
-                        parsed_input_map[i] = i + inject_count
-                    else:
-                        parsed_input_map[i] = self.model_specs.additional_inputs_mapping[i]
-                        inject_count += 1
-                self.model_specs.additional_inputs_mapping = parsed_input_map
-            # could be optimized by pre-computing order and just applying it here
-            forward_args = sorted(
-                [(model_input_id, inputs[data_input_id] if not data_input_id == 'target' else target)
-                 for model_input_id, data_input_id in self.model_specs.additional_inputs_mapping.items()
-                 if isinstance(model_input_id, int)]
-            )
-            forward_args = [item[1] for item in forward_args]
-            forward_kwargs = {model_input_id: inputs[data_input_id] if not data_input_id == 'target' else target
-                              for model_input_id, data_input_id in self.model_specs.additional_inputs_mapping.items()
-                              if isinstance(model_input_id, str)}
+        if len(self.model_specs.input_mapping) > 0:
+            # compute input format specified via self.model_specs.input_mapping
+            forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.input_mapping)
+            forward_kwargs = {model_input_id: data_function(inputs, target)
+                              for model_input_id, data_function in self.model_specs.input_mapping.items()
+                              if isinstance(model_input_id, str)
+                              }
             outputs = self.model(*forward_args, **forward_kwargs)
         elif self.model_specs.input_targets:
             outputs = self.model(*inputs, target)
