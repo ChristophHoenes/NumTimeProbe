@@ -372,10 +372,10 @@ class TableQADataModule(L.LightningDataModule):
             huggingface_base_dir = f"{self.dataset_name}_{self.model_name}_tokenized"
             final_processing_path = Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split
             intermediate_processing_path = Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split
-            if final_processing_path.exists() and not self.overwrite_cache and False:  # TODO remove and False kill switch
+            if final_processing_path.exists() and not self.overwrite_cache:
                 # load fully processed tensor dataset
                 data_split = datasets.load_from_disk(final_processing_path)
-            elif intermediate_processing_path.exists() and not self.overwrite_cache and False:  # TODO remove and False kill switch
+            elif intermediate_processing_path.exists() and not self.overwrite_cache:
                 # load from intermediate step (all examples) and apply custom post-processing and filtering
                 tokenized_dict = datasets.load_from_disk(intermediate_processing_path)
                 processed_sequences = post_tokenizing(tokenized_dict,
