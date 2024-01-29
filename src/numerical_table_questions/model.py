@@ -142,11 +142,11 @@ class LightningWrapper(L.LightningModule):
             outputs = self.model(*inputs, target)
         else:
             outputs = self.model(*inputs)
-        # always wrap outputs in tuple
-        if isinstance(outputs, dict):
-            outputs = tuple(outputs.values())
-        elif not isinstance(outputs, tuple):
-            outputs = (outputs,)
+        # always wrap outputs in dict
+        if isinstance(outputs, (list, tuple)):
+            outputs = {i: output for i, output in enumerate(outputs)}
+        elif not isinstance(outputs, dict):
+            outputs = {0: outputs}
         return outputs
 
     def training_step(self, batch, batch_idx):
