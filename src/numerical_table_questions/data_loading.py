@@ -439,6 +439,9 @@ class TableQADataModule(L.LightningDataModule):
                                                       self.model_specs.mask_token_id,
                                                       )
                 # save fully processed dataset
+                # TODO think about what to do with other files that might already be in this directory but have a different
+                # name (e.g. pickle or different shard numbers) so they do not get overwritten
+                # (e.g delete, move to subfolder with previous versions)
                 datasets.Dataset.from_dict(processed_sequences).save_to_disk(
                     self.data_dir
                     + '/viable_tensors/'
