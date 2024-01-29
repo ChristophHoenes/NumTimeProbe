@@ -121,7 +121,6 @@ class LightningWrapper(L.LightningModule):
         self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
 
     def forward(self, inputs, target=None):
-        raise NotImplementedError("This is a break for preprocessing only. Remove this before training/validation.")
         if self.model_specs.input_targets and target is None:
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
