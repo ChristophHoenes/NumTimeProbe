@@ -138,6 +138,10 @@ class TrainingArgs:
         help="Batch size per device. If effective_batch_size is specified, this is the maximum batch size per device (you should then increase this in powers of two until you get CUDA OOM errors).",  # noqa: E501
         aliases="-b",
     )
+    eval_batch_size_per_device: int = dArg(
+        default=64,
+        help="Batch size per device for evaluation (no gradients -> can be larger than batch_size_per_device for training).",
+    )
     effective_batch_size: int | None = dArg(
         default=None,
         help="If set, try to auto-infer batch_size_per_device and gradient_accumulation_steps based on number of devices given by --num_devices.",  # noqa: E501
