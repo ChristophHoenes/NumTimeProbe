@@ -871,85 +871,89 @@ def execute_sql(query: str, dataframe: pd.DataFrame
     return query_result
 
 
+def create_table_dataset(base_dataset_name: str = 'wikitablequestions',
+                         base_dataset_split: str = 'test',
+                         num_tables: Optional[int] = None,
+                         use_cache: bool = True,
+                         cache_path: str = './data/NumTabQA/.cache'
+                         ) -> Dict[str, Table]:
+    cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables'
+    if use_cache:
+        test_tables = caching(cache_path, cache_file_name)
+    else:
+        logger.info("Loading %s's first %s %s split samples",
+                    base_dataset_name, str(num_tables or 'all'), base_dataset_split)
+        dataset = load_dataset(base_dataset_name,
+                               split=(f'{base_dataset_split}'
+                                      + (f'[:{num_tables}]'
+                                         if num_tables is not None
+                                         else ''
+                                         )
+                                      )
+                               )
+        logger.info("Processing first %s tables of the test set...", str(num_tables or 'all'))
+        # use dict comprehension to get a unique set of tables
+        # by using _table_id as key duplicates are overridden
+        test_tables = [Table(dataset[i]['table'],
+                             source_name=base_dataset_name,
+                             source_split=base_dataset_split,
+                             )
+                       for i in range(len(dataset))
+                       ]
+        for table in test_tables:
+            table.prepare_for_pickle()
+        save_version(test_tables, cache_path, cache_file_name)
+    return test_tables
+
+
+def create_basic_table_question_dataset(tables,
+                                        name='wikitables_test',
+                                        use_cache: bool = True,
+                                        cache_path: str = './data/NumTabQA/.cache'
+                                        ) -> TableQuestionDataSet:
+    cache_file_name = f"{name}_basic_dataset"
+    if use_cache:
+        dataset = caching(cache_path, cache_file_name)
+    else:
+        base_description = \
+            """
+            Basic SQL operators min, max, avg, sum or no operation combined with a simple value lookup condition of a different column.
+            Using WikiTables test set.
+
+            """
+        nl = "What is the {op} of column {col1} given that {col2} has value {val1}?"
+        main_expr = SQLColumnExpression(("{col1}",))
+        conditions = (SQLConditionTemplate(SQLColumnExpression(('{col2}',)), '=', '{val1}'),)
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])
+        schema = {
+            'variables': {
+                'col1': {'type': 'column',
+                            'allowed_dtypes': ['numeric']
+                            },
+                'col2': {'type': 'column',
+                            'allowed_dtypes': ['numeric', 'text']
+                            },
+                'val1': {'type': 'value',
+                            'allowed_dtypes': ['numeric', 'text']
+                            }
+            },
+            'sample_strategy': 'random',
+            'value_pool': 'distinct_values',
+            'interpolation_args': dict()
+        }
+        basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+        dataset = TableQuestionDataSet(name + '_basic',
+                                        description=base_description,
+                                        question_templates=[basic_template],
+                                        tables=tables
+                                        )
+        save_version(dataset, cache_path, cache_file_name)
+    return dataset
+
+
 def main():
-    def create_table_dataset(base_dataset_name: str = 'wikitablequestions',
-                             base_dataset_split: str = 'test',
-                             num_tables: Optional[int] = None,
-                             use_cache: bool = True,
-                             cache_path: str = './data/NumTabQA/.cache'
-                             ) -> Dict[str, Table]:
-        cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables'
-        if use_cache:
-            test_tables = caching(cache_path, cache_file_name)
-        else:
-            logger.info("Loading %s's first %s %s split samples",
-                        base_dataset_name, str(num_tables or 'all'), base_dataset_split)
-            dataset = load_dataset(base_dataset_name,
-                                   split=(f'{base_dataset_split}'
-                                          + (f'[:{num_tables}]'
-                                             if num_tables is not None
-                                             else '')
-                                          )
-                                   )
-            logger.info("Processing first %s tables of the test set...", str(num_tables or 'all'))
-            # use dict comprehension to get a unique set of tables
-            # by using _table_id as key duplicates are overridden
-            test_tables = [Table(dataset[i]['table'],
-                                 source_name=base_dataset_name,
-                                 source_split=base_dataset_split
-                                 )
-                           for i in range(len(dataset))
-                           ]
-            for table in test_tables:
-                table.prepare_for_pickle()
-            save_version(test_tables, cache_path, cache_file_name)
-        return test_tables
-
-    def create_basic_table_question_dataset(tables,
-                                            name='wikitables_test',
-                                            use_cache: bool = True,
-                                            cache_path: str = './data/NumTabQA/.cache'
-                                            ) -> TableQuestionDataSet:
-        cache_file_name = f"{name}_basic_dataset"
-        if use_cache:
-            dataset = caching(cache_path, cache_file_name)
-        else:
-            base_description = \
-                """
-                Basic SQL operators min, max, avg, sum or no operation combined with a simple value lookup condition of a different column.
-                Using WikiTables test set.
-
-                """
-            nl = "What is the {op} of column {col1} given that {col2} has value {val1}?"
-            main_expr = SQLColumnExpression(("{col1}",))
-            conditions = (SQLConditionTemplate(SQLColumnExpression(('{col2}',)), '=', '{val1}'),)
-            allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])
-            schema = {
-                'variables': {
-                    'col1': {'type': 'column',
-                             'allowed_dtypes': ['numeric']
-                             },
-                    'col2': {'type': 'column',
-                             'allowed_dtypes': ['numeric', 'text']
-                             },
-                    'val1': {'type': 'value',
-                             'allowed_dtypes': ['numeric', 'text']
-                             }
-                },
-                'sample_strategy': 'random',
-                'value_pool': 'distinct_values',
-                'interpolation_args': dict()
-            }
-            basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
-            dataset = TableQuestionDataSet(name + '_basic',
-                                           description=base_description,
-                                           question_templates=[basic_template],
-                                           tables=tables
-                                           )
-            save_version(dataset, cache_path, cache_file_name)
-        return dataset
-
-    return create_basic_table_question_dataset(create_table_dataset(use_cache=False), use_cache=False)
+    table_dataset = create_table_dataset(use_cache=False)
+    return create_basic_table_question_dataset(table_dataset, use_cache=False)
 
 
 if __name__ == "__main__":
