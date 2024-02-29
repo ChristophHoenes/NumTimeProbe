@@ -10,7 +10,7 @@ from torch import multiprocessing
 @dataclass
 class TrainingArgs:
     model_name_or_path: str = dArg(
-        default="roberta-base",
+        default="tapex",
         help="HuggingFace model identifier. This is used to construct the model architecture and load pretrained weights if not specified otherwise.",  # noqa: E501
         aliases="--model",
     )
@@ -61,6 +61,12 @@ class TrainingArgs:
     )
     data_preprocessing_only: bool = dArg(
         default=False, help="Exit the script after data preprocessing. Do not start training."
+    )
+    force_test_loss_computation: bool = dArg(
+        default=False,
+        help=("Whether to always compute a forward pass during testing to obtain the test loss. "
+              "Sometimes alternative metrics (that use the generate instead of the forward method) "
+              "are more interesting than the loss and the time of computing forward can be saved."),
     )
 
     ####### Hardware ###########
