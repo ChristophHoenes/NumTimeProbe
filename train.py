@@ -194,7 +194,9 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
                 f"The current torch version ({torch.__version__}) does not have support for compile."  # noqa: E501
                 "Please install torch >= 2.0 or disable compile."
             )
-        model = torch.compile(model)
+        # only compile the model wrapped within the Lightning Module since wandb logging
+        # (used in the train/val/... loops) is currently incompatible with compile in torch 2.1
+        model.model = torch.compile(model.model)
 
     #################### Construct dataloaders & trainer #################
     dm = TableQADataModule(model, tokenizing_args=tokenizer_args)
