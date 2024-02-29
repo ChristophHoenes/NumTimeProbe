@@ -23,6 +23,7 @@ CLEANUP_PATIENCE = 1.0
 
 
 def caching(cache_path, cache_file_name) -> Optional[Any]:
+    """ Checks for pickle or arrow file(s) and loads if exist, otherwise return None. """
     cache_path_obj = Path(cache_path)
     # check for latest version (via timestamp)
     if cache_path_obj.exists():
@@ -62,6 +63,7 @@ def clear_cache(cache_path: str = '../data/NumTabQA/.cache',
                 keep_latest: bool = True,
                 force: bool = False,
                 ) -> None:
+    """ Deletes all cached data versions (keeps latest by default). """
     cache_path_obj = Path(cache_path)
     if not force and cache_path in ('', '.', './',):
         warnings.warn(f"Cache path {cache_path} is too general. This might delete the entire working directory! "
@@ -83,6 +85,7 @@ def clear_cache(cache_path: str = '../data/NumTabQA/.cache',
 
 
 def save_version(obj, cache_path, cache_file_name) -> None:
+    """ Can be called on custom classes from data_synthesis to save them as huggingface datasets or pickle (deprecated). """
     save_path = Path(cache_path) / cache_file_name / datetime.now().strftime('%y%m%d_%H%M_%S_%f')
     logger.info(f"Writing {cache_file_name} to disk...")
     if (hasattr(obj, 'to_huggingface') and callable(obj.to_huggingface)):
@@ -110,7 +113,7 @@ def delete_dataset(dataset) -> None:
 
 
 # timed cleanup with threads proved impractical and was solved differently with cached propery and weak reference
-def timed_cleanup_thread(cleanup_func, cleanup_thread=None):
+def timed_cleanup_thread(cleanup_func, cleanup_thread=None):  # <- deprecated
     if cleanup_thread is None:
         cleanup_thread = threading.Thread()
         cleanup_thread.start()
