@@ -68,6 +68,10 @@ class TrainingArgs:
               "Sometimes alternative metrics (that use the generate instead of the forward method) "
               "are more interesting than the loss and the time of computing forward can be saved."),
     )
+    test_after_train_end: bool = dArg(
+        default=True,
+        help=("Whether to run a test epoch directly after training or not."),
+    )
 
     ####### Hardware ###########
     accelerator: Literal["cuda", "cpu", "tpu", "mps", "auto"] = dArg(

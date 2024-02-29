@@ -280,6 +280,10 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
 
             logger.success("Saving finished!")
 
+        if args.test_after_train_end:
+            logger.info("Testing model performance...")
+            trainer.test(model, datamodule=dm)
+
 
 if __name__ == "__main__":
     parsed_arg_groups = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
