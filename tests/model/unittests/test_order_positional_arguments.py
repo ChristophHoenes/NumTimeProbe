@@ -30,7 +30,7 @@ def test_side_effects():
     # repeated calls after the first one should be side completely effect free
     input_map_copy = deepcopy(input_map_in)
     order_positional_arguments(inputs, targets, input_map=input_map_in)
-    assert all([k1 == k2 and v1 == v2 
+    assert all([k1 == k2 and v1 == v2
                 for (k1, v1), (k2, v2) in zip(input_map_copy.items(), input_map_in.items())
                 ]
                ), "Input_map changed after second call of order_positional_arguments but should stay the same!"
