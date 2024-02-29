@@ -346,7 +346,7 @@ def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_se
 
 class TableQADataModule(L.LightningDataModule):
     def __init__(self,
-                 model,
+                 model_specs,
                  dataset_name='basic_dataset',
                  train_batch_size: int = 32,
                  eval_batch_size: int = 64,
@@ -355,13 +355,13 @@ class TableQADataModule(L.LightningDataModule):
                  overwrite_cache=False,
                  ):
         super().__init__()
-        self.model_specs = model.model_specs
+        self.model_specs = model_specs
         # TODO test if model name is known else raise NotImplemented error
-        self.model_name = model.model_specs.model_name_or_path
+        self.model_name = self.model_specs.model_name_or_path
         self.dataset_name = dataset_name
-        self.train_batch_size = train_batch_size,
-        self.eval_batch_size = eval_batch_size,
-        self.tokenizing_args = asdict(tokenizing_args) or dict()
+        self.train_batch_size = train_batch_size
+        self.eval_batch_size = eval_batch_size
+        self.tokenizing_args = asdict(tokenizing_args) if tokenizing_args is not None else dict()
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
         self.max_num_tokens = self.tokenizing_args.get('max_length') or 512
         self.data_dir = data_dir

@@ -199,7 +199,10 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
         model.model = torch.compile(model.model)
 
     #################### Construct dataloaders & trainer #################
-    dm = TableQADataModule(model, tokenizing_args=tokenizer_args)
+    dm = TableQADataModule(model.model_specs,
+                           train_batch_size=args.batch_size_per_device,
+                           eval_batch_size=args.eval_batch_size_per_device,
+                           tokenizing_args=tokenizer_args)
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks = [checkpoint_callback, wandb_disk_cleanup_callback, lr_monitor]
     if args.accelerator == "cuda":
