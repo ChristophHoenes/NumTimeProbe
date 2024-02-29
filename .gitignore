@@ -6,6 +6,9 @@ wandb/
 artifacts/
 ignored/
 results/
+lightning_logs/
+table-qa-debug/
+checkpoints/
 **/checkpoints/*.ckpt
 **/checkpoints/*.safetensors
 **/checkpoints/*config.json
