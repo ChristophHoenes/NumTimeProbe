@@ -495,12 +495,12 @@ class TableQADataModule(L.LightningDataModule):
         return DataLoader(self.splits['validation'], batch_size=self.eval_batch_size)
 
     def test_dataloader(self):
-        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
+        if isinstance(self.splits['test'], torch.utils.data.TensorDataset):
             return WrapCustomTupleDataLoader(self.splits['test'], batch_size=self.eval_batch_size, custom_tuple=(None,))
         return DataLoader(self.splits['test'], batch_size=self.eval_batch_size)
 
     def predict_dataloader(self):
-        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
+        if isinstance(self.splits['test'], torch.utils.data.TensorDataset):
             return WrapCustomTupleDataLoader(self.splits['test'], batch_size=self.eval_batch_size, custom_tuple=(None,))
         return DataLoader(self.splits['test'], batch_size=self.eval_batch_size)
 
