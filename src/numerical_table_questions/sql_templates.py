@@ -35,7 +35,7 @@ class SQLColumnExpression:
     """Defines the structure of an SQL column expression.
 
         A column expression is either a single column name or another column expression
-        that combines an binary (arithmetic) operand with another column name. 
+        that combines an binary (arithmetic) operand with another column name.
         Recursively, long expressions with multiple operands can be constructed.
 
         Todos:
@@ -207,14 +207,21 @@ class SQLConditionTemplate:
                 )
 
 
-def sql_template_from_components(operator: SQLOperatorTemplate,
-                                 conditions: List[SQLConditionTemplate],
-                                 table_specifier: str = 'df'
-                                 ) -> str:
-    """Generates final SQL template string from modular componets."""
-    select_statement = "SELECT " + operator.generate() + " FROM " + table_specifier
-    if len(conditions) > 0:
-        select_statement += "\nWHERE true"
-    for condition in conditions:
-        select_statement += condition.generate()
-    return select_statement
+class SQLTemplate:
+    def __init__(self,
+                 operator: SQLOperatorTemplate,
+                 conditions: List[SQLConditionTemplate],
+                 table_specifier: str = 'df',
+                 ):
+        self.operator = operator
+        self.conditions = conditions
+        self.table_specifier = table_specifier
+
+    def generate(self):
+        """Generates final SQL template string from modular componets."""
+        select_statement = "SELECT " + self.operator.generate() + " FROM " + self.table_specifier
+        if len(self.conditions) > 0:
+            select_statement += "\nWHERE true"
+        for condition in self.conditions:
+            select_statement += condition.generate()
+        return select_statement
