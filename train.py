@@ -16,7 +16,7 @@ from lightning.pytorch.strategies import DDPStrategy
 from loguru import logger
 from transformers import PreTrainedModel
 
-from arguments import TrainingArgs, MiscArgs, TokenizationArgs
+from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from dlib.frameworks.lightning import CUDAMetricsCallback
 from dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
 from dlib.frameworks.wandb import (
