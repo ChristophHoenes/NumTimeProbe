@@ -21,8 +21,8 @@ from tqdm import tqdm
 from numerical_table_questions.data_caching import save_version, caching
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
-    SQLConditionTemplate, SQLOverClauseTemplate,
-    MIN, MAX, AVG, SUM, NOOP, sql_template_from_components
+    SQLConditionTemplate, SQLOverClauseTemplate, SQLTemplate,
+    MIN, MAX, AVG, SUM, NOOP,
 )
 
 
@@ -480,7 +480,7 @@ class QuestionTemplate:
             # sampled_values = {col: table.sample_values(col) for col in value_sample_cols}
             for operator in self.operators:
                 # TODO when same operator structure (e.g min, max) cache var assignments
-                sql_template = sql_template_from_components(
+                sql_template_obj = SQLTemplate(
                     SQLOperatorTemplate(
                         operator.sql,
                         self.main_expression,
@@ -493,6 +493,7 @@ class QuestionTemplate:
                     ),
                     conditions=self.conditions
                 )
+                sql_template = sql_template_obj.generate()
                 var_assignments = self.find_all_possible_assignments(sql_template,
                                                                      table
                                                                      )
