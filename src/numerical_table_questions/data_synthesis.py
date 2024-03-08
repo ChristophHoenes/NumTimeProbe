@@ -479,9 +479,9 @@ class QuestionTemplate:
         # increase factor if multiple value variables depend on the same column
         var_sampling_factors = dict()
         for col_set in value_var_cols:
-            for col in col_set:
-                if sampling_factors.get(col) is None:
-                    sampling_factors[col] = 0
+            for col_var in col_set:
+                if var_sampling_factors.get(col_var) is None:
+                    var_sampling_factors[col_var] = 1
                 else:
                     var_sampling_factors[col_var] += 1
         # how many values to sample per value variable -> TODO make configurable
