@@ -415,6 +415,129 @@ class QuestionTemplate:
         # II) get value samples for all columns that can ever be assigned to condition column (and are compared against fixed values)
         # a) get all variable names that occur within the SQLColumnExpression of condition columns
         # (NOT values, since comparing SQLColumnExpression against another SQLColumnExpression does not require fixed values)
+        """
+        # only sample a value for the first mentioned value variable per condition,
+        # which is sampled/computed analogous to the condition's condition_column
+        value_vars = [
+            condition_val_vars[0]
+            for condition in self.conditions
+            if not isinstance(condition.value, SQLColumnExpression)  # only consider conditions that require sampling avalue
+            and len(condition_val_vars := find_template_variables(condition.value)[0]) > 0  # skip condition if no value variable was found
+            ]
+        # Option 1 (deleted)
+        # Option 2
+        condition_info = []
+        for condition in self.conditions:
+            # if two SQLColumnExpressions are compared in the condition no value needs to be samples
+            if not isinstance(condition.value, SQLColumnExpression):
+                value_computation_expression = condition.condition_column.generate()
+                condition_variables = {
+                    'comparator': condition.comparator,
+                    'column_vars': find_template_variables(value_computation_expression),
+                    'value_vars': (
+                        condition_val_vars
+                        if len(condition_val_vars := find_template_variables(condition.value)[0]) > 0
+                        else []
+                        ),
+                    'value_computation': value_computation_expression,
+                    }
+            condition_info.append(condition_variables)
+        # in the order of conditions of the template assign column variables from the condition expression to value variables
+        # to define from which columns to sample the values and how to compute the value
+        initiallized_value_vars = []
+        value_var_cols = []
+        value_var_computations = []
+        for info in condition_info:
+            is_value_computation_assigned = False
+            for val_var in list(set(info['value_vars'])):
+                if val_var not in initiallized_value_vars:
+                    if is_value_computation_assigned:
+                        raise ValueError("Encountered more than one value variable with unassigned value in one condition! "
+                                         "Please make sure all value variables (except at most one) in every condition previously occur in another condition.")
+                    initiallized_value_vars.append(val_var)
+                    value_var_cols.append(set(info['column_vars']))
+                    value_var_computations.append(info['value_computation'])
+                    is_value_computation_assigned = True
+        # determine how many times a column variable occurs in the template's conditions
+        # where a value computation is necessary
+        sampling_factors = dict()
+        for col_set in value_var_cols:
+            for col in col_set:
+                if sampling_factors.get(col) is None:
+                    sampling_factors[col] = 0
+                else:
+                    sampling_factors[col] += 1
+        # how many values to sample per value variable -> TODO make configurable
+        # (increases number of questions that only differ in the value that is looked up in the condition)
+        num_value_samples = 10
+        # sample values for each column that can ever be assigned to a
+        # condition column variable which is involved in a value computation
+        samples = {
+            col_name: sample_values(
+                table,
+                col_name,
+                max_samples=num_value_samples*factor,
+                num_draws=num_value_samples*factor,
+                strategy=self._schema['sample_strategy'],
+                value_pool=self._schema['value_pool'],
+                shuffle=True,
+                **self._schema['interpolation_args'],
+                return_indices=False
+                )
+            for col_var, factor in sampling_factors.items()
+            for col_name in table.column_names
+            if infered_types[col_name] in self._schema['variables'][col_var]['allowed_dtypes']
+            }
+        # compute value expressions
+        value_variable_assignments = []
+        for binding in variable_column_bindings:
+            value_computation_kwargs = {col_var: samples[binding[col_var]].pop()
+                                        for col_set in value_var_cols
+                                        for col_var in col_set
+                                        }
+            computed_values = dict()
+            for value_var, expression in zip(initiallized_value_vars, value_var_computations):
+                try:
+                    computed_value = compute_arithmetic_expression_str(
+                        expression.format(**value_computation_kwargs)
+                        )
+                except ZeroDivisionError:
+                    warnings.warn("Encountered zero difision in value computation! "
+                                  "Retrying with all zeros replaced with ones. This might lead to unexpected values.")
+                    computed_value = compute_arithmetic_expression_str(
+                        expression.format(**value_computation_kwargs)
+                        .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
+                        .replace('0', '1')
+                        )
+                computed_values[value_var] = computed_value
+            value_variable_assignments.append(computed_values)
+        # ensure that a valid range is created if two values with the same
+        # column expression exist with (< or <=) and (> or >=) comparators respectively
+        # join column variable assignments with value variable assignments
+        variable_assignments = [
+            col_binding | val_assignment
+            for col_binding, val_assignment in
+            zip(variable_column_bindings, value_variable_assignments)
+            ]
+        # Option 3
+        condition_vars = [
+            {
+                'comparator': condition.comparator,
+                'val_var': value_vars[0],
+                'bla': list(set(
+                    [col_var
+                    for condition in self.conditions
+                    for col_var in find_template_variables(
+                        condition.condition_column.generate()
+                        )
+                    if not isinstance(condition.value, SQLColumnExpression)  # only consider conditions that require sampling avalue
+                    ]
+                )),
+                # for val_var in find_template_variables(condition.value)
+                }
+            for condition in self.conditions
+            ]
+        """
         condition_vars = list(set(
             [col_var
              for condition in self.conditions
