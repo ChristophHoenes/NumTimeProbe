@@ -394,44 +394,49 @@ class QuestionTemplate:
         # (e.g column_name at index 0 of column_assignments binds to column variable at index 0 of column_variables)
         column_variables = [variable for variable in variables
                             if self._schema['variables'][variable]['type'] == 'column']
+        # mapping ot column name to inferred data type
+        infered_types = {name: typ for name, typ in zip(table.column_names, table._inferred_column_types)}
         # all permutations of a table's column_names for the assignment length (determind by the number of column variables to fill)
         column_assignments = list(itertools.permutations(table.column_names,
                                                          len(column_variables)
                                                          )
                                   )
-        # check dtype constraints
-        type_errors = set(
-            [assignment
-                for assignment in column_assignments
-                for c, col in enumerate(assignment)
-                if table.infer_column_type(col) not in
-                self._schema['variables'][column_variables[c]]['allowed_dtypes']
-             ]
-        )
-        column_assignments = list(set(column_assignments) - type_errors)
-        # TODO pseudocode
-        # I) ignore dependent values for now
-        # II) samples for all columns that can ever be assigned to condition column
-        # a) get ids of condition columns in assignments
-        condition_vars = [var
-                          for condition in self.conditions
-                          for var in find_template_variables(
-                              condition.condition_column.generate()
-                              )
-                          ]
-        condition_ids = [idx
-                         for idx, col_var in enumerate(column_variables)
-                         if col_var in condition_vars]
-        # b) set of all column names at that ids after dtype check
-        condition_assignments = list(set([assignment[idx]
-                                          for assignment in column_assignments
-                                          for idx in condition_ids]))
+        # match the names of the column variables with the assignments/bindings of the actual column names of the specific table
+        variable_column_bindings = [dict(zip(column_variables, assignment)) for assignment in column_assignments]
+
+        # check for unmet dtype constraints and filter invalid variable-column bindings
+        variable_column_bindings = [
+            binding
+            for binding in variable_column_bindings
+            for var_name, assigned_col in binding.items()
+            if infered_types[assigned_col] in self._schema['variables'][var_name]['allowed_dtypes']
+            ]
+        # I) ignore dependent values for now (filter empty results post hoc)
+        # II) get value samples for all columns that can ever be assigned to condition column (and are compared against fixed values)
+        # a) get all variable names that occur within the SQLColumnExpression of condition columns
+        # (NOT values, since comparing SQLColumnExpression against another SQLColumnExpression does not require fixed values)
+        condition_vars = list(set(
+            [col_var
+             for condition in self.conditions
+             for col_var in find_template_variables(
+                 condition.condition_column.generate()
+                 )
+             if not isinstance(condition.value, SQLColumnExpression)  # only consider conditions that require sampling avalue
+             ]))
+        # b) select only column variables occuring in conditions that require sampling a value (comparison with a fixed value)
+        condition_bindings = [binding
+                              for binding in variable_column_bindings
+                              for var_name, _ in binding.items()
+                              if var_name in condition_vars]
+        # TODO delete assert after testing
+        assert condition_bindings == list(set(condition_bindings)), "There should be no duplicate assignments of column names to column variables!"
+
         # c) determine number of value assignments hard coded or heuristic (dynamic?)
         num_value_samples = 10
         # d) iterate over results from b and sample fixed values, save them in a dict
-        samples = {condition_col: sample_values(
+        samples = {assigned_col: sample_values(
                     table,
-                    condition_col,
+                    assigned_col,
                     max_samples=num_value_samples,
                     num_draws=num_value_samples,
                     strategy=self._schema['sample_strategy'],
@@ -439,15 +444,13 @@ class QuestionTemplate:
                     shuffle=True,
                     **self._schema['interpolation_args'],
                     return_indices=False
-                    ) for condition_col in condition_assignments
+                    ) for _, assigned_col in condition_bindings
                    }
         # III) add the sampled value to the bindings
         value_assignments = [tuple(zip(*[samples[condition_col] or "''"
-                                         for condition_col in [assignment[i]
-                                                               for i in condition_ids
-                                                               ]
+                                         for _, condition_col in binding.items()
                                          ]
-                                       )) for assignment in column_assignments
+                                       )) for binding in condition_bindings
                              ]
         # IV) combine with col assignments
         all_assignments = [assignment + value
