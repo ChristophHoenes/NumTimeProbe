@@ -484,6 +484,14 @@ class QuestionTemplate:
                     var_sampling_factors[col_var] = 1
                 else:
                     var_sampling_factors[col_var] += 1
+        # the sampling factor for a column is the maximum of the factors of the variables it can be assigned to
+        # hence check data type constraints to determine this
+        col_sampling_factors = dict()
+        for col_var, factor in var_sampling_factors.items():
+            for col_name in table.column_names:
+                if infered_types[col_name] in self._schema['variables'][col_var]['allowed_dtypes']:
+                    if factor > col_sampling_factors.get(col_name, 0):
+                        col_sampling_factors[col_name] = factor
         # how many values to sample per value variable -> TODO make configurable
         # (increases number of questions that only differ in the condition value)
         num_value_samples = 10
@@ -501,9 +509,7 @@ class QuestionTemplate:
                 **self._schema['interpolation_args'],
                 return_indices=False
                 )
-            for col_var, factor in sampling_factors.items()
-            for col_name in table.column_names
-            if infered_types[col_name] in self._schema['variables'][col_var]['allowed_dtypes']
+            for col_name, factor in col_sampling_factors.items()
             }
         # compute value expressions
         value_variable_assignments = []
