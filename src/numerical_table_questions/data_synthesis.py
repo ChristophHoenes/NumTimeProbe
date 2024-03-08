@@ -514,10 +514,19 @@ class QuestionTemplate:
         # compute value expressions
         value_variable_assignments = []
         for binding in variable_column_bindings:
-            value_computation_kwargs = {col_var: samples[binding[col_var]].pop()
-                                        for col_set in value_var_cols
-                                        for col_var in col_set
-                                        }
+            # assign a sampled value to each column variable in the expression
+            sample_idxs = dict()
+            value_computation_kwargs = dict()
+            for col_set in value_var_cols:
+                for col_var in col_set:
+                    # retrieve actual column name of current assignment
+                    col_name = binding[col_var]
+                    # counter how many samples of this columns have been used
+                    i = sample_idxs.get(col_name, 0)
+                    # assign sample value to column variable
+                    value_computation_kwargs[col_var] = samples[col_name][i]
+                    # increment sample index
+                    sample_idxs[col_name] = i + 1
             # inject sample values into the column expression template and evaluate final value
             computed_values = dict()
             for value_var, expression in zip(initiallized_value_vars, value_var_computations):
