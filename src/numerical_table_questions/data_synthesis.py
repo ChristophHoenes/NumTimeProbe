@@ -441,7 +441,8 @@ class QuestionTemplate:
         # III) Iterate over assignments to zip the col_values at condition_ids' col_name
         value_assignments = [tuple(zip(*[samples[condition_col] or "''"
                                          for condition_col in [assignment[i]
-                                                               for i in condition_ids]
+                                                               for i in condition_ids
+                                                               ]
                                          ]
                                        )) for assignment in column_assignments
                              ]
@@ -925,14 +926,14 @@ def create_basic_table_question_dataset(tables,
         schema = {
             'variables': {
                 'col1': {'type': 'column',
-                            'allowed_dtypes': ['numeric']
-                            },
+                         'allowed_dtypes': ['numeric']
+                         },
                 'col2': {'type': 'column',
-                            'allowed_dtypes': ['numeric', 'text']
-                            },
+                         'allowed_dtypes': ['numeric', 'text']
+                         },
                 'val1': {'type': 'value',
-                            'allowed_dtypes': ['numeric', 'text']
-                            }
+                         'allowed_dtypes': ['numeric', 'text']
+                         }
             },
             'sample_strategy': 'random',
             'value_pool': 'distinct_values',
@@ -940,10 +941,10 @@ def create_basic_table_question_dataset(tables,
         }
         basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
         dataset = TableQuestionDataSet(name + '_basic',
-                                        description=base_description,
-                                        question_templates=[basic_template],
-                                        tables=tables
-                                        )
+                                       description=base_description,
+                                       question_templates=[basic_template],
+                                       tables=tables
+                                       )
         save_version(dataset, cache_path, cache_file_name)
     return dataset
 

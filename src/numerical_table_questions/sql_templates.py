@@ -43,7 +43,7 @@ class SQLColumnExpression:
         Todos:
             - add check for allowed column types (all numeric due to arithmetics?)
             - add check for same column allowed constraints across chained expressions
-            - revisit if multiple arguments or always exact two 
+            - revisit if multiple arguments or always exact two
               (see ellipsis in type annotation)
     """
     def __init__(self, arguments: Tuple[Union[str, 'SQLColumnExpression'], ...],
@@ -100,7 +100,7 @@ class SQLOperatorTemplate:
 
         Todos:
             - add allowed_operators?
-            - add allowed types (basic ones are all numerical but first_value can allow 
+            - add allowed types (basic ones are all numerical but first_value can allow
               text)
             - first_value must require over clause with ordering to be deterministic
     """
