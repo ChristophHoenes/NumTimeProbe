@@ -461,6 +461,7 @@ class QuestionTemplate:
         initiallized_value_vars = []
         value_var_cols = []
         value_var_computations = []
+        value_var_comparators = []
         for info in condition_info:
             is_condition_assigned = False
             # here the order of variables does not matter since only one variable may be unassigned
@@ -474,6 +475,7 @@ class QuestionTemplate:
                     initiallized_value_vars.append(val_var)
                     value_var_cols.append(set(info['column_vars']))
                     value_var_computations.append(info['value_computation'])
+                    value_var_comparators.append(info['comparator'])
                     is_condition_assigned = True
         # determine how many times a column variable occurs within the conditions
         # increase factor if multiple value variables depend on the same column
@@ -546,6 +548,32 @@ class QuestionTemplate:
             value_variable_assignments.append(computed_values)
         # ensure that a valid range is created if two values with the same
         # column expression exist with (< or <=) and (> or >=) comparators respectively
+        range_variables = dict()
+        for i, (expression, comparator) in enumerate(zip(value_var_computations, value_var_comparators)):
+            for j, (exp, comp) in enumerate(zip(value_var_computations, value_var_comparators)):
+                range_pair = (initiallized_value_vars[i], initiallized_value_vars[j])
+                reverse_range_pair = (initiallized_value_vars[j], initiallized_value_vars[i])
+                if range_variables.get(reverse_range_pair) is not None:
+                    continue
+                if expression == exp and i != j:
+                    if comparator in ('<', '<=') and comp in ('>', '>='):
+                        range_variables[range_pair] = dict()
+                        range_variables[range_pair]['lower_bound'] = initiallized_value_vars[j]
+                        range_variables[range_pair]['upper_bound'] = initiallized_value_vars[i]
+                    elif comparator in ('>', '>=') and comp in ('<', '<='):
+                        range_variables[range_pair] = dict()
+                        range_variables[range_pair]['lower_bound'] = initiallized_value_vars[i]
+                        range_variables[range_pair]['upper_bound'] = initiallized_value_vars[j]
+        for assignment in value_variable_assignments:
+            for var_pair, bounds in range_variables.items():
+                val_1 = assignment[var_pair[0]]
+                val_2 = assignment[var_pair[1]]
+                if val_1 > val_2:
+                    assignment[bounds['lower_bound']] = val_2
+                    assignment[bounds['upper_bound']] = val_1
+                else:
+                    assignment[bounds['lower_bound']] = val_1
+                    assignment[bounds['upper_bound']] = val_2
         # join column variable assignments with value variable assignments
         variable_assignments = [
             col_binding | val_assignment
