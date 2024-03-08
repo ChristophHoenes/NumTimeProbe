@@ -365,6 +365,32 @@ class TableQuestion:
         self._table.prepare_for_pickle()
 
 
+def compute_arithmetic_expression_str(expression: str):
+    """ Computes the value of a valid arithmetic expression which is formatted as string.
+        The numbers occuring in the expression must be enclosed in doubble quotes.
+        Empty strings as numbers are interpreted as 0.
+    """
+    if not isinstance(expression, str):
+        raise TypeError(f"Expression must be string type but is {type(expression)}!")
+    if len(expression) >= 256:
+        raise ValueError(f"Detected overly long expression with {len(expression)} characters! "
+                         "Check data or increase allowed expression length.")
+    # test expression format to avoid execution of malicious code
+    number_regex = r'(\d(,\d{3})*|\d+)?(\.\d+)?'  # empty string is valid number?
+    full_regex = fr'(\(?"{number_regex}"[+*/-]"{number_regex}"\)?)+'
+    compiled_regex = re.compile(full_regex)
+    if compiled_regex.match(expression):
+        return eval(expression
+                    .replace('""', '0')  # treat empty string numbers as 0
+                    .replace('"', '')  # remove quotes
+                    .replace(',', '')  # remove , formating (e.g 1,000,000 -> 1000000)
+                    )
+    else:
+        warnings.warn("Provided Expression: "
+                      f"'{expression[:10]+'...'+expression[-10:] if len(expression) > 20 else expression}'"
+                      " is not a valid arithmetic expression and is not executed!")
+
+
 class QuestionTemplate:
 
     def __init__(self,
