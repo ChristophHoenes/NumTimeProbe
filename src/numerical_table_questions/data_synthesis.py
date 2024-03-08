@@ -23,6 +23,7 @@ from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
     SQLConditionTemplate, SQLOverClauseTemplate, SQLTemplate,
     MIN, MAX, AVG, SUM, NOOP,
+    find_template_variables,
 )
 
 
@@ -848,11 +849,6 @@ def sample_values(table: Table,
                                          """
                                          for sample in random_samples[i]]
             return random_samples[0] if len(column_names) == 1 else random_samples
-
-
-def find_template_variables(template: str) -> List[str]:
-    regex_pattern = r'\{[^\{]+\}'
-    return [elem.strip('{}') for elem in re.findall(regex_pattern, template)]
 
 
 def execute_sql(query: str, dataframe: pd.DataFrame

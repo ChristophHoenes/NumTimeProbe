@@ -1,3 +1,5 @@
+import re
+import warnings
 from dataclasses import dataclass
 from typing import Tuple, List, Union, Optional
 
@@ -196,6 +198,10 @@ class SQLConditionTemplate:
                       else value
                       )
         """
+        if isinstance(self.value, str) and len(find_template_variables(self.value)) > 1:
+            warnings.warn("Encountered more than one variable inside the value of the condition! "
+                          "The first value variable is generated/sampled according to self.condition_column. "
+                          "Make sure all additional variables occur in a previous condition or are of type column.")
         self.value = value
 
     def generate(self):
@@ -225,3 +231,8 @@ class SQLTemplate:
         for condition in self.conditions:
             select_statement += condition.generate()
         return select_statement
+
+
+def find_template_variables(template: str) -> List[str]:
+    regex_pattern = r'\{[^\{]+\}'  # any sequence of chars in braces (excluding opening brace char) where len > 0
+    return [elem.strip('{}') for elem in re.findall(regex_pattern, template)]
