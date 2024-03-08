@@ -382,16 +382,19 @@ class QuestionTemplate:
         self.conditions = sql_conditions  # ([SQLCondition('{col2}', '>=', '{col3}')])
         self._schema = schema
 
+    # TODO so far only one value per condition column is supported
+    # (e.g not two independent value samples if column occurs in multiple different conditions no between statement possible)
     def find_all_possible_assignments(self,
                                       sql_template: str,
                                       table: Table
                                       ) -> List[Dict[str, str]]:
         variables = find_template_variables(sql_template)
-        # TODO filter only type 'column' variables (maybe instead get list of values from
-        # conditions and difference to all variables = col_variables)
+        # filter only type 'column' variables, that get assigned a column name instead of a value
+        # the order in this list determines the binding of column names from column_assignments to the column variables
+        # (e.g column_name at index 0 of column_assignments binds to column variable at index 0 of column_variables)
         column_variables = [variable for variable in variables
                             if self._schema['variables'][variable]['type'] == 'column']
-        # all permutations of column assignments
+        # all permutations of a table's column_names for the assignment length (determind by the number of column variables to fill)
         column_assignments = list(itertools.permutations(table.column_names,
                                                          len(column_variables)
                                                          )
@@ -425,7 +428,7 @@ class QuestionTemplate:
                                           for idx in condition_ids]))
         # c) determine number of value assignments hard coded or heuristic (dynamic?)
         num_value_samples = 10
-        # d) iterate over results from b and call sample save in dict
+        # d) iterate over results from b and sample fixed values, save them in a dict
         samples = {condition_col: sample_values(
                     table,
                     condition_col,
@@ -438,7 +441,7 @@ class QuestionTemplate:
                     return_indices=False
                     ) for condition_col in condition_assignments
                    }
-        # III) Iterate over assignments to zip the col_values at condition_ids' col_name
+        # III) add the sampled value to the bindings
         value_assignments = [tuple(zip(*[samples[condition_col] or "''"
                                          for condition_col in [assignment[i]
                                                                for i in condition_ids
