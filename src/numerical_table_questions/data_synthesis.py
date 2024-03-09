@@ -522,11 +522,15 @@ class QuestionTemplate:
             # assign a sampled value to each column variable in the expression
             sample_idxs = dict()
             value_computation_kwargs = dict()
+            is_text_in_expression = False
             for _ in range(num_value_samples):
                 for col_set in value_var_cols:
                     for col_var in col_set:
                         # retrieve actual column name of current assignment
                         col_name = binding[col_var]
+                        # flag to detect text in arithmetic expression
+                        if infered_types[col_name] == 'text':
+                            is_text_in_expression = True
                         # sample index (next unused sample for this column)
                         i = sample_idxs.get(col_name, 0)
                         # assign sample value to column variable
@@ -535,21 +539,29 @@ class QuestionTemplate:
                         sample_idxs[col_name] = i + 1
                 # inject sample values into the column expression template and evaluate final value
                 computed_values = dict()
-                for value_var, expression in zip(initiallized_value_vars, value_var_computations):
-                    try:
-                        computed_value = compute_arithmetic_expression_str(
-                            expression.format(**value_computation_kwargs)
-                            )
-                    except ZeroDivisionError:
-                        warnings.warn("Encountered zero difision in value computation! "
-                                      "Retrying with all zeros replaced with ones. This might lead to unexpected values.")
-                        computed_value = compute_arithmetic_expression_str(
-                            expression.format(**value_computation_kwargs)
-                            .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
-                            .replace('0', '1')
-                            )
-                    computed_values[value_var] = computed_value
-                value_variable_assignments.append(computed_values)
+                for value_var, expression, col_set in zip(initiallized_value_vars, value_var_computations, value_var_cols):
+                    if is_text_in_expression:
+                        if '*' in expression or '/' in expression or '-' in expression:
+                            raise ValueError("Only '+' operator is allowed in expression with text columns!")
+                        # concatenate the assigned values as string
+                        computed_value = ''.join([str(value_computation_kwargs[col_var]) for col_var in col_set])
+                    else:
+                        try:
+                            computed_value = compute_arithmetic_expression_str(
+                                expression.format(**value_computation_kwargs)
+                                )
+                        except ZeroDivisionError:
+                            warnings.warn("Encountered zero difision in value computation! "
+                                          "Retrying with all zeros replaced with ones. "
+                                          "This might lead to unexpected values."
+                                          )
+                            computed_value = compute_arithmetic_expression_str(
+                                expression.format(**value_computation_kwargs)
+                                .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
+                                .replace('0', '1')
+                                )
+                        computed_values[value_var] = computed_value
+                    value_variable_assignments.append(computed_values)
         # ensure that a valid range is created if two values with the same
         # column expression exist with (< or <=) and (> or >=) comparators respectively
         range_variables = dict()
