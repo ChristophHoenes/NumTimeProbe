@@ -432,8 +432,11 @@ class QuestionTemplate:
         variable_column_bindings = [
             binding
             for binding in variable_column_bindings
-            for var_name, assigned_col in binding.items()
-            if infered_types[assigned_col] in self._schema['variables'][var_name]['allowed_dtypes']
+            if all(
+                [infered_types[assigned_col] in self._schema['variables'][var_name]['allowed_dtypes']
+                 for var_name, assigned_col in binding.items()
+                 ]
+                )
             ]
 
         # ignore semantic dependencies of values for now (filter empty results post hoc)
