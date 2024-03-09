@@ -450,7 +450,7 @@ class QuestionTemplate:
                     'column_vars': find_template_variables(value_computation_expression),
                     'value_vars': (
                         condition_val_vars
-                        if len(condition_val_vars := find_template_variables(condition.value)[0]) > 0
+                        if len(condition_val_vars := find_template_variables(condition.value)) > 0
                         else []
                         ),
                     'value_computation': value_computation_expression,
