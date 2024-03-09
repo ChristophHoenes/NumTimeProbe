@@ -377,7 +377,7 @@ def compute_arithmetic_expression_str(expression: str):
                          "Check data or increase allowed expression length.")
     # test expression format to avoid execution of malicious code
     number_regex = r'(\d(,\d{3})*|\d+)?(\.\d+)?'  # empty string is valid number?
-    full_regex = fr'(\(?"{number_regex}"[+*/-]"{number_regex}"\)?)+'
+    full_regex = fr'"{number_regex}"|(\(?"{number_regex}"[+*/-]"{number_regex}"\)?)+'
     compiled_regex = re.compile(full_regex)
     if compiled_regex.match(expression):
         return eval(expression
