@@ -157,13 +157,13 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
             )
             print(model.samples_processed)
         else:  # load only weights
-            model = get_model_module(training_args=args)
+            model = get_model_module(training_args=args, effective_batch_size_per_step=effective_batch_size_per_step)
             torch_load = torch.load(args.checkpoint_path, map_location=torch.device("cpu"))
             model.load_state_dict(torch_load["state_dict"], strict=False)
             model.samples_processed = torch.tensor(0.0)
             model.tokens_processed = torch.tensor(0.0)
     else:
-        model = get_model_module(training_args=args)
+        model = get_model_module(training_args=args, effective_batch_size_per_step=effective_batch_size_per_step)
 
     if args.train_only_embeddings:
         if get_rank() == 0:

@@ -107,7 +107,7 @@ class LightningWrapper(L.LightningModule):
                  model_type_info: Optional[ModelTypeInfo] = None,
                  loss_fn=torch.nn.functional.nll_loss,
                  optimizer_args: OptimizerArgs = OptimizerArgs(),
-                 effective_batch_size_per_step=-100_000,
+                 effective_batch_size_per_step=None,
                  samples_processed: int = 0,
                  tokens_processed: int = 0):
         super().__init__()
@@ -116,7 +116,12 @@ class LightningWrapper(L.LightningModule):
         self.loss_fn = loss_fn
         self.optimizer_args = optimizer_args
         self.args = training_args
-        self.effective_batch_size_per_step = effective_batch_size_per_step
+        if effective_batch_size_per_step is None:
+            warnings.warn("No effective batch size was set! Using negative batch_size_per_device as proxy."
+                          "This will lead to inacurate values for 'samples_processed' and 'tokens_processed'.")
+            self.effective_batch_size_per_step = -training_args.batch_size_per_device
+        else:
+            self.effective_batch_size_per_step = effective_batch_size_per_step
         self.register_buffer("samples_processed", torch.tensor(samples_processed))
         self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
 
@@ -256,7 +261,7 @@ class LightningWrapper(L.LightningModule):
         }
 
 
-def get_model_module(training_args):
+def get_model_module(training_args, **kwargs):
     if training_args.model_name_or_path == 'tapex':
         model = transformers.BartForConditionalGeneration.from_pretrained("microsoft/tapex-base-finetuned-wtq")
         # potentially change model config
@@ -274,7 +279,7 @@ def get_model_module(training_args):
     else:
         # TODO try search path
         raise NotImplementedError(f"No initialization implemented for model {training_args.model_name_or_path}!")
-    return LightningWrapper(model, training_args, model_type_info=model_type_info)
+    return LightningWrapper(model, training_args, model_type_info=model_type_info, **kwargs)
 
 
 @dataclass
