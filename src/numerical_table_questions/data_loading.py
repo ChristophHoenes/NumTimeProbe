@@ -1,3 +1,4 @@
+import copy
 import errno
 import glob
 import os
@@ -354,7 +355,9 @@ class TableQADataModule(L.LightningDataModule):
                  eval_batch_size: int = 64,
                  tokenizing_args=None,
                  data_dir: str = './data/NumTabQA/.cache',
-                 overwrite_cache=False,
+                 overwrite_cache: bool = False,
+                 num_dataloader_workers: int = 0,
+                 too_many_open_files_fix: bool = False,
                  ):
         super().__init__()
         self.model_specs = model_specs
@@ -370,6 +373,16 @@ class TableQADataModule(L.LightningDataModule):
         self.dataset_name = dataset_name
         self.overwrite_cache = overwrite_cache
         self.splits = dict()
+        self.too_many_open_files_fix = too_many_open_files_fix
+        self.num_dataloader_workers = num_dataloader_workers
+        self.data_loader_args = dict(
+            num_workers=self.num_dataloader_workers,
+            persistent_workers=(True if self.num_dataloader_workers > 0 else False),  # https://discuss.pytorch.org/t/what-are-the-dis-advantages-of-persistent-workers/102110/10
+            pin_memory=True,
+            worker_init_fn=set_torch_file_sharing_strategy_to_system
+            if self.too_many_open_files_fix
+            else None,
+        )
 
     def prepare_data(self):
         # download not needed as locally on disk from data_synthesis
@@ -493,24 +506,32 @@ class TableQADataModule(L.LightningDataModule):
             check_dataset_type('test')
 
     def train_dataloader(self):
+        train_loader_args = copy.deepcopy(self.data_loader_args)
+        train_loader_args.update(dict(batch_size=self.train_batch_size, shuffle=True))
         if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['train'], batch_size=self.train_batch_size, custom_tuple=(None,))
-        return DataLoader(self.splits['train'], batch_size=self.train_batch_size)
+            return WrapCustomTupleDataLoader(self.splits['train'], custom_tuple=(None,), **train_loader_args)
+        return DataLoader(self.splits['train'], **train_loader_args)
 
     def val_dataloader(self):
+        val_loader_args = copy.deepcopy(self.data_loader_args)
+        val_loader_args.update(dict(batch_size=self.eval_batch_size))
         if isinstance(self.splits['validation'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['validation'], batch_size=self.eval_batch_size, custom_tuple=(None,))
-        return DataLoader(self.splits['validation'], batch_size=self.eval_batch_size)
+            return WrapCustomTupleDataLoader(self.splits['validation'], custom_tuple=(None,), **val_loader_args)
+        return DataLoader(self.splits['validation'], **val_loader_args)
 
     def test_dataloader(self):
+        test_loader_args = copy.deepcopy(self.data_loader_args)
+        test_loader_args.update(dict(batch_size=self.eval_batch_size))
         if isinstance(self.splits['test'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=self.eval_batch_size, custom_tuple=(None,))
-        return DataLoader(self.splits['test'], batch_size=self.eval_batch_size)
+            return WrapCustomTupleDataLoader(self.splits['test'], custom_tuple=(None,), **test_loader_args)
+        return DataLoader(self.splits['test'], **test_loader_args)
 
     def predict_dataloader(self):
+        predict_loader_args = copy.deepcopy(self.data_loader_args)
+        predict_loader_args.update(dict(batch_size=self.eval_batch_size))
         if isinstance(self.splits['test'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['test'], batch_size=self.eval_batch_size, custom_tuple=(None,))
-        return DataLoader(self.splits['test'], batch_size=self.eval_batch_size)
+            return WrapCustomTupleDataLoader(self.splits['test'], custom_tuple=(None,), **predict_loader_args)
+        return DataLoader(self.splits['test'], **predict_loader_args)
 
 
 class LMDataModule(L.LightningDataModule):
