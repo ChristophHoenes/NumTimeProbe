@@ -258,15 +258,8 @@ def truncate(tokenized: dict[torch.Tensor],
             )
             if is_like_input_sequence:
                 truncated[tokenizer_output] = [
-                    torch.narrow(
-                        table_question,
-                        -1,  # last dimension = sequence length
-                        # if query_first truncate at the end of input and vice versa
-                        0 if query_first else -1,
-                        # input and target jointly need to fit in max_num_tokens
-                        max_sequence_length - tokenized['targets'][i].shape[-1]
-                        )
-                    for i, table_question in enumerate(tokenized[tokenizer_output])
+                    table_question[:max_sequence_length] if query_first else table_question[-max_sequence_length:]
+                    for table_question in tokenized[tokenizer_output]
                     ]
             else:
                 truncated[tokenizer_output] = tokenized[tokenizer_output]
