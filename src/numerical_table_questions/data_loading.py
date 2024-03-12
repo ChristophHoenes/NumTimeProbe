@@ -142,14 +142,28 @@ def get_tokenizer(model_name, **kwargs):
 
 
 # TODO consider moving within TableQADataModule -> less arguments as most contained in self but reuse outside of class needed?
-def load_split_tensor(split: str, dataset_name: str, model_name: str, data_dir: str = './data/NumTabQA/.cache'):
-    path = Path(data_dir) / 'viable_tensors' / f"{dataset_name}_{model_name}_tokenized" / split
-    data_dict = datasets.Dataset.load_from_disk(path).with_format('torch')
-    inputs_tensors = [data_dict[col] for col in data_dict.column_names if col != 'targets']
-    inputs_dataset = torch.utils.data.TensorDataset(*inputs_tensors)
-    if 'targets' in data_dict.column_names:
-        return torch.utils.data.StackDataset(inputs_dataset, data_dict['targets'])
-    return inputs_dataset
+def load_split_tensor(split: str, dataset_name: str, model_name: str, data_dir: str = './data/NumTabQA/.cache', full_path=None,
+                      output_dict: bool = False):
+    if full_path is None:
+        full_path = Path(data_dir) / 'viable_tensors' / f"{dataset_name}_{model_name}_tokenized" / split
+    data_dict = datasets.Dataset.load_from_disk(full_path).with_format('torch')
+
+    if output_dict:
+        # simply uses datasets.Dataset as input to dataloader -> a batch will be a dictionary of all dataset columns
+        # this might have a small performance downside due to memory mapping <- TODO verify performance comparison
+        return data_dict
+
+    # whole dataset needs to fit into memory, takes longer to initially prepare dataloaders
+    # but might save some time during iterating over the batches
+    else:
+        inputs_tensors = [data_dict[col] for col in data_dict.column_names if col != 'targets']
+        # all dataset columns (except 'targets') as in-memory tensor dataset (the dataloader should return batch as tuple)
+        inputs_dataset = torch.utils.data.TensorDataset(*inputs_tensors)
+        if 'targets' in data_dict.column_names:
+            # dataloader should return batch as tuple of (inputs, targets)
+            # where inputs is a tuple of all dataset columns except 'targets' and targets is the dataset 'targets' column
+            return torch.utils.data.StackDataset(inputs_dataset, data_dict['targets'])
+        return inputs_dataset
 
 
 def batch_end_of_sequence(batch, pad_token_id):
