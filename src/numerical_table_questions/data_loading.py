@@ -73,7 +73,7 @@ def prepare_for_tokenizer(data, model_name, **kwargs):
         logger.info("Flattening examples to tokenizer format...")
         padding = kwargs.get('padding') or True
         truncation = kwargs.get('truncation') or True
-        max_length = kwargs.get('max_length') or 512
+        max_length = kwargs.get('max_length') or 1024
         return_tensors = kwargs.get('return_tensors') or 'pt'
         if not isinstance(data, datasets.Dataset):
             questions_by_table = {}
@@ -102,7 +102,6 @@ def prepare_for_tokenizer(data, model_name, **kwargs):
                         'truncation': truncation,
                         'max_length': max_length,
                         'return_tensors': return_tensors,
-                        'add_special_tokens': False,
                     }
                 )
                 for table_id, content_dict in tqdm(questions_by_table.items())
@@ -124,7 +123,6 @@ def prepare_for_tokenizer(data, model_name, **kwargs):
                         'truncation': truncation,
                         'max_length': max_length,
                         'return_tensors': return_tensors,
-                        'add_special_tokens': False,
                     }
                 )
                 for table_batch in tqdm(data)
@@ -236,7 +234,7 @@ def truncate(tokenized: dict[torch.Tensor],
              ):
     logger.info("Apply truncation strategy...")
     # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
-    if truncation_type in (True, 'longest_first'):
+    if truncation_type in ('True', 'longest_first'):
         truncated = {}
         for tokenizer_output in tokenized.keys():
             is_like_input_sequence = (
@@ -257,7 +255,7 @@ def truncate(tokenized: dict[torch.Tensor],
                     ]
             else:
                 truncated[tokenizer_output] = tokenized[tokenizer_output]
-    elif truncation_type in (False, 'do_not_truncate'):
+    elif truncation_type in ('False', 'do_not_truncate'):
         # filter out sequences larger than model's max_length
         truncated = {}
         for tokenizer_output in tokenized.keys():
@@ -281,7 +279,7 @@ def pad(tokenized:  dict[torch.Tensor],
         pad_token_id: int,
         ):
     logger.info("Apply padding strategy...")
-    if padding_type in (True, 'max_length'):
+    if padding_type in ('True', 'max_length', 'longest'):
         padded = {}
         for tokenizer_output in tokenized.keys():
             is_like_input_sequence = (
@@ -289,7 +287,7 @@ def pad(tokenized:  dict[torch.Tensor],
                 and tokenized[tokenizer_output][0].shape[-1] == tokenized['input_ids'][0].shape[-1]
             )
             if is_like_input_sequence and tokenizer_output:
-                if tokenizer_output != 'targets':
+                if padding_type in ('True', 'max_length') and tokenizer_output != 'targets':
                     # determine shape of tensor and alter last dimension to maximum sequence length of model
                     tensor_shape = list(tokenized[tokenizer_output][0].shape)
                     tensor_shape[-1] = max_sequence_length
@@ -303,7 +301,10 @@ def pad(tokenized:  dict[torch.Tensor],
                         # TODO check semantics of pad token for masks
                         padding_value=float(pad_token_id) if 'mask' not in tokenizer_output else 0.,
                     )
-                ))[:-1]  # pop dummy tensor that was previously appended
+                ))
+                if padding_type in ('True', 'max_length'):
+                    # pop dummy tensor that was previously appended
+                    padded[tokenizer_output] = padded[tokenizer_output][:-1]
             else:
                 # TODO think of removing unbind and instead move vstack here such that
                 # by convention after padding there is a tensor instead of a list of samples
@@ -336,9 +337,10 @@ def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_se
     target_dummy = torch.ones_like(padded['input_ids'][0]) * mask_token_id
     full_sequence_targets = []
     for i, (input_end_idx, target_length) in enumerate(zip(input_lengths, target_lengths)):
-        padded['input_ids'][i][input_end_idx:input_end_idx+target_length] = mask_token_id
+        # inputs do not need a label mask
+        #padded['input_ids'][i][input_end_idx:input_end_idx+target_length] = mask_token_id
         template = torch.clone(target_dummy)
-        template[input_end_idx:input_end_idx+target_length] = padded['targets'][i][:target_length]
+        template[:target_length] = padded['targets'][i][:target_length]
         full_sequence_targets.append(template)
     padded['targets'] = full_sequence_targets
     return padded
@@ -363,7 +365,7 @@ class TableQADataModule(L.LightningDataModule):
         self.eval_batch_size = eval_batch_size
         self.tokenizing_args = asdict(tokenizing_args) if tokenizing_args is not None else dict()
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
-        self.max_num_tokens = self.tokenizing_args.get('max_length') or 512
+        self.max_num_tokens = self.tokenizing_args.get('max_length') or 1024
         self.data_dir = data_dir
         self.dataset_name = dataset_name
         self.overwrite_cache = overwrite_cache

@@ -49,7 +49,7 @@ class TrainingArgs:
         aliases=["--lang", "--lg", "-l"],
     )
     max_sequence_length: int = dArg(
-        default=512,
+        default=1024,  # this is the case for tapex but 512 is more common?
         help="Sequence length for dataset tokenization.",
         aliases=["--seq_len", "--block_size"],
     )
@@ -116,7 +116,7 @@ class TrainingArgs:
 
     ####### General training ###########
     training_goal: int = dArg(
-        default=10_000_000, help="Number training goal units to train for.", aliases="--tg"
+        default=200_000, help="Number training goal units to train for.", aliases="--tg"
     )
     training_goal_unit: Literal["samples", "tokens", "optimizer-steps"] = dArg(
         default="samples", help="Unit of training_goal."
@@ -134,12 +134,12 @@ class TrainingArgs:
     val_before_training: bool = dArg(default=True, help="Run one validation epoch before training.")
     val_only: bool = dArg(default=False, help="Run one validation epoch before training.")
     batch_size_per_device: int = dArg(
-        default=8,
+        default=16,
         help="Batch size per device. If effective_batch_size is specified, this is the maximum batch size per device (you should then increase this in powers of two until you get CUDA OOM errors).",  # noqa: E501
         aliases="-b",
     )
     eval_batch_size_per_device: int = dArg(
-        default=64,
+        default=32,
         help="Batch size per device for evaluation (no gradients -> can be larger than batch_size_per_device for training).",
     )
     effective_batch_size: int | None = dArg(
@@ -223,12 +223,12 @@ class TokenizationArgs:
         help=("Whether the question is expected to be at the beginning (default: True) or "
               "the end of the input (if set to False)."),
     )
-    padding: Literal['longest', 'do_not_pad', 'max_length'] = dArg(
-        default='do_not_pad',
+    padding: Literal['longest', 'do_not_pad', 'max_length', 'True', 'False'] = dArg(
+        default='max_length',
         help="Whether to pad all sequences to the longest provided sequence length, the max_length or not at all (default).",
     )
-    truncation: Literal['longest_first', 'do_not_truncate', 'only_first', 'only_second'] = dArg(
-        default='do_not_truncate',
+    truncation: Literal['longest_first', 'do_not_truncate', 'only_first', 'only_second', 'True', 'False'] = dArg(
+        default='True',
         help=("Whether to truncate sequences that are longer than max_lenghth. "
               "'only_first' and 'only_second' are applicable if sequences are provided as pairs "
               "and only truncate one of the sequences for each sample."),
