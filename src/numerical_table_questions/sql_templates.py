@@ -198,7 +198,7 @@ class SQLConditionTemplate:
                       else value
                       )
         """
-        if isinstance(self.value, str) and len(find_template_variables(self.value)) > 1:
+        if isinstance(value, str) and len(find_template_variables(value)) > 1:
             warnings.warn("Encountered more than one variable inside the value of the condition! "
                           "The first value variable is generated/sampled according to self.condition_column. "
                           "Make sure all additional variables occur in a previous condition or are of type column.")
