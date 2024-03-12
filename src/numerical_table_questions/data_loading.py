@@ -411,7 +411,11 @@ class TableQADataModule(L.LightningDataModule):
                 data_split = datasets.load_from_disk(final_processing_path)
             elif intermediate_processing_path.exists() and not self.overwrite_cache:
                 # load from intermediate step (all examples) and apply custom post-processing and filtering
-                tokenized_dict = datasets.load_from_disk(intermediate_processing_path)
+                tokenized_dict = datasets.load_from_disk(intermediate_processing_path).with_format('torch')
+                # convert to dict while keeping the tensor format
+                tokenized_dict = {field: [tokenized_dict[i][field] for i in range(tokenized_dict.num_rows)]
+                                  for field in tokenized_dict.column_names
+                                  }
                 processed_sequences = post_tokenizing(tokenized_dict,
                                                       self.tokenizing_args,
                                                       self.max_num_tokens,
