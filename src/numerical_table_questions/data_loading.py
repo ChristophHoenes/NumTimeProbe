@@ -470,9 +470,15 @@ class TableQADataModule(L.LightningDataModule):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
             # TODO change path arguments to 'train' and 'validation' once computed
-            self.splits['train'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            # TODO undo splitting when using real splits
+            data_tensor = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            splits = torch.utils.data.random_split(data_tensor, [0.80, 0.1, 0.1], torch.Generator().manual_seed(42))
+            #self.splits['train'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['train'] = splits[0]
             check_dataset_type('train')
-            self.splits['validation'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['validation'] = splits[1]
+            self.splits['test'] = splits[2]
+            #self.splits['validation'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('validation')
 
         # Assign test dataset for use in dataloader(s)
