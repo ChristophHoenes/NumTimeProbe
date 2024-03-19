@@ -1096,9 +1096,56 @@ def create_basic_table_question_dataset(tables,
     return dataset
 
 
+def create_range_table_question_dataset(tables,
+                                        name='wikitables_test',
+                                        use_cache: bool = True,
+                                        cache_path: str = './data/NumTabQA/.cache'
+                                        ) -> TableQuestionDataSet:
+    cache_file_name = f"{name}_range_dataset"
+    if use_cache:
+        dataset = caching(cache_path, cache_file_name)
+    else:
+        base_description = \
+            """
+            Basic SQL operators min, max, avg, sum or no operation combined with a simple value lookup condition of a different column.
+            Using WikiTables test set.
+
+            """
+        nl = "What is the {op} of column {col1} given that {col1} is at least {val1} and {col1} is at most {val2}?"
+        main_expr = SQLColumnExpression(("{col1}",))
+        conditions = (SQLConditionTemplate(SQLColumnExpression(('{col1}',)), '>=', '{val1}'),
+                      SQLConditionTemplate(SQLColumnExpression(('{col1}',)), '<=', '{val2}'),
+                      )
+        allowed_operators = tuple([MIN, MAX, AVG, SUM])
+        schema = {
+            'variables': {
+                'col1': {'type': 'column',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'val1': {'type': 'value',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'val2': {'type': 'value',
+                         'allowed_dtypes': ['numeric']
+                         },
+            },
+            'sample_strategy': 'random',
+            'value_pool': 'distinct_values',
+            'interpolation_args': dict()
+        }
+        range_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+        dataset = TableQuestionDataSet(name + '_range',
+                                       description=base_description,
+                                       question_templates=[range_template],
+                                       tables=tables
+                                       )
+        save_version(dataset, cache_path, cache_file_name)
+    return dataset
+
+
 def main():
-    table_dataset = create_table_dataset(use_cache=False)
-    return create_basic_table_question_dataset(table_dataset, use_cache=False)
+    table_dataset = create_table_dataset(base_dataset_split='validation', use_cache=True)
+    return create_range_table_question_dataset(table_dataset, name='wikitables_validation', use_cache=False)
 
 
 if __name__ == "__main__":
