@@ -245,10 +245,14 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     if args.val_before_training and not args.resume_training:
         # TODO: we could use a new trainer with Trainer(devices=1, num_nodes=1) to prevent samples from possibly getting replicated with DistributedSampler here.  # noqa: E501
         logger.info(f"Rank {current_process_rank} | Validation before training...")
+        # somehow the dm initialization does not happen implicitly, maybe only when trainer.fit is called?
+        dm.prepare_data()
         dm.setup('fit')
         val_result = trainer.validate(model, datamodule=dm)
         logger.info(f"Validation Result: {val_result}.")
         print(val_result)
+        # clear results because reuse of validate might cause problems otherwise https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+        trainer.validate_loop._results.clear()
         if args.val_only:
             exit(0)
 
