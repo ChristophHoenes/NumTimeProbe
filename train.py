@@ -37,7 +37,7 @@ from numerical_table_questions.model import LightningWrapper, get_model_module
 
 
 @logger.catch(reraise=True)
-def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
+def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     current_process_rank = get_rank()
     args, misc_args, tokenizer_args = parsed_arg_groups
 
@@ -202,7 +202,10 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs]):
     dm = TableQADataModule(model.model_specs,
                            train_batch_size=args.batch_size_per_device,
                            eval_batch_size=args.eval_batch_size_per_device,
-                           tokenizing_args=tokenizer_args)
+                           tokenizing_args=tokenizer_args,
+                           num_dataloader_workers=args.workers,
+                           too_many_open_files_fix=misc_args.too_many_open_files_fix,
+                           )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks = [checkpoint_callback, wandb_disk_cleanup_callback, lr_monitor]
     if args.accelerator == "cuda":
