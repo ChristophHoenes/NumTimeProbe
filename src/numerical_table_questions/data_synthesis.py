@@ -196,6 +196,7 @@ class Table:
         sample_rows = df.iloc[sample_row_idxs, df.columns.get_loc(column_name)]
 
         def is_numeric(x):
+            # TODO negative values
             regex = re.compile(r'(\d(,\d{3})*|\d+)?(\.\d+)?')
             return re.fullmatch(regex, x) is not None
 
@@ -376,6 +377,7 @@ def compute_arithmetic_expression_str(expression: str):
         raise ValueError(f"Detected overly long expression with {len(expression)} characters! "
                          "Check data or increase allowed expression length.")
     # test expression format to avoid execution of malicious code
+    # TODO negative values
     number_regex = r'(\d(,\d{3})*|\d+)?(\.\d+)?'  # empty string is valid number?
     full_regex = fr'"{number_regex}"|(\(?"{number_regex}"[+*/-]"{number_regex}"\)?)+'
     compiled_regex = re.compile(full_regex)
@@ -537,6 +539,10 @@ class QuestionTemplate:
                         value_computation_kwargs[col_var] = samples[col_name][i]
                         # increment sample index
                         sample_idxs[col_name] = i + 1
+                # postprocess numbers
+                if not is_text_in_expression:
+                    # remove leading zeros
+                    value_computation_kwargs = {k: v.lstrip('0') for k, v in value_computation_kwargs.items()}
                 # inject sample values into the column expression template and evaluate final value
                 computed_values = dict()
                 for value_var, expression, col_set in zip(initiallized_value_vars, value_var_computations, value_var_cols):
@@ -549,7 +555,7 @@ class QuestionTemplate:
                         try:
                             computed_value = compute_arithmetic_expression_str(
                                 expression.format(**value_computation_kwargs)
-                                )
+                                ) or "''"
                         except ZeroDivisionError:
                             warnings.warn("Encountered zero difision in value computation! "
                                           "Retrying with all zeros replaced with ones. "
@@ -560,8 +566,8 @@ class QuestionTemplate:
                                 .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
                                 .replace('0', '1')
                                 )
-                        computed_values[value_var] = computed_value
-                    value_variable_assignments.append(computed_values)
+                    computed_values[value_var] = computed_value
+                value_variable_assignments.append(computed_values)
         # ensure that a valid range is created if two values with the same
         # column expression exist with (< or <=) and (> or >=) comparators respectively
         range_variables = dict()
