@@ -1022,7 +1022,10 @@ def create_table_dataset(base_dataset_name: str = 'wikitablequestions',
     cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables'
     if use_cache:
         test_tables = caching(cache_path, cache_file_name)
-    else:
+        if test_tables is not None:
+            # restore original format by loading from state dict
+            test_tables = [Table.from_state_dict(table_data) for table_data in test_tables]
+    if not use_cache or test_tables is None:
         logger.info("Loading %s's first %s %s split samples",
                     base_dataset_name, str(num_tables or 'all'), base_dataset_split)
         dataset = load_dataset(base_dataset_name,
