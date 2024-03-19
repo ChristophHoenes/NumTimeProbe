@@ -291,8 +291,12 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
             logger.success("Saving finished!")
 
         if args.test_after_train_end:
-            logger.info("Testing model performance...")
-            trainer.test(model, datamodule=dm)
+            if args.num_devices > 1 and current_process_rank == 0:
+                logger.info(f"Training was performed on {args.num_devices} devices. "
+                            "Testing should be run on a single device if possible. Skip testing for now (use evaluate.py).")
+            else:
+                logger.info("Testing model performance...")
+                trainer.test(model, datamodule=dm)
 
 
 if __name__ == "__main__":
