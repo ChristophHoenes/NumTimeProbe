@@ -377,7 +377,6 @@ class TableQADataModule(L.LightningDataModule):
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
         self.max_num_tokens = self.tokenizing_args.get('max_length') or 1024
         self.data_dir = data_dir
-        self.dataset_name = dataset_name
         self.overwrite_cache = overwrite_cache
         self.splits = dict()
         self.too_many_open_files_fix = too_many_open_files_fix
@@ -394,7 +393,7 @@ class TableQADataModule(L.LightningDataModule):
     def prepare_data(self):
         # download not needed as locally on disk from data_synthesis
         # but once published download from huggingface datasets
-        for split in ['test']:  # ['train', 'validation', 'test']: <- skip other splits while developing
+        for split in ['train', 'validation', 'test']:
             # path definitions to check for saved files
             huggingface_base_dir = f"{self.dataset_name}_{self.model_name}_tokenized"
             final_processing_path = Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split
@@ -495,16 +494,9 @@ class TableQADataModule(L.LightningDataModule):
 
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
-            # TODO change path arguments to 'train' and 'validation' once computed
-            # TODO undo splitting when using real splits
-            data_tensor = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
-            splits = torch.utils.data.random_split(data_tensor, [0.80, 0.1, 0.1], torch.Generator().manual_seed(42))
-            #self.splits['train'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
-            self.splits['train'] = splits[0]
+            self.splits['train'] = load_split_tensor('train', self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('train')
-            self.splits['validation'] = splits[1]
-            self.splits['test'] = splits[2]
-            #self.splits['validation'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['validation'] = load_split_tensor('validation', self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('validation')
 
         # Assign test dataset for use in dataloader(s)
