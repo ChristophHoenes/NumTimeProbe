@@ -425,7 +425,7 @@ class TableQADataModule(L.LightningDataModule):
                 # load raw TableQuestionDataset and do full processing
                 # TODO replace 'wikitables' with variable to allow for different source datasets
                 base_filename = f"wikitables_{split}_{self.dataset_name}"
-                data_split = caching(self.data_dir, base_filename)
+                data_split = caching(base_filename, cache_path=self.data_dir)
                 if data_split is None:
                     raise ValueError(f"No data split '{split}' found at {self.data_dir}! "
                                      "Please download, or generate the requested dataset.")

@@ -1058,7 +1058,7 @@ def create_basic_table_question_dataset(tables,
                                         ) -> TableQuestionDataSet:
     cache_file_name = f"{name}_basic_dataset"
     if use_cache:
-        dataset = caching(cache_path, cache_file_name)
+        dataset = caching(cache_file_name, cache_path=cache_path)
     else:
         base_description = \
             """
@@ -1103,7 +1103,7 @@ def create_range_table_question_dataset(tables,
                                         ) -> TableQuestionDataSet:
     cache_file_name = f"{name}_range_dataset"
     if use_cache:
-        dataset = caching(cache_path, cache_file_name)
+        dataset = caching(cache_file_name, cache_path=cache_path)
     else:
         base_description = \
             """

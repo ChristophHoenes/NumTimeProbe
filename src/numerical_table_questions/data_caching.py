@@ -22,7 +22,7 @@ MAX_THREADS = 100
 CLEANUP_PATIENCE = 1.0
 
 
-def caching(cache_path, cache_file_name) -> Optional[Any]:
+def caching(cache_file_name, cache_path='../data/NumTabQA/.cache') -> Optional[Any]:
     """ Checks for pickle or arrow file(s) and loads if exist, otherwise return None. """
     cache_path_obj = Path(cache_path)
     # check for latest version (via timestamp)
@@ -90,6 +90,8 @@ def save_version(obj, cache_path, cache_file_name) -> None:
     logger.info(f"Writing {cache_file_name} to disk...")
     if (hasattr(obj, 'to_huggingface') and callable(obj.to_huggingface)):
         obj.to_huggingface().save_to_disk(save_path)
+    elif isinstance(obj, list) and len(obj) == 0:
+        warnings.warn("Provided list is empty! Nothing to save...")
     elif isinstance(obj, list) and (hasattr(obj[0], 'to_state_dict') and callable(obj[0].to_state_dict)):
         Dataset.from_list([item.to_state_dict() for item in obj]).save_to_disk(save_path)
     else:
