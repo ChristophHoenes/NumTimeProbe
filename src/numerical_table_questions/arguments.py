@@ -169,6 +169,24 @@ class TrainingArgs:
     from_scratch_embeddings: bool = dArg(
         default=False, help="Do not use pre-trained weights to intialize the token embeddings."
     )
+    table_corpus: str = dArg(
+        default="wikitables", help="Name of the table corpus the dataset is based on."
+    )
+    dataset_name: str = dArg(
+        default="basic_dataset", help="Name of the dataset to use."
+    )
+    dummy_ipykernel_fix: str = dArg(
+        default='',
+        help="flag --f with mamba path is passes automatically, if unknown argument throws error in Notebooks.",
+        aliases=["--f"]
+    )
+    only_first_x_tokens: int = dArg(
+        default=0,
+        help=("If > 0 overwrites the input with padding after only_first_x_tokens tokens. "
+              "This can be used to check if the model only remembers the results from training "
+              "by recognizing markers in the beginning of the input (e.g query only, ignoring input)."),
+        aliases=["--only_query"],
+    )
 
     def __post_init__(self):
         if self.val_frequency < 1:
