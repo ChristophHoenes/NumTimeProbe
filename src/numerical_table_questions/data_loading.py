@@ -65,87 +65,11 @@ class _WrapCustomTupleDataLoaderIter:
         return len(self.wrapped_iter)
 
 
-def prepare_for_tokenizer(data, model_name, **kwargs):
-    # TODO implement other models' specific pre-tokenizer formatting and default case
-    # TODO maybe a dict of functions instead of long if/elif/else would be cleaner
-    if model_name == 'tapex':
-        # TODO try performance with list of tables (duplicated) references as well
-        # TODO flatten each question to sample also considering alternative answers
-        logger.info("Flattening examples to tokenizer format...")
-        padding = kwargs.get('padding') or True
-        truncation = kwargs.get('truncation') or True
-        max_length = kwargs.get('max_length') or 1024
-        return_tensors = kwargs.get('return_tensors') or 'pt'
-        if not isinstance(data, datasets.Dataset):
-            questions_by_table = {}
-            for question in data._questions:
-                if questions_by_table.get(question._table._table_id) is None:
-                    questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
-                                                                     # TODO handle string conversion elsewhere
-                                                                     'answers': [str(question._answer)]}
-                else:
-                    questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
-                    # TODO handle string conversion elsewhere
-                    questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
-            return [
-                (
-                    {
-                        'table': data._tables[table_id].pandas_dataframe,
-                        'query': content_dict['questions'],
-                        'padding': padding,
-                        'truncation': truncation,
-                        'max_length': max_length,
-                        'return_tensors': return_tensors,
-                    },
-                    {
-                        'answer': content_dict['answers'],
-                        'padding': padding,
-                        'truncation': truncation,
-                        'max_length': max_length,
-                        'return_tensors': return_tensors,
-                    }
-                )
-                for table_id, content_dict in tqdm(questions_by_table.items())
-            ]
-        else:
-            return [
-                (
-                    {
-                        'table': Table.from_state_dict(table_batch['table']).pandas_dataframe,
-                        'query': table_batch['questions'],
-                        'padding': padding,
-                        'truncation': truncation,
-                        'max_length': max_length,
-                        'return_tensors': return_tensors,
-                    },
-                    {
-                        'answer': table_batch['answers'],
-                        'padding': padding,
-                        'truncation': truncation,
-                        'max_length': max_length,
-                        'return_tensors': return_tensors,
-                    }
-                )
-                for table_batch in tqdm(data)
-            ]
-    else:
-        raise NotImplementedError(f"No tokenization behavior implemented for model '{model_name}'!")
-
-
-def get_tokenizer(model_name, **kwargs):
-    if model_name == 'tapex':
-        return TapexTokenizer.from_pretrained("microsoft/tapex-base-finetuned-wtq")
-    elif model_name == 'omnitab':
-        return AutoTokenizer.from_pretrained("neulab/omnitab-large-finetuned-wtq")
-    else:
-        raise NotImplementedError(f"No tokenizer getter implemented for model '{model_name}'!")
-
-
 # TODO consider moving within TableQADataModule -> less arguments as most contained in self but reuse outside of class needed?
-def load_split_tensor(split: str, dataset_name: str, model_name: str, data_dir: str = './data/NumTabQA/.cache', full_path=None,
-                      output_dict: bool = False):
+def load_split_tensor(split: str, table_corpus: str, dataset_name: str, model_name: str,
+                      data_dir: str = './data/NumTabQA/.cache', full_path=None, output_dict: bool = False):
     if full_path is None:
-        full_path = Path(data_dir) / 'viable_tensors' / f"{dataset_name}_{model_name}_tokenized" / split
+        full_path = Path(data_dir) / 'viable_tensors' / f"{table_corpus}_{dataset_name}_{model_name}_tokenized" / split
     data_dict = datasets.Dataset.load_from_disk(full_path).with_format('torch')
 
     if output_dict:
@@ -324,7 +248,7 @@ def pad(tokenized:  dict[torch.Tensor],
     return padded
 
 
-def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_sequence_length: int, pad_token_id: int, mask_token_id: int):
+def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length: int, pad_token_id: int, mask_token_id: int):
     truncated = truncate(tokenized,
                          tokenizing_args['truncation'],
                          max_sequence_length,
@@ -357,6 +281,7 @@ def post_tokenizing(tokenized: dict[torch.Tensor], tokenizing_args: dict, max_se
 class TableQADataModule(L.LightningDataModule):
     def __init__(self,
                  model_specs,
+                 table_corpus='wikitables',
                  dataset_name='basic_dataset',
                  train_batch_size: int = 32,
                  eval_batch_size: int = 64,
@@ -370,6 +295,7 @@ class TableQADataModule(L.LightningDataModule):
         self.model_specs = model_specs
         # TODO test if model name is known else raise NotImplemented error
         self.model_name = self.model_specs.model_name_or_path
+        self.table_corpus = table_corpus
         self.dataset_name = dataset_name
         self.train_batch_size = train_batch_size
         self.eval_batch_size = eval_batch_size
@@ -395,7 +321,7 @@ class TableQADataModule(L.LightningDataModule):
         # but once published download from huggingface datasets
         for split in ['train', 'validation', 'test']:
             # path definitions to check for saved files
-            huggingface_base_dir = f"{self.dataset_name}_{self.model_name}_tokenized"
+            huggingface_base_dir = f"{self.table_corpus}_{self.dataset_name}_{self.model_name}_tokenized"
             final_processing_path = Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split
             intermediate_processing_path = Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split
             if final_processing_path.exists() and not self.overwrite_cache:
@@ -424,10 +350,11 @@ class TableQADataModule(L.LightningDataModule):
             else:
                 # load raw TableQuestionDataset and do full processing
                 # TODO replace 'wikitables' with variable to allow for different source datasets
-                base_filename = f"wikitables_{split}_{self.dataset_name}"
+                base_filename = f"{self.table_corpus}_{split}_{self.dataset_name}"
                 data_split = caching(base_filename, cache_path=self.data_dir)
                 if data_split is None:
-                    raise ValueError(f"No data split '{split}' found at {self.data_dir}! "
+                    raise ValueError(f"No data split '{split}' found at {self.data_dir} for dataset "
+                                     f"{self.dataset_name} based on table corpus {self.table_corpus}! "
                                      "Please download, or generate the requested dataset.")
                 # always disable padding and truncation - apply configuration afterwards
                 # except for special truncation strategies supported by the tokenizer
@@ -437,7 +364,7 @@ class TableQADataModule(L.LightningDataModule):
                                         if self.tokenizing_args['allow_custom_truncation'] else False
                                         }
                                        )
-                # transform input to format expected by tokenizer
+                # transform input to format expected by tokenizer (only considering input and target fields)
                 tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, **tokenizing_args)
                 logger.info("Tokenize examples...")
                 tokenized = [(self.tokenizer(**table_question), self.tokenizer(**target)['input_ids'])
@@ -494,18 +421,18 @@ class TableQADataModule(L.LightningDataModule):
 
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
-            self.splits['train'] = load_split_tensor('train', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['train'] = load_split_tensor('train', self.table_corpus, self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('train')
-            self.splits['validation'] = load_split_tensor('validation', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['validation'] = load_split_tensor('validation', self.table_corpus, self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('validation')
 
         # Assign test dataset for use in dataloader(s)
         if stage == 'test':
-            self.splits['test'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('test')
 
         if stage == 'predict':
-            self.splits['test'] = load_split_tensor('test', self.dataset_name, self.model_name, self.data_dir)
+            self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir)
             check_dataset_type('test')
 
     def train_dataloader(self):
