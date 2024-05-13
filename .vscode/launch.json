@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false,
         },
         {
             "name": "Train",
@@ -23,8 +23,8 @@
             "args": [
                 "--model", "tapex",
                 "--accelerator", "auto",
-                "--effective_batch_size", "128",
-                "--batch_size_per_device", "64",
+                "--effective_batch_size", "64",
+                "--batch_size_per_device", "32",
                 "--lr", "1e-3",
                 "--gas", "5",
                 "--val_frequency", "0.25",
