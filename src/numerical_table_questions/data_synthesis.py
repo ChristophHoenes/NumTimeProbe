@@ -6,15 +6,17 @@ import itertools
 import json
 import logging
 import logging.config
+import math
 import re
 import warnings
 import weakref
+from collections.abc import Iterable
 from pathlib import PurePath
 from typing import Tuple, List, Dict, Union, Optional, Literal
 
+import datasets
 import numpy as np
 import pandas as pd
-from datasets import Dataset, load_dataset
 from pandasql import sqldf
 from tqdm import tqdm
 
@@ -32,7 +34,14 @@ logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
 
+# NUMBER_REGEX = re.compile(r'(\d(,\d{3})*|\d+)?(\.\d+)?')  # old expression with no negative
+NUMBER_REGEX = re.compile(r'-?(?:(?:\.\d+)|(?:(?:\d+|(?:\d{1,3}(?:,\d{3})+))(?:\.\d+)?))')
 # TODO replace asserts with proper Exceprions
+
+
+class WeakRefableDict(dict):
+    pass
+
 
 # TODO maybe to utils
 def name_id_mapping(names: List[str], both_ways: bool = False):
@@ -41,6 +50,16 @@ def name_id_mapping(names: List[str], both_ways: bool = False):
         id2name = {idx: name for name, idx in name2id.items()}
         return name2id, id2name
     return name2id
+
+
+def alpha_numeric_sort(items: Iterable, indices: Optional[Iterable[int]] = None) -> Tuple[Tuple[str], Tuple[int]]:
+    if indices is not None:
+        if len(items) != len(indices):
+            raise ValueError(f"items and indices must have same size! But they have {len(items)} and {len(indices)} items, respectively.")
+        return [items[idx] for idx in indices], indices
+    sorted_list = sorted([(str(item), i) for i, item in enumerate(items)])
+    sorted_items, arg_sort_idxs = zip(*sorted_list)
+    return sorted_items, arg_sort_idxs
 
 
 class Table:
@@ -64,19 +83,37 @@ class Table:
         )
         self._source = source_name
         self._source_split = source_split
+
+        # data processing/cleaning and dtype inference
+        self._preprocess_cells()   # handles trailing whitespaces and empty values
+        # infer column types after whitespace removal
         self._inferred_column_types = [self.infer_column_type(col)
                                        for col in self.column_names
                                        ]
         self._make_true_numeric()  # removes commas (e.g 10,000.99 -> 10000.99)
-        self._preprocess_cells()   # handles trailing whitespaces and empty values
+
         self._col2idx, self._idx2col = name_id_mapping(self.column_names, both_ways=True)
-        self._table_id = hashlib.sha256(str.encode(f'{self.size[0]}{self.size[1]}' +
-                                                   ''.join(self.column_names) +
-                                                   ''.join(self._inferred_column_types))
-                                        ).hexdigest()
+        sorted_col_names, arg_sort_col_idxs = alpha_numeric_sort(self.column_names)
+        self._col_sort_idxs = arg_sort_col_idxs  # save sort idxs for later use
+        # hash of table schema in terms of column names and types
+        self._table_schema_id = hashlib.sha256(
+            str.encode(
+                ''.join(sorted_col_names) +
+                ''.join(
+                    alpha_numeric_sort(
+                        self._inferred_column_types,
+                        indices=arg_sort_col_idxs,
+                        )[0]  # only hash sorted values not the sort indices
+                    )
+                )
+            ).hexdigest()
+        # sequence of sums of every numerical column (ordered alphabetically by column name) used as checksum for approximate identity
+        self._num_sum_id = self._compute_num_sum_id()
+        # only approximate identity for efficiency (not all values are checked)
+        self._table_id = hashlib.sha256(str.encode(self._table_schema_id + self._num_sum_id + str(self.size))).hexdigest()
 
     @classmethod
-    def from_state_dict(cls, state_dict):
+    def from_state_dict(cls, state_dict) -> Table:
         """ Creates empty instance and loads the serialized values from the state_dict
             instead of recomputing them.
         """
@@ -93,7 +130,7 @@ class Table:
         return instance
 
     @property
-    def pandas_dataframe(self):
+    def pandas_dataframe(self) -> Union[pd.DataFrame, weakref.ReferenceType[pd.DataFrame]]:
         """This property transforms the internal structure of the table data into a
             pandas DataFrame.
         """
@@ -123,6 +160,13 @@ class Table:
         """
         return len(self._data_dict['header']), len(self._data_dict['rows'])
 
+    def _compute_num_sum_id(self):
+        sums_of_sorted_numerical_columns = [self.pandas_dataframe[col].sum()
+                                            for col in alpha_numeric_sort(self.column_names, self._col_sort_idxs)[0]
+                                            if self._inferred_column_types[self._col2idx[col]] == 'numeric'
+                                            ]
+        return ';'.join([str(col_sum) for col_sum in sums_of_sorted_numerical_columns])
+
     def column_values(self, column_name, distinct: bool = False):
         """Determines the unique set of values occuring in a column.
 
@@ -136,9 +180,9 @@ class Table:
                 list: list of (distinct) column values
         """
         if distinct:
-            return list(self.pandas_dataframe[column_name].unique())
+            return list(self.pandas_dataframe.get(column_name, default=pd.Series()).unique())
         else:
-            return list(self.pandas_dataframe[column_name])
+            return list(self.pandas_dataframe.get(column_name, default=pd.Series()))
 
     def column_value_densitiy(self, column_name):
         """Calculates the ratio of distinct values and number of rows.
@@ -158,7 +202,7 @@ class Table:
                           column_name: str,
                           num_test_rows: Optional[int] = None,
                           row_selection: Literal['random', 'first'] = 'random'
-                          ) -> Literal['numeric', 'text']:
+                          ) -> Literal['numeric', 'text', 'alphanumeric']:
         """Assigns a data type to each column based on the string representation of its
             values.
 
@@ -186,23 +230,30 @@ class Table:
         if num_test_rows is None:
             num_test_rows = len(self)
 
+        # determine row indices of the value samples
         if row_selection == 'first':
             sample_row_idxs = np.arange(num_test_rows)
         else:
             sample_row_idxs = np.random.choice(np.arange(len(self)),
                                                min(num_test_rows, len(self)),
                                                replace=False)
+        # select sample cells from df
         df = self.pandas_dataframe
         sample_rows = df.iloc[sample_row_idxs, df.columns.get_loc(column_name)]
 
-        def is_numeric(x):
-            # TODO negative values
-            regex = re.compile(r'(\d(,\d{3})*|\d+)?(\.\d+)?')
-            return re.fullmatch(regex, x) is not None
+        # determine dtype of column based on samples
+        def is_numeric(x, strict=True, number_regex=NUMBER_REGEX):
+            if strict:  # true numeric (whole string must be a pure number)
+                return re.fullmatch(number_regex, x) is not None
+            else:
+                return re.search(number_regex, x) is not None
 
         numeric_test_results = [is_numeric(row) for row in sample_rows]
+        alphanumeric_test_results = [is_numeric(row, strict=False) for row in sample_rows]
         if all(numeric_test_results):
             return 'numeric'
+        elif all(alphanumeric_test_results):
+            return 'alphanumeric'
         else:
             return 'text'
 
@@ -455,9 +506,9 @@ def compute_arithmetic_expression_str(expression: str):
     if len(expression) >= 256:
         raise ValueError(f"Detected overly long expression with {len(expression)} characters! "
                          "Check data or increase allowed expression length.")
-    # test expression format to avoid execution of malicious code
-    # TODO negative values
-    number_regex = r'(\d(,\d{3})*|\d+)?(\.\d+)?'  # empty string is valid number?
+    # test expression format to avoid execution of malicious code,
+    # hence do NOT use NUMBER_REGEX constant for security reasons but rather keep it hard-coded
+    number_regex = r'-?(?:(?:\.\d+)|(?:(?:\d+|(?:\d{1,3}(?:,\d{3})+))(?:\.\d+)?))'
     full_regex = fr'"{number_regex}"|(\(?"{number_regex}"[+*/-]"{number_regex}"\)?)+'
     compiled_regex = re.compile(full_regex)
     if compiled_regex.match(expression):
@@ -1052,7 +1103,7 @@ class TableQuestionDataSet:
                             )
         self._is_answers_computed = compute_answers
 
-    def to_huggingface(self) -> Dataset:
+    def to_huggingface(self) -> datasets.Dataset:
         """Creates a huggingface datasets.Dataset from the questions in this dataset."""
         logger.info('Grouping questions by table...')
         # TODO refactor: use self.questions_by_table
@@ -1414,7 +1465,7 @@ def sample_values(table: Table,
                 # which are represented as empty strings (double single quote character)
                 if table._inferred_column_types[
                             table._col2idx[column_names[i]]
-                        ] != 'text':
+                        ] not in ['text', 'alphanumeric']:
                     for v, value in enumerate(random_samples[i]):
                         if value == '' or value is None:
                             warnings.warn('Encountered empty value. Consider checking'
@@ -1519,10 +1570,10 @@ def create_basic_table_question_dataset(tables,
                          'allowed_dtypes': ['numeric']
                          },
                 'col2': {'type': 'column',
-                         'allowed_dtypes': ['numeric', 'text']
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
                          },
                 'val1': {'type': 'value',
-                         'allowed_dtypes': ['numeric', 'text']
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
                          }
             },
             'sample_strategy': 'random',
