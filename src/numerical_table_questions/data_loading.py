@@ -17,12 +17,13 @@ import torch
 from loguru import logger
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
-from transformers import DataCollatorForLanguageModeling, TapexTokenizer
+from transformers import DataCollatorForLanguageModeling
 from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_caching import caching
 from numerical_table_questions.model import get_model_type_info
+from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer
 from dlib.frameworks.pytorch import (
     get_rank,
     main_process_first,
@@ -406,7 +407,7 @@ class TableQADataModule(L.LightningDataModule):
                                         ]
                                   for key in tokenizer_output_names}
                 tokenized_dict['targets'] = [cast_to_reduced_int(sample[1], self.tokenizer.vocab_size) for sample in tokenized]
-                #print(tokenized_dict.keys())
+
                 # add other fields of data split that did not go through the tokenizer
                 missing_fields = list(set(data_split.column_names)
                                       - set(['table'])  # do not copy table for each question
@@ -421,7 +422,7 @@ class TableQADataModule(L.LightningDataModule):
                 tokenized_dict.update(additional_fields_dict)
                 # flatten the table batches to sequence of questions
                 tokenized_dict = unbind_table_batch(tokenized_dict, self.model_specs.pad_token_id)
-                #print(tokenized_dict.keys())
+
                 # save raw tokenizer outputs (sequences with variable length)
                 datasets.Dataset.from_dict(tokenized_dict).save_to_disk(
                     self.data_dir
