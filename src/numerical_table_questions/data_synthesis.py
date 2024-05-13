@@ -287,9 +287,9 @@ class Table:
     def _make_true_numeric(self):
         num_col_ids = [idx for idx, typ in enumerate(self._inferred_column_types)
                        if typ == 'numeric']
-        for row in self._data_dict['rows']:
+        for r, row in enumerate(self._data_dict['rows']):
             for num_col in num_col_ids:
-                row[num_col] = row[num_col].replace(',', '')
+                self._data_dict['rows'][r][num_col] = row[num_col].replace(',', '')
 
     def sample_values(self, col_name):
         raise NotImplementedError
@@ -300,13 +300,13 @@ class Table:
             self._data_dict['header'][c] = column or f'column_{c}'
 
     def _preprocess_cells(self):
-        for row in self.data_dict['rows']:
+        for r, row in enumerate(self._data_dict['rows']):
             for v, value in enumerate(row):
                 # remove trailing whitespaces
-                row[v] = value.strip()
+                self._data_dict['rows'][r][v] = value.strip()
                 if value == '':
                     # all empty values are marked as such via double single quotes
-                    row[v] = "''"
+                    self._data_dict['rows'][r][v] = "''"
 
     def prepare_for_pickle(self):
         # weakref cannot be pickled, hence replace it with default value
