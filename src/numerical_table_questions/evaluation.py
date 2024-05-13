@@ -8,14 +8,21 @@ from typing import List, Type, Union
 
 import torch
 import wandb
-from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
+from dargparser import dargparse
+from lightning import Trainer
 from lightning.pytorch.loggers import WandbLogger
+from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
 
-import data_synthesis
-from data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql
+import numerical_table_questions.data_synthesis
+from dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
+from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
+from numerical_table_questions.data_loading import TableQADataModule
+from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql
+from numerical_table_questions.metrics import token_accuracy
+from numerical_table_questions.model import LightningWrapper, get_model_module
 
 
-log_file_init_path = str(PurePath(__file__).parent.parent / 'logging.ini')
+log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
@@ -121,19 +128,58 @@ def evaluate(model: Type[TableQaModel],
     ground_truth = dataset.ground_truth
     # TODO metric dict map name tu function then call function(**kwargs)
     if metric == 'exact_match_accuracy':
-        eval_results = [sample[0].strip() == sample[1].strip()
-                        for sample in zip(predictions, ground_truth)]          
-        metric_result = sum(eval_results) / len(eval_results)
+        metric_result, eval_results = exact_match_accuracy(predictions, ground_truth)
     elif metric == 'token_accuracy':
-        token_ids = [model.tokenize(gt) for gt in ground_truth]
-        eval_results = [sample[0] == sample[1]
-                        for sample in zip(predictions, token_ids)]
-        metric_result = sum(eval_results) / len(eval_results)
+        metric_result, eval_results = token_accuracy(predictions, ground_truth)
     elif metric == 'fuzzy_match_accuracy':
         pass
     else:
         raise NotImplementedError(f"Metric '{metric}' is not implemented!")
     return metric_result, predictions, ground_truth, eval_results
+
+
+def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path=None):
+    resolved_checkpoint_path = model_checkpoint_path or eval_args.checkpoint_path
+    # Initiallize Weights&Biases logger to log artefacts
+    wandb_logger = WandbLogger(
+        project=misc_args.wandb_project or WANDB_PROJECT,
+        entity=WANDB_ENTITY,
+        log_model="all",
+        tags=['eval', *misc_args.wandb_tags],
+        name=misc_args.wandb_run_name,
+    )
+    # Initialize trainer
+    trainer = Trainer(
+        max_steps=eval_args.training_goal,
+        val_check_interval=eval_args.val_frequency,
+        check_val_every_n_epoch=None,  # validation based on steps instead of epochs
+        devices=eval_args.cuda_device_ids or eval_args.num_devices,
+        accelerator=eval_args.accelerator,
+        logger=wandb_logger,
+        deterministic=True,
+        precision=eval_args.precision,
+        gradient_clip_val=eval_args.gradient_clipping,
+        accumulate_grad_batches=eval_args.gradient_accumulation_steps,
+        inference_mode=not eval_args.compile,  # inference_mode for val/test and PyTorch 2.0 compiler don't like each other  # noqa: E501
+    )
+    # for this to work the hyperparameters need to be saved and no positional arguments in LightningWrapper are allowed
+    # alternatively overwrite load_from_checkpoint but not recommended since some other side effects from super() might be lost and model is still needed
+    # model = LightningWrapper.load_from_checkpoint(checkpoint_path=resolved_checkpoint_path)
+    model = get_model_module(eval_args)
+    # TODO check local first then wandb
+    if resolved_checkpoint_path:
+        checkpoint_content = torch.load(resolved_checkpoint_path)
+        model.load_state_dict(checkpoint_content["state_dict"])
+    dm = TableQADataModule(model.model_specs,
+                           table_corpus=eval_args.table_corpus,
+                           dataset_name=eval_args.dataset_name,
+                           train_batch_size=eval_args.batch_size_per_device,
+                           eval_batch_size=eval_args.eval_batch_size_per_device,
+                           tokenizing_args=tokenizer_args,
+                           num_dataloader_workers=eval_args.workers,
+                           too_many_open_files_fix=misc_args.too_many_open_files_fix,
+                           )
+    trainer.test(model, datamodule=dm)
 
 
 def main(model_name, dataset_version, **kwargs):
@@ -142,7 +188,7 @@ def main(model_name, dataset_version, **kwargs):
         model = BartForConditionalGeneration.from_pretrained("microsoft/tapex-base-finetuned-wtq")
         tqa_model = TableQaModel(model, tokenizer)
     if dataset_version == 'basic_dataset':
-        dataset = data_synthesis.caching('./data/NumTabQA/.cache', 'basic_dataset.pickle')
+        dataset = data_synthesis.caching('./data/NumTabQA/.cache', 'basic_dataset.pickle')  # invalid api
     else:
         raise FileNotFoundError(f"No saved file for dataset version '{dataset_version}' was found!")
     metric_result, predictions, ground_truth, eval_results = evaluate(tqa_model, dataset)
@@ -161,22 +207,25 @@ def main(model_name, dataset_version, **kwargs):
 
 
 if __name__ == "__main__":
-    args = Mock()
-    args.model_name = 'tapex'
-    args.dataset_version = 'basic_dataset'
-    print(args.dataset_version)
+    # import os
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    args, misc_args, tokenizer_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
     run = wandb.init(project="table-qa-debug", job_type="add-log")
     try:
-        main(args.model_name, args.dataset_version)
+        # old training data (agg count 1 a lot)
+        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
+        # new training data (agg count 20%)
+        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/2kix9c4k/checkpoints/last_model_ckpt.ckpt')
+        # new training data (agg count 0%)
+        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
+        # zero shot
+        evaluate_trained(args, misc_args, tokenizer_args)
+        wandb.finish()
     except:
         logger.error("Uncaught exception: %s", traceback.format_exc())
         raise SystemExit
     finally:
         artifact = wandb.Artifact("run.log", type="logfile")
-        artifact.add_file("../run.log")
+        artifact.add_file("../../run.log")
         wandb.log_artifact(artifact)
-        
-    # Test if pickled file from data_synthesis.py can be loaded here
-    #with open('dummy_dataset.pkl', 'rb') as f:
-    #    dummy_dataset = pickle.load(f)
-    #print(dummy_dataset.name)
+        wandb.finish()
