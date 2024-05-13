@@ -1507,48 +1507,61 @@ def execute_sql(query: str, dataframe: pd.DataFrame, debug_empty_result=False,
     return query_result
 
 
+def load_table_dataset(table_corpus: str = 'wikitables',
+                       split: Optional[str] = None,
+                       cache_path: str = './data/NumTabQA/.cache',
+                       ) -> Optional[List[Table]]:
+    cache_file_name = f'{table_corpus}_{split or 'all'}_tables'
+    tables = caching(cache_file_name, cache_path=cache_path)
+    if tables is not None:
+        # restore original format by loading from state dict
+        tables = [Table.from_state_dict(table_data) for table_data in tables]
+    return tables
+
+
 def create_table_dataset(base_dataset_name: str = 'wikitablequestions',
                          base_dataset_split: str = 'test',
                          num_tables: Optional[int] = None,
                          use_cache: bool = True,
-                         cache_path: str = './data/NumTabQA/.cache'
+                         cache_path: str = './data/NumTabQA/.cache',
+                         save: bool = True,
                          ) -> Dict[str, Table]:
     cache_file_name = f'{base_dataset_name}_{base_dataset_split}_tables'
     if use_cache:
-        test_tables = caching(cache_path, cache_file_name)
-        if test_tables is not None:
-            # restore original format by loading from state dict
-            test_tables = [Table.from_state_dict(table_data) for table_data in test_tables]
-    if not use_cache or test_tables is None:
+        tables = load_table_dataset(base_dataset_name, base_dataset_split, cache_path)
+    if not use_cache or tables is None:
         logger.info("Loading %s's first %s %s split samples",
                     base_dataset_name, str(num_tables or 'all'), base_dataset_split)
-        dataset = load_dataset(base_dataset_name,
-                               split=(f'{base_dataset_split}'
-                                      + (f'[:{num_tables}]'
-                                         if num_tables is not None
-                                         else ''
-                                         )
-                                      )
-                               )
+        dataset_slice = '[:{num_tables}]' if num_tables is not None else ''
+        dataset = datasets.load_dataset(
+            base_dataset_name,
+            split=f'{base_dataset_split}{dataset_slice}',
+            )
         logger.info("Processing first %s tables of the test set...", str(num_tables or 'all'))
-        # use dict comprehension to get a unique set of tables
-        # by using _table_id as key duplicates are overridden
-        test_tables = [Table(dataset[i]['table'],
-                             source_name=base_dataset_name,
-                             source_split=base_dataset_split,
-                             )
-                       for i in range(len(dataset))
-                       ]
-        for table in test_tables:
-            table.prepare_for_pickle()
-        save_version(test_tables, cache_path, cache_file_name)
-    return test_tables
+        # generate table object for every question in the source data split and use dict
+        # to get a unique set of tables, by using _table_id as key near duplicates are overridden
+        # Caution: _table_id does not test exact table equality of all values but only a proxy
+        unique_tables = {}
+        for i in range(len(dataset)):
+            table = Table(dataset[i]['table'],
+                          source_name=base_dataset_name,
+                          source_split=base_dataset_split,
+                          )
+            unique_tables[table._table_id] = table
+        tables = list(unique_tables.values())
+
+        if save:
+            for table in tables:
+                table.prepare_for_pickle()
+            save_version(tables, cache_path, cache_file_name)
+    return tables
 
 
 def create_basic_table_question_dataset(tables,
                                         name='wikitables_test',
                                         use_cache: bool = True,
-                                        cache_path: str = './data/NumTabQA/.cache'
+                                        cache_path: str = './data/NumTabQA/.cache',
+                                        save=True,
                                         ) -> TableQuestionDataSet:
     cache_file_name = f"{name}_basic_dataset"
     if use_cache:
@@ -1556,14 +1569,14 @@ def create_basic_table_question_dataset(tables,
     else:
         base_description = \
             """
-            Basic SQL operators min, max, avg, sum or no operation combined with a simple value lookup condition of a different column.
+            Basic SQL operators min, max, avg or sum combined with a simple value lookup condition of a different column.
             Using WikiTables test set.
 
             """
         nl = "What is the {op} of column {col1} given that {col2} has value {val1}?"
         main_expr = SQLColumnExpression(("{col1}",))
-        conditions = (SQLConditionTemplate(SQLColumnExpression(('{col2}',)), '=', '{val1}'),)
-        allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])
+        conditions = (SQLConditionTemplate('{col2}', '=', '{val1}'),)
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, COUNT])  # not NOOP because it would be simple lookup without numerical skill
         schema = {
             'variables': {
                 'col1': {'type': 'column',
@@ -1586,14 +1599,16 @@ def create_basic_table_question_dataset(tables,
                                        question_templates=[basic_template],
                                        tables=tables
                                        )
-        save_version(dataset, cache_path, cache_file_name)
+        if save:
+            save_version(dataset, cache_path, cache_file_name)
     return dataset
 
 
 def create_range_table_question_dataset(tables,
                                         name='wikitables_test',
                                         use_cache: bool = True,
-                                        cache_path: str = './data/NumTabQA/.cache'
+                                        cache_path: str = './data/NumTabQA/.cache',
+                                        save=True,
                                         ) -> TableQuestionDataSet:
     cache_file_name = f"{name}_range_dataset"
     if use_cache:
@@ -1601,16 +1616,16 @@ def create_range_table_question_dataset(tables,
     else:
         base_description = \
             """
-            Basic SQL operators min, max, avg, sum or no operation combined with a simple value lookup condition of a different column.
+            Basic SQL operators min, max, avg or sum combined within a range of the same column (subset).
             Using WikiTables test set.
 
             """
         nl = "What is the {op} of column {col1} given that {col1} is at least {val1} and {col1} is at most {val2}?"
         main_expr = SQLColumnExpression(("{col1}",))
-        conditions = (SQLConditionTemplate(SQLColumnExpression(('{col1}',)), '>=', '{val1}'),
-                      SQLConditionTemplate(SQLColumnExpression(('{col1}',)), '<=', '{val2}'),
+        conditions = (SQLConditionTemplate('{col1}', '>=', '{val1}'),
+                      SQLConditionTemplate('{col1}', '<=', '{val2}'),
                       )
-        allowed_operators = tuple([MIN, MAX, AVG, SUM])
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, COUNT])
         schema = {
             'variables': {
                 'col1': {'type': 'column',
@@ -1633,13 +1648,59 @@ def create_range_table_question_dataset(tables,
                                        question_templates=[range_template],
                                        tables=tables
                                        )
-        save_version(dataset, cache_path, cache_file_name)
+        if save:
+            save_version(dataset, cache_path, cache_file_name)
     return dataset
 
 
+def create_basic_postprocessed_versions(cache_path: str = './data/NumTabQA/.cache'):
+    # train only filter multi answer
+    table_dataset = create_table_dataset(base_dataset_split='train', use_cache=True)
+    base_name = 'count_wikitables_train'
+    dataset = create_basic_table_question_dataset(table_dataset, name=base_name, use_cache=False)
+    dataset.remove_multi_answer_questions()
+    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer')
+    dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
+    save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
+    dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
+    save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
+
+    # validation filter multi answer + 20%/0% tolerance agg_count 1
+    #table_dataset = create_table_dataset(base_dataset_split='validation', use_cache=True)
+    #base_name = 'count_wikitables_validation'
+    #dataset = create_basic_table_question_dataset(table_dataset, name=base_name, use_cache=False)
+    #dataset.remove_multi_answer_questions()
+    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
+    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
+    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
+    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
+
+    # test filter multi answer + 20%/0% tolerance agg_count 1
+    #table_dataset = create_table_dataset(base_dataset_split='test', use_cache=False)
+    #base_name = 'count_wikitables_test'
+    #dataset = create_basic_table_question_dataset(table_dataset, name=base_name, use_cache=False)
+    #dataset.remove_multi_answer_questions()
+    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
+    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
+    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
+    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
+
+
+def remove_duplicate_qa_pairs(data_sample):
+    """ Removes duplicate QA pairs within the table batch.
+        This should only be necessary for old datasets.
+        In newer versions duplicats should already have been removed during dataset synthesis.
+    """
+    unique_questions, unique_answers = list(zip(
+        *set(zip(data_sample['questions'], data_sample['answers']))
+        ))
+    return {'questions': unique_questions, 'answers': unique_answers}
+
+
 def main():
-    table_dataset = create_table_dataset(base_dataset_split='validation', use_cache=True)
-    return create_range_table_question_dataset(table_dataset, name='wikitables_validation', use_cache=False)
+    #table_dataset = create_table_dataset(base_dataset_split='validation', use_cache=False)
+    #return create_basic_table_question_dataset(table_dataset, name='count_wikitables_validation', use_cache=False)
+    create_basic_postprocessed_versions()
 
 
 if __name__ == "__main__":

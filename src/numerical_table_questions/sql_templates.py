@@ -52,12 +52,15 @@ class SQLColumnExpression:
             - revisit if multiple arguments or always exact two
               (see ellipsis in type annotation)
     """
-    def __init__(self, arguments: Tuple[Union[str, 'SQLColumnExpression'], ...],
+    def __init__(self, arguments: Union[str, Tuple[Union[str, 'SQLColumnExpression'], ...]],
                  operand: Optional[str] = None
                  ):
         self._allowed_operands = ('+', '-', '*', '/', None)
         assert operand in self._allowed_operands, \
             f"Only operands in {self._allowed_operands} allowed!"
+        # allow lazy conversion of single string argument to tuple
+        if isinstance(arguments, str):
+            arguments = (arguments,)
         self.arguments = arguments
         self.operand = operand  # Maybe operand class that defines allowed types
 
@@ -65,13 +68,15 @@ class SQLColumnExpression:
         if self.operand is None:
             return f'"{self.arguments[0]}"'
         else:
-            return (
-                f'"{self.arguments[0]}"' if isinstance(self.arrguments[0], str)
-                else f'({self.arrguments[0].generate()})'
-                + self.operand
-                + f'"{self.arguments[1]}"' if isinstance(self.arrguments[1], str)
-                else f'({self.arrguments[1].generate()})'
-            )
+            if isinstance(self.arguments[0], str):
+                first_arg = f'"{self.arguments[0]}"'
+            else:
+                first_arg = f'({self.arguments[0].generate()})'
+            if isinstance(self.arguments[1], str):
+                second_arg = f'"{self.arguments[1]}"'
+            else:
+                second_arg = f'({self.arguments[1].generate()})'
+        return f"{first_arg} {self.operand} {second_arg}"
 
 
 class SQLOverClauseTemplate:
@@ -115,7 +120,7 @@ class SQLOperatorTemplate:
                  operator_name: str,
                  expression: SQLColumnExpression,
                  brackets: Optional[str] = None,
-                 over_clause: Optional[SQLOverClauseTemplate] = None
+                 over_clause: Optional[SQLOverClauseTemplate] = None,
                  ):
         self.operator_name = operator_name
         self.brackets = brackets or "(" if self.operator_name != '' else ''
@@ -123,6 +128,20 @@ class SQLOperatorTemplate:
         self.expression = expression
         self.over_clause = over_clause
         self._is_integrity_valid = self.determine_integrity()
+
+    @classmethod
+    def from_template(cls: Type[OP],
+                      template: OP,
+                      operator_name: str = None,
+                      expression: SQLColumnExpression = None,
+                      brackets: Optional[str] = None,
+                      over_clause: Optional[SQLOverClauseTemplate] = None,
+                      ) -> OP:
+        return cls(operator_name=operator_name or template.operator_name,
+                   expression=expression or template.expression,
+                   brackets=brackets or template.brackets,
+                   over_clause=over_clause or template.over_clause,
+                   )
 
     def generate(self):
         if not self._is_integrity_valid:
@@ -182,7 +201,7 @@ class SQLConditionTemplate:
                  condition: Union[str, SQLColumnExpression],
                  comparator: str,
                  value: Union[str, SQLColumnExpression]
-                 ):
+                 ) -> Union[str, Dict[str, str]]:
         # comparisons single(inter)/multiple(cross) column value =, <, > <=, >=
         # between range can be expressed with two conditions for now > x and < y
         # nested subquery can replace comparison value
@@ -190,11 +209,9 @@ class SQLConditionTemplate:
         assert comparator in self._allowed_comparators, \
             "comparator must be in {self._allowed_comparators}!"
         self.comparator = comparator
-        # must be of type SQLColumnExpression, str input just for ease of use -> cast
-        self.condition_column = (SQLColumnExpression((condition,))
-                                 if isinstance(condition, str)
-                                 else condition
-                                 )
+        # correct processing based on datatype (str or SQLColumnExpression)
+        # like wrapping single column name in double quotes is handled in generate
+        self.condition_column = condition
         """
         # can be hard coded value but is cast to SQLColumnExpression if template string
         self.value = (SQLColumnExpression((value,))
@@ -210,13 +227,22 @@ class SQLConditionTemplate:
                           "Make sure all additional variables occur in a previous condition or are of type column.")
         self.value = value
 
-    def generate(self):
-        return (f"\n\tAND {self.condition_column.generate()} {self.comparator} " +
-                (self.value.generate()
-                 if isinstance(self.value, SQLColumnExpression)
-                 else (self.value or r"''")   # two single quotes as fallback if empty
-                 )
-                )
+    def generate(self, in_parts=False):
+        if isinstance(self.condition_column, SQLColumnExpression):
+            condition_str = self.condition_column.generate()
+        else:
+            if self.condition_column.startswith('"') and self.condition_column.endswith('"'):
+                condition_str = self.condition_column
+            else:
+                condition_str = f'"{self.condition_column}"'
+        if isinstance(self.value, SQLColumnExpression):
+            value_str = self.value.generate()
+        else:
+            # two single quotes as fallback if value is empty (e.g empty string)
+            value_str = (self.value or r"''")
+        if in_parts:
+            return {'condition_column': condition_str, 'comparator': self.comparator, 'value': value_str}
+        return f"\n\tAND {condition_str} {self.comparator} {value_str}"
 
 
 class SQLTemplate:
@@ -228,6 +254,18 @@ class SQLTemplate:
         self.operator = operator
         self.conditions = conditions
         self.table_specifier = table_specifier
+
+    @classmethod
+    def from_template(cls: Type[T],
+                      template: T,
+                      operator: SQLOperatorTemplate = None,
+                      conditions: List[SQLConditionTemplate] = None,
+                      table_specifier: str = 'df',
+                      ) -> T:
+        return cls(operator=operator or SQLOperatorTemplate.from_template(template.operator),
+                   conditions=conditions or template.conditions,
+                   table_specifier=table_specifier or template.table_specifier,
+                   )
 
     def generate(self):
         """Generates final SQL template string from modular componets."""
