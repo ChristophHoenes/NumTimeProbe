@@ -45,6 +45,9 @@ class ModelTypeInfo:
     attention_out_id: Optional[Union[int, str]] = None
     # whether the forward pass expects the tragets or not
     input_targets: bool = False
+    # in data preparation if dataset is converted to TensorDataset filter 
+    # the specified attributes from the data dict 
+    filter_data_attributes: Optional[List[str]] = None
     # any additional model specific arguments
     # (if key is of type int it is interpreted as positional or otherwise as keyword argument)
     input_mapping: dict = field(default_factory=dict)
@@ -261,25 +264,36 @@ class LightningWrapper(L.LightningModule):
         }
 
 
+def get_model_type_info(model_name_or_path: str):
+    match model_name_or_path.lower():
+        case 'tapex':
+            return ModelTypeInfo(
+                model_name_or_path=model_name_or_path,
+                pad_token_id=1,
+                mask_token_id=-100,
+                input_targets=True,
+                loss_out_id='loss',
+                filter_data_attributes=['input_ids', 'attention_mask'],
+                input_mapping={
+                    '*': None,
+                    'labels': lambda x, y: y,
+                    }
+                )
+        case _:
+            warnings.warn(f"Unknown model '{model_name_or_path}'! No ModelTypeInfo will be defined, relying on default config.")
+
+
 def get_model_module(training_args, **kwargs):
-    if training_args.model_name_or_path == 'tapex':
+    non_default_kwargs = dict()
+    if training_args.model_name_or_path.lower() == 'tapex':
         model = transformers.BartForConditionalGeneration.from_pretrained("microsoft/tapex-base-finetuned-wtq")
         # potentially change model config
         # model.config.xxx = 'xxx'
-        model_type_info = ModelTypeInfo(model_name_or_path=training_args.model_name_or_path,
-                                        pad_token_id=1,
-                                        mask_token_id=-100,
-                                        input_targets=True,
-                                        loss_out_id='loss',
-                                        input_mapping={
-                                            '*': None,
-                                            'labels': lambda x, y: y,
-                                            }
-                                        )
+        non_default_kwargs['model_type_info'] = get_model_type_info(training_args.model_name_or_path)
     else:
         # TODO try search path
         raise NotImplementedError(f"No initialization implemented for model {training_args.model_name_or_path}!")
-    return LightningWrapper(model, training_args, model_type_info=model_type_info, **kwargs)
+    return LightningWrapper(model, training_args, **kwargs, **non_default_kwargs)
 
 
 @dataclass

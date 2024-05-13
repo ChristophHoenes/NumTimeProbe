@@ -22,7 +22,7 @@ from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.model import get_model_type_info
 from dlib.frameworks.pytorch import (
     get_rank,
     main_process_first,
@@ -81,7 +81,31 @@ def load_split_tensor(split: str, table_corpus: str, dataset_name: str, model_na
     # whole dataset needs to fit into memory, takes longer to initially prepare dataloaders
     # but might save some time during iterating over the batches
     else:
-        inputs_tensors = [data_dict[col] for col in data_dict.column_names if col != 'targets']
+        # apply attribute filter specified in model info
+        model_typ_info = get_model_type_info(model_name)
+        if model_typ_info.filter_data_attributes is not None:
+            inputs_tensors = [data_dict[col] for col in data_dict.column_names
+                              if col in model_typ_info.filter_data_attributes
+                              or len(model_typ_info.filter_data_attributes) == 0
+                              ]
+            if len(inputs_tensors) == 0:
+                raise ValueError(f"None of the specified columns {model_typ_info.filter_data_attributes} was found in the data! "
+                                 f"Check the filters specified in ModelTypeInfo of '{model_name}' or the naming convention in the data dict."
+                                 )
+            elif len(inputs_tensors) < len(model_typ_info.filter_data_attributes):
+                warnings.warn(f"Some of the specified filters {model_typ_info.filter_data_attributes} were not found in the data dict and stay empty! "
+                              "Tensor indices might be different from expected position."
+                              )
+        else:
+            # if no explicit column filter is specified in model info ensure only inputs with the correct size are forwarded
+            # to the dataloader (requires all tensors to have same length)
+            main_input_col_name = 'input_ids'
+            tensor_length = data_dict[main_input_col_name].size()[0]
+            inputs_tensors = [data_dict[col] for col in data_dict.column_names
+                              if col != 'targets'
+                              and isinstance(data_dict[col], torch.Tensor)
+                              and data_dict[col].size()[0] == tensor_length
+                              ]
         # all dataset columns (except 'targets') as in-memory tensor dataset (the dataloader should return batch as tuple)
         inputs_dataset = torch.utils.data.TensorDataset(*inputs_tensors)
         if 'targets' in data_dict.column_names:
@@ -382,7 +406,22 @@ class TableQADataModule(L.LightningDataModule):
                                         ]
                                   for key in tokenizer_output_names}
                 tokenized_dict['targets'] = [cast_to_reduced_int(sample[1], self.tokenizer.vocab_size) for sample in tokenized]
+                #print(tokenized_dict.keys())
+                # add other fields of data split that did not go through the tokenizer
+                missing_fields = list(set(data_split.column_names)
+                                      - set(['table'])  # do not copy table for each question
+                                      - set(tokenized_dict.keys())
+                                      )
+                additional_fields_dict = {field: data_split[field] for field in missing_fields}
+                # since table was removed from keys for efficiency, add column with table_id for reference (repeat id for each question to the table)
+                additional_fields_dict['table_id'] = [[table_batch['table']['table_id']] * len(table_batch['questions'])
+                                                      for table_batch in data_split
+                                                      ]
+                # TODO table num rows, table num cols, unique values aggregation column
+                tokenized_dict.update(additional_fields_dict)
+                # flatten the table batches to sequence of questions
                 tokenized_dict = unbind_table_batch(tokenized_dict, self.model_specs.pad_token_id)
+                #print(tokenized_dict.keys())
                 # save raw tokenizer outputs (sequences with variable length)
                 datasets.Dataset.from_dict(tokenized_dict).save_to_disk(
                     self.data_dir
