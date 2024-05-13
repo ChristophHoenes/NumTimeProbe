@@ -420,20 +420,20 @@ class QuestionTemplate:
         # (e.g column_name at index 0 of column_assignments binds to column variable at index 0 of column_variables)
         column_variables = [variable for variable in variables
                             if self._schema['variables'][variable]['type'] == 'column']
-        # mapping ot column name to inferred data type
+        # mapping of column name to inferred data type
         infered_types = {name: typ for name, typ in zip(table.column_names, table._inferred_column_types)}
         # all permutations of a table's column_names for the assignment length (determind by the number of column variables to fill)
         column_assignments = list(itertools.permutations(table.column_names,
-                                                         len(column_variables)
+                                                         len(column_variables),
                                                          )
                                   )
         # match the names of the column variables with the assignments/bindings of the actual column names of the specific table
-        variable_column_bindings = [dict(zip(column_variables, assignment)) for assignment in column_assignments]
+        column_variable_bindings = [dict(zip(column_variables, assignment)) for assignment in column_assignments]
 
         # check for unmet dtype constraints and filter invalid variable-column bindings
-        variable_column_bindings = [
+        column_variable_bindings = [
             binding
-            for binding in variable_column_bindings
+            for binding in column_variable_bindings
             if all(
                 [infered_types[assigned_col] in self._schema['variables'][var_name]['allowed_dtypes']
                  for var_name, assigned_col in binding.items()
@@ -441,13 +441,17 @@ class QuestionTemplate:
                 )
             ]
 
+        # short circuit if no valid variable assignment was found -> no questions for this TableQuestionTemplate are generated
+        if len(column_variable_bindings) == 0:
+            return []
+
         # ignore semantic dependencies of values for now (filter empty results post hoc)
 
         # collect information about every condition, which is needed to decide
         # how to sample and compute the values for each value variable
         condition_info = []
         for condition in self.conditions:
-            # if two SQLColumnExpressions are compared in the condition no value needs to be samples
+            # if two SQLColumnExpressions are compared in the condition no value needs to be sampled
             if not isinstance(condition.value, SQLColumnExpression):
                 value_computation_expression = condition.condition_column.generate()
                 condition_variables = {
@@ -520,53 +524,53 @@ class QuestionTemplate:
             }
         # compute value expressions
         value_variable_assignments = []
-        for binding in variable_column_bindings:
+        for binding in column_variable_bindings:  # column assignments
             # assign a sampled value to each column variable in the expression
             sample_idxs = dict()
-            value_computation_kwargs = dict()
             is_text_in_expression = False
-            for _ in range(num_value_samples):
-                for col_set in value_var_cols:
-                    for col_var in col_set:
+            for _ in range(num_value_samples):  # different values for same column assignment
+                computed_values = dict()
+                for col_set in value_var_cols:  # every value variable that occurs (condition level)
+                    value_computation_kwargs = dict()
+                    for col_var in col_set:  # value components within one value variable (expression level)
                         # retrieve actual column name of current assignment
                         col_name = binding[col_var]
                         # flag to detect text in arithmetic expression
-                        if infered_types[col_name] == 'text':
+                        if infered_types[col_name] in ['text', 'alphanumeric']:
                             is_text_in_expression = True
                         # sample index (next unused sample for this column)
                         i = sample_idxs.get(col_name, 0)
                         # assign sample value to column variable
                         value_computation_kwargs[col_var] = samples[col_name][i]
-                        # increment sample index
+                        # increment sample index to next unused value
                         sample_idxs[col_name] = i + 1
-                # postprocess numbers
-                if not is_text_in_expression:
-                    # remove leading zeros
-                    value_computation_kwargs = {k: v.lstrip('0') for k, v in value_computation_kwargs.items()}
-                # inject sample values into the column expression template and evaluate final value
-                computed_values = dict()
-                for value_var, expression, col_set in zip(initiallized_value_vars, value_var_computations, value_var_cols):
-                    if is_text_in_expression:
-                        if '*' in expression or '/' in expression or '-' in expression:
-                            raise ValueError("Only '+' operator is allowed in expression with text columns!")
-                        # concatenate the assigned values as string
-                        computed_value = ''.join([str(value_computation_kwargs[col_var]) for col_var in col_set])
-                    else:
-                        try:
-                            computed_value = compute_arithmetic_expression_str(
-                                expression.format(**value_computation_kwargs)
-                                ) or "''"
-                        except ZeroDivisionError:
-                            warnings.warn("Encountered zero difision in value computation! "
-                                          "Retrying with all zeros replaced with ones. "
-                                          "This might lead to unexpected values."
-                                          )
-                            computed_value = compute_arithmetic_expression_str(
-                                expression.format(**value_computation_kwargs)
-                                .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
-                                .replace('0', '1')
-                                )
-                    computed_values[value_var] = computed_value
+                    # postprocess numbers
+                    if not is_text_in_expression:
+                        # remove leading zeros
+                        value_computation_kwargs = {k: v.lstrip('0') for k, v in value_computation_kwargs.items()}
+                    # inject sample values into the column expression template and evaluate final value
+                    for value_var, expression, col_set in zip(initiallized_value_vars, value_var_computations, value_var_cols):
+                        if is_text_in_expression:
+                            if '*' in expression or '/' in expression or '-' in expression:
+                                raise ValueError("Only '+' operator is allowed in expression with text columns!")
+                            # concatenate the assigned values as string
+                            computed_value = ''.join([str(value_computation_kwargs[col_var]) for col_var in col_set])
+                        else:
+                            try:
+                                computed_value = compute_arithmetic_expression_str(
+                                    expression.format(**value_computation_kwargs)
+                                    ) or "''"
+                            except ZeroDivisionError:
+                                warnings.warn("Encountered zero division in value computation! "
+                                              "Retrying with all zeros replaced with ones. "
+                                              "This might lead to unexpected values."
+                                              )
+                                computed_value = compute_arithmetic_expression_str(
+                                    expression.format(**value_computation_kwargs)
+                                    .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
+                                    .replace('0', '1')
+                                    )
+                        computed_values[value_var] = computed_value
                 value_variable_assignments.append(computed_values)
         # ensure that a valid range is created if two values with the same
         # column expression exist with (< or <=) and (> or >=) comparators respectively
@@ -596,11 +600,14 @@ class QuestionTemplate:
                 else:
                     assignment[bounds['lower_bound']] = val_1
                     assignment[bounds['upper_bound']] = val_2
+        # ensure same length of column assignments and value assignments
+        # -> every column assignment needs to occur num_value_samples times in a row
+        column_variable_bindings = [binding for binding in column_variable_bindings for i in range(num_value_samples)]
         # join column variable assignments with value variable assignments
         variable_assignments = [
             col_binding | val_assignment
             for col_binding, val_assignment in
-            zip(variable_column_bindings, value_variable_assignments)
+            zip(column_variable_bindings, value_variable_assignments)
             ]
         return variable_assignments
 
