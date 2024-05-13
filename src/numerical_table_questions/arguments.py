@@ -256,3 +256,19 @@ class TokenizationArgs:
         help="Whether to return tensors as PyTorch = 'pt' (default), Tensorflow = 'tf' or numpy = 'np' type.",
         aliases="--tensor_format",
     )
+
+
+@dataclass
+class DataProcessingArgs:
+    data_dir: str = dArg(
+        default="./data/NumTabQA/.cache", help="File path to the location in the file system where the data is stored."
+    )
+    table_corpus: str = dArg(
+        default="wikitables", help="Name of the table corpus the dataset is based on."
+    )
+    dataset_name: str = dArg(
+        default="basic_dataset", help="Name of the dataset to use."
+    )
+    split: str = dArg(
+        default="test", help="Name of the split to use."
+    )
