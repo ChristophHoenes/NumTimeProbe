@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import warnings
 from dataclasses import asdict
+from datetime import datetime
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
@@ -389,6 +390,11 @@ class TableQADataModule(L.LightningDataModule):
                     + huggingface_base_dir
                     + f"/{split}"
                 )
+                # save as metadata (in extra text file) the length of the dataset before post_tokenizing (e.g. before filtering too long sequences)
+                num_samples_before_filtering = len(tokenized_dict['input_ids'])
+                with (Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
+                    f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_before_filtering}\n")
+
                 processed_sequences = post_tokenizing(tokenized_dict,
                                                       self.tokenizing_args,
                                                       self.max_num_tokens,
@@ -405,6 +411,10 @@ class TableQADataModule(L.LightningDataModule):
                     + huggingface_base_dir
                     + f"/{split}"
                 )
+                # save as metadata (in extra text file) the length of the dataset after post_tokenizing
+                num_samples_after_filtering = len(processed_sequences['input_ids'])
+                with (Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
+                    f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_after_filtering}\n")
 
     def setup(self, stage: str):
         print('setup', stage)
