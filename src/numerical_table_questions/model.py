@@ -1,11 +1,13 @@
+import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional, Union, Dict, Callable, Tuple, List
 
 import lightning as L
 import torch
 import transformers
 from loguru import logger
 from torch.optim import AdamW
+from torchmetrics import MetricCollection
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.auto.modeling_auto import (
@@ -16,6 +18,8 @@ from transformers.optimization import get_scheduler
 from warmup_scheduler import GradualWarmupScheduler
 
 from dlib.frameworks.pytorch import get_rank
+from numerical_table_questions.metrics import str_match_accuracy
+from numerical_table_questions.tokenizer_utils import get_tokenizer
 
 if TYPE_CHECKING:
     from train import TrainingArgs
@@ -23,14 +27,18 @@ if TYPE_CHECKING:
 
 @dataclass
 class OptimizerArgs:
+    learning_rate: float
     optimizer_class: torch.optim.Optimizer = AdamW
     kwargs: dict = field(
         default_factory=lambda: {
-            'lr': 5e-4,
             'betas': (0.9, 0.999),
             'eps': 1e-8
         }
     )
+
+    def __post_init__(self):
+        # pass learning rate as kwarg to the optimizer_class
+        self.kwargs['lr'] = self.learning_rate
 
 
 @dataclass
@@ -45,8 +53,8 @@ class ModelTypeInfo:
     attention_out_id: Optional[Union[int, str]] = None
     # whether the forward pass expects the tragets or not
     input_targets: bool = False
-    # in data preparation if dataset is converted to TensorDataset filter 
-    # the specified attributes from the data dict 
+    # in data preparation if dataset is converted to TensorDataset filter
+    # the specified attributes from the data dict
     filter_data_attributes: Optional[List[str]] = None
     # any additional model specific arguments
     # (if key is of type int it is interpreted as positional or otherwise as keyword argument)
@@ -108,16 +116,49 @@ class LightningWrapper(L.LightningModule):
                  model,
                  training_args: "TrainingArgs",  # do in string to remove dependency when loading.
                  model_type_info: Optional[ModelTypeInfo] = None,
-                 loss_fn=torch.nn.functional.nll_loss,
-                 optimizer_args: OptimizerArgs = OptimizerArgs(),
+                 loss_fn: Callable = torch.nn.functional.nll_loss,
+                 # TODO make metrics a metrics collection and call/log automatically with lightning
+                 # (see docs https://lightning.ai/docs/torchmetrics/stable/pages/lightning.html)
+                 metrics: MetricCollection = MetricCollection([]),
+                 generation_metrics: Dict[str, Union[Callable, Tuple[Callable, dict]]] = dict(),
+                 optimizer_args: OptimizerArgs = None,
                  effective_batch_size_per_step=None,
-                 samples_processed: int = 0,
-                 tokens_processed: int = 0):
+                 # keep track of how much data the model has seen, must be float for easier logging
+                 samples_processed: float = 0.0,
+                 tokens_processed: float = 0.0,
+                 ):
+        _nn_module_arguments = [name for name, value in locals().items() if isinstance(value, torch.nn.Module)]
         super().__init__()
+        if not training_args.resume_training:
+            self.save_hyperparameters(
+                ignore=(
+                    ["effective_batch_size_per_step", "samples_processed", "tokens_processed"]
+                    + _nn_module_arguments
+                    )
+                )  # nn.Module objects are already saved within a checkpoint file
         self.model = model
+        self.tokenizer = None
         self.model_specs = model_type_info or ModelTypeInfo(training_args.model_name_or_path)
         self.loss_fn = loss_fn
-        self.optimizer_args = optimizer_args
+        self.train_metrics = metrics.clone(prefix='train_')
+        self.valid_metrics = metrics.clone(prefix='val_')
+        self.test_metrics = metrics.clone(prefix='test_')
+        # generation metrics use the outputs of the generate method rather than the ones of the forward pass
+        self.generation_metrics = {
+            metric_name: tup[0] if isinstance(tup, tuple) else tup  # syntax sugar, no need to provide tuple if no config is passed
+            for metric_name, tup in generation_metrics.items()
+            }  # extract name2callable mapping for metric function
+        self.generation_metrics_config = {
+            metric_name: tup[1] for metric_name, tup in generation_metrics.items()
+            if isinstance(tup, tuple)
+            }  # extract name2config mapping for metric function
+        # generation requires tokenizer for decoding the IDs
+        if len(self.generation_metrics) > 0:
+            self.tokenizer = get_tokenizer(self.model_specs.model_name_or_path)
+        # prepare metric requirements according to provided config
+        for gen_metric in self.generation_metrics:
+            self._get_metric_requirements(gen_metric)
+        self.optimizer_args = optimizer_args or OptimizerArgs(learning_rate=training_args.learning_rate)
         self.args = training_args
         if effective_batch_size_per_step is None:
             warnings.warn("No effective batch size was set! Using negative batch_size_per_device as proxy."
@@ -125,34 +166,58 @@ class LightningWrapper(L.LightningModule):
             self.effective_batch_size_per_step = -training_args.batch_size_per_device
         else:
             self.effective_batch_size_per_step = effective_batch_size_per_step
-        self.register_buffer("samples_processed", torch.tensor(samples_processed))
-        self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
+        if not training_args.resume_training:
+            self.register_buffer("samples_processed", torch.tensor(samples_processed))
+            self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
+        self.predictions = []
+
+    # TODO make custom metric class and each metric defines its own requirements -> get rid of dependency with data_loading
+    def _get_metric_requirements(self, metric_name):
+        match metric_name:
+            case 'exaple_custom_metric_preparation':
+                # str_match_accuracy requires tokenizer
+                # self.tokenizer = get_tokenizer(self.model_specs.model_name_or_path)
+                # self.generation_metrics_requirements['kwargs']['tokenizer'] = self.tokenizer  # <- not needed currently
+                pass
+            case _:
+                warnings.warn(f"Unknown generation_metric {metric_name}! No specific preparation is executed.")
 
     def forward(self, inputs, target=None):
         if self.model_specs.input_targets and target is None:
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
-        # TODO fix in tokenikation
-        # overwrite -100 with padding token in input_ids (only mask in targets)
-        inputs[0] = torch.where(inputs[0] != -100, inputs[0], self.model_specs.pad_token_id)
-        # always wrap inputs in tuple
-        if isinstance(inputs, list):
-            inputs = tuple(inputs)
-        elif not isinstance(inputs, tuple):
-            inputs = (inputs,)
-        # use input order specified in model_specs
-        if len(self.model_specs.input_mapping) > 0:
-            # compute input format specified via self.model_specs.input_mapping
-            forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.input_mapping)
-            forward_kwargs = {model_input_id: data_function(inputs, target)
-                              for model_input_id, data_function in self.model_specs.input_mapping.items()
+        if isinstance(inputs, dict):
+            forward_args = sorted(
+                [(model_input_id, inputs[data_input_id] if data_input_id != 'targets' else target)
+                 for model_input_id, data_input_id in self.model_specs.input_mapping.items()
+                 if isinstance(model_input_id, int)
+                 ]
+                )
+            forward_args = [tup[1] for tup in forward_args]  # drop sort index, only keep value
+            forward_kwargs = {model_input_id: inputs[data_input_id] if data_input_id != 'targets' else target
+                              for model_input_id, data_input_id in self.model_specs.input_mapping.items()
                               if isinstance(model_input_id, str)
                               }
             outputs = self.model(*forward_args, **forward_kwargs)
-        elif self.model_specs.input_targets:
-            outputs = self.model(*inputs, target)
         else:
-            outputs = self.model(*inputs)
+            # always wrap inputs in tuple
+            if isinstance(inputs, list):
+                inputs = tuple(inputs)
+            elif not isinstance(inputs, tuple):
+                inputs = (inputs,)
+            # use input order specified in model_specs
+            if len(self.model_specs.input_mapping) > 0:
+                # compute input format specified via self.model_specs.input_mapping
+                forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.input_mapping)
+                forward_kwargs = {model_input_id: data_function(inputs, target)
+                                  for model_input_id, data_function in self.model_specs.input_mapping.items()
+                                  if isinstance(model_input_id, str)
+                                  }
+                outputs = self.model(*forward_args, **forward_kwargs)
+            elif self.model_specs.input_targets:
+                outputs = self.model(*inputs, target)
+            else:
+                outputs = self.model(*inputs)
         # always wrap outputs in dict
         if isinstance(outputs, (list, tuple)):
             outputs = {i: output for i, output in enumerate(outputs)}
@@ -161,7 +226,19 @@ class LightningWrapper(L.LightningModule):
         return outputs
 
     def training_step(self, batch, batch_idx):
-        inputs, target = batch
+        if isinstance(batch, dict):
+            target = batch.get('targets')
+            inputs = {key: value for key, value in batch.items() if key != 'targets'}
+        else:
+            inputs, target = batch
+        # only consider first couple of input tokens as NL-question-only sanity check
+        if self.args.only_first_x_tokens > 0:
+            if isinstance(batch, dict):
+                inputs['input_ids'][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
+                inputs['attention_mask'][:, self.args.only_first_x_tokens:] = 0
+            else:
+                inputs[0][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
+                inputs[1][:, self.args.only_first_x_tokens:] = 0
         outputs = self(inputs, target)
         if self.model_specs.loss_out_id is None:
             # compute loss
@@ -171,6 +248,10 @@ class LightningWrapper(L.LightningModule):
             # retrieve loss
             loss = outputs[self.model_specs.loss_out_id]
         self.log("train/loss", loss.item(), on_step=True, on_epoch=False)
+
+        # compute and log torchmetrics at every step
+        torchmetrics_out = self.train_metrics(outputs, target)
+        self.log_dict(torchmetrics_out)
         return loss
 
     def on_train_batch_end(self, outputs, batch, batch_idx, unused=0) -> None:
@@ -187,7 +268,20 @@ class LightningWrapper(L.LightningModule):
         )
 
     def validation_step(self, batch, batch_idx):
-        inputs, target = batch
+        if isinstance(batch, dict):
+            target = batch.get('targets')
+            inputs = {key: value for key, value in batch.items() if key != 'targets'}
+        else:
+            inputs, target = batch
+        # only consider first couple of input tokens as NL question only sanity check
+        # TODO improve by saving question end ids in data processing? probably too much effort an little reward
+        if self.args.only_first_x_tokens > 0:
+            if isinstance(batch, dict):
+                inputs['input_ids'][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
+                inputs['attention_mask'][:, self.args.only_first_x_tokens:] = 0
+            else:
+                inputs[0][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
+                inputs[1][:, self.args.only_first_x_tokens:] = 0
         outputs = self(inputs, target)
         if self.model_specs.loss_out_id is None:
             # compute loss
@@ -196,16 +290,141 @@ class LightningWrapper(L.LightningModule):
             # retrieve loss
             loss = outputs[self.model_specs.loss_out_id]
 
+        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
         self.log_dict(
             {
                 "val/loss": loss.item(),
-                "progress/samples": self.samples_processed,
-                "progress/tokens": self.tokens_processed,
+                "progress/samples": self.samples_processed.to(self.device),
+                "progress/tokens": self.tokens_processed.to(self.device),
             },
             on_step=False,
             on_epoch=True,
             sync_dist=True,
         )
+
+        # update state of torchmetrics
+        self.valid_metrics.update(outputs, target)
+
+    def on_validation_epoch_end(self):
+        # compute and log torchmetrics final epoch results
+        output = self.valid_metrics.compute()
+        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+        self.log_dict({k: v.to(self.device) for k, v in output})
+        self.valid_metrics.reset()
+
+    def test_step(self, batch, batch_idx):
+        # TODO log model predictions token and text
+        if isinstance(batch, dict):
+            target = batch.get('targets')
+            inputs = {key: value for key, value in batch.items() if key != 'targets'}
+        else:
+            inputs, target = batch
+        # only consider first couple of input tokens as NL question only sanity check
+        # TODO improve by saving question end ids in data processing? probably too much effort an little reward
+        if self.args.only_first_x_tokens > 0:
+            if isinstance(batch, dict):
+                inputs['input_ids'][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
+                inputs['attention_mask'][:, self.args.only_first_x_tokens:] = 0
+            else:
+                inputs[0][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
+                inputs[1][:, self.args.only_first_x_tokens:] = 0
+        # if at least one metric that evaluates generation results exists execute generation (can be more expensive than a simple forward pass)
+        if len(self.generation_metrics) > 0:
+            if isinstance(batch, dict):
+                text_targets = target['text']
+                input_ids = inputs["input_ids"]
+            else:
+                input_ids = inputs[0] if isinstance(inputs, (tuple, list)) else inputs
+                try:
+                    # if targets are not provided as text, create text_targets by decoding the ids
+                    if not isinstance(target, tuple):
+                        safe_target = torch.where(target != -100, target, self.model_specs.pad_token_id)
+                        text_targets = self.tokenizer.batch_decode(safe_target, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+                    else:
+                        text_targets = target[1]
+                except KeyError as e:
+                    raise ValueError("Batch must be provided as a dictionary "
+                                     "since the TensorDataset (in-memory) configuration does not support string items!"
+                                     ) from e
+            # TODO test if this leaks to much information (e.g are results worse if this is hard coded to 20)
+            max_target_len = max([len(sample) for sample in text_targets])
+            answer_ids = self.model.generate(input_ids,
+                                             num_beams=2,
+                                             min_length=0,
+                                             max_length=max(1, max_target_len),
+                                             no_repeat_ngram_size=0,
+                                             early_stopping=False,
+                                             )
+            string_predictions = self.tokenizer.batch_decode(answer_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+            self.predictions.extend(string_predictions)
+
+            # apply post processing specified for metric to both, generated prediction and text targets
+            batch_metric_results = dict()
+            for metric_name, metric_function in self.generation_metrics.items():
+                # TODO post processing
+                config = self.generation_metrics_config.get(metric_name)
+                if config is not None:
+                    post_processing_fn = config.get('post_processing_fn')
+                    metric_kwargs = config.get('kwargs', dict())
+                    if post_processing_fn is not None:
+                        processed_predictions = post_processing_fn(string_predictions)
+                        processed_targets = post_processing_fn(text_targets)
+                    else:  # no post processing
+                        processed_predictions = string_predictions
+                        processed_targets = text_targets
+                else:  # no post processing
+                    processed_predictions = string_predictions
+                    processed_targets = text_targets
+                    metric_kwargs = dict()
+                # compute generation metric on postprocessed texts
+                metric_outputs = metric_function(processed_predictions, processed_targets, **metric_kwargs)
+                # log metric result
+                batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
+                # TODO handling of logging additional outputs, if neccesary for some metric
+
+            self.log_dict(
+                batch_metric_results,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                )
+
+        # only compute normal forward step if test_loss is explicitly required or at least one torchmetric uses its outputs
+        if self.args.force_test_loss_computation or len(self.test_metrics) > 0:
+            outputs = self(inputs, target)
+            if self.model_specs.loss_out_id is None:
+                # compute loss
+                loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
+            else:
+                # retrieve loss
+                loss = outputs[self.model_specs.loss_out_id]
+
+            # update state of torchmetrics
+            self.test_metrics.update(outputs, target)
+
+            # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+            self.log_dict(
+                {
+                    "test/loss": loss.item(),
+                    "progress/samples": self.samples_processed.to(self.device),
+                    "progress/tokens": self.tokens_processed.to(self.device),
+                },
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+            )
+
+    def on_test_epoch_end(self):
+        # compute and log torchmetrics final epoch results
+        output = self.test_metrics.compute()
+        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+        self.log_dict({k: v.to(self.device) for k, v in output})
+        self.test_metrics.reset()
+        # log and clear predictions
+        text_predictions = [[pred] for pred in self.predictions]
+        # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
+        self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
+        self.predictions = []
 
     def configure_optimizers(self):
         if self.global_rank == 0:
@@ -290,6 +509,14 @@ def get_model_module(training_args, **kwargs):
         # potentially change model config
         # model.config.xxx = 'xxx'
         non_default_kwargs['model_type_info'] = get_model_type_info(training_args.model_name_or_path)
+        non_default_kwargs['generation_metrics'] = {
+            'str_match_accuracy':  (str_match_accuracy,
+                                    {
+                                       'strip_whitespace': True,
+                                    }
+                                    )
+        }
+
     else:
         # TODO try search path
         raise NotImplementedError(f"No initialization implemented for model {training_args.model_name_or_path}!")
@@ -313,10 +540,14 @@ class BasicLM(L.LightningModule):
         samples_processed=0.0,
         tokens_processed=0.0,
     ) -> None:
+        _nn_module_arguments = [name for name, value in locals().items() if isinstance(value, torch.nn.Module)]
         super().__init__()
         if not training_args.resume_training:
             self.save_hyperparameters(
-                ignore=["effective_batch_size_per_step", "samples_processed", "tokens_processed"]
+                ignore=(
+                    ["effective_batch_size_per_step", "samples_processed", "tokens_processed"]
+                    + _nn_module_arguments
+                    )
             )
         self.args = training_args
         self.adhoc_args = adhoc_args
