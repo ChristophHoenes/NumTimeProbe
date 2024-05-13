@@ -22,7 +22,7 @@ from numerical_table_questions.data_caching import save_version, caching
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
     SQLConditionTemplate, SQLOverClauseTemplate, SQLTemplate,
-    MIN, MAX, AVG, SUM, NOOP,
+    MIN, MAX, AVG, SUM, NOOP, COUNT,
     find_template_variables,
 )
 
@@ -396,7 +396,7 @@ def compute_arithmetic_expression_str(expression: str):
 class QuestionTemplate:
 
     def __init__(self,
-                 nl_template_string,
+                 nl_template_string: str,
                  sql_main_expression: SQLColumnExpression,
                  sql_allowed_operators: Tuple[SQLOperator, ...],
                  sql_conditions: Tuple[SQLConditionTemplate, ...],
@@ -406,9 +406,84 @@ class QuestionTemplate:
         self._nl_template = nl_template_string
         self.template_alternatives = template_alternatives
         self.main_expression = sql_main_expression  # (SQLExpression(('{col1}',)))
-        self.operators = sql_allowed_operators
+        self._operators, self._explicit_count_definition = self._extract_explicit_count_operator_definition(sql_allowed_operators)
         self.conditions = sql_conditions  # ([SQLCondition('{col2}', '>=', '{col3}')])
         self._schema = schema
+        # approximate identity of a template that considers only the main structure of the template
+        # but NOT the exact configuration options (e.g alternative phrasings, allowed operators)
+        self._template_hash = hashlib.sha256(
+            str.encode(self._nl_template
+                       + self.main_expression.generate()
+                       + ''.join([c.generate() for c in self.conditions])
+                       )
+            ).hexdigest()
+        # TODO think which parts of the schema should be included (which parts make the resulting questions inherently different)
+        # then combine with structure hash
+        self._template_schema_hash=...
+
+    def _extract_explicit_count_operator_definition(self, operators: SQLOperator):
+        count_definition = tuple([op for op in operators if op.sql == 'count'])
+
+        if len(count_definition) == 0:
+            count_definition = None
+        elif len(count_definition) > 1:
+            warnings.warn("Encountered multiple different definitions of the COUNT operator! Selecting only the first one.")
+            count_definition = count_definition[0]
+
+        non_count_operators = tuple([op for op in operators if op.sql != 'count'])
+        return non_count_operators, count_definition
+
+    def extract_aggregation_column(self, assignment: dict):
+        if self.main_expression.operand is None:
+            agg_col_var_name = self.main_expression.arguments[0].strip('{}')
+            return assignment.get(agg_col_var_name)
+        else:
+            return '_column_expression'
+
+    def extract_condition_variables(self):
+        condition_vars = []
+        for condition in self.conditions:
+            # add first condition argument (column expression)
+            if isinstance(condition.condition_column, str):
+                condition_column = condition.condition_column.strip('{}')
+            elif isinstance(condition.condition_column, SQLColumnExpression):
+                if condition.condition_column.operand is None:
+                    condition_column = condition.condition_column.arguments[0].strip('{}')
+                else:
+                    condition_column = None
+            else:
+                raise TypeError(f"Expected condition to be of type [str, SQLColumnExpression] but got '{type(condition.condition)}'!")
+            # add value variable
+            if isinstance(condition.value, str):
+                condition_value = condition.value.strip('{}')
+            elif isinstance(condition.value, SQLColumnExpression):
+                if condition.value.operand is None:
+                    condition_value = condition.value.arguments[0].strip('{}')
+                else:
+                    condition_value = None
+            condition_vars.append((condition_column, condition_value))
+        return condition_vars
+
+    def extract_condition_assignments(self, condition_vars, assignment: dict):
+        return [(assignment.get(col_var_name, '_column_expression'), assignment.get(val_var_name, '_column_expression'))
+                for col_var_name, val_var_name in condition_vars]
+
+    @property
+    def operators(self):
+        """ Property that returns a tuple of the operators of the template.
+            The count operator will be always at the first position if an explicit operator for count was specified.
+        """
+        if self._explicit_count_definition is not None:
+            return (self._explicit_count_definition, *self._operators)
+        return self._operators
+
+    @property
+    def num_conditions(self):
+        return len(self.conditions)
+
+    @property
+    def template_hash(self):
+        return self._template_hash
 
     def find_all_possible_assignments(self,
                                       sql_template: str,
@@ -613,11 +688,14 @@ class QuestionTemplate:
 
     def create_questions(self,
                          tables: List[Table],
-                         create_alternatives=False
-                         ) -> List[TableQuestion]:
+                         create_alternatives=False,
+                         do_count_augmentation=False,
+                         ) -> Tuple[List[TableQuestion], Union[List[TableQuestion], None]]:
         generated_questions = []
+        generated_count_questions = [] if do_count_augmentation or self._explicit_count_definition is not None else None
         logger.info('Creating questions from template for %i tables...', len(tables))
-        for table in tqdm(tables):
+        for table in (progress_bar := tqdm(tables)):
+            progress_bar.set_description("Tables processed (all questions created)")
             num_rows = table.size[1]
             used_datatypes = [self._schema['variables'][variable]['allowed_dtypes']
                               for variable in self._schema['variables'].keys()
@@ -626,13 +704,18 @@ class QuestionTemplate:
             used_datatypes = set([dtype
                                   for var_dtypes in used_datatypes
                                   for dtype in var_dtypes])
-            # TODO create Value samplers for every column
+            # TODO create Value samplers for every column <- TODO check if the following3/4 lines are still nedded
             value_sample_cols = []
             for dtype in used_datatypes:
                 value_sample_cols += table.columns_by_type(dtype, names=True)
+            var_assignment_cache = {}
             # sampled_values = {col: table.sample_values(col) for col in value_sample_cols}
-            for operator in self.operators:
-                # TODO when same operator structure (e.g min, max) cache var assignments
+
+            # initiallize varible all_question_count_hashes since it is only computed if
+            # do_count_augmentation or self._explicit_count_definition is not None
+            all_question_count_hashes = None
+            for op_idx, operator in enumerate(self._operators):
+                # create Template object and generate template string for current operator (aggregator)
                 sql_template_obj = SQLTemplate(
                     SQLOperatorTemplate(
                         operator.sql,
@@ -647,33 +730,134 @@ class QuestionTemplate:
                     conditions=self.conditions
                 )
                 sql_template = sql_template_obj.generate()
-                var_assignments = self.find_all_possible_assignments(sql_template,
-                                                                     table
-                                                                     )
-                # need list of dicts not dict of lists
+
+                # aggregator configurations with same allowed dtypes draw samples from the same distribution and can share the samples
+                # TODO could be optimized even more by splitting aggregators with multiple dtypes and only sampling new aggregating col values samples once per
+                # dtype (rest of schema is same within template); but maybe performance gain not worth the added complexity
+                aggregator_hash = hashlib.sha256(str.encode(str(operator.sql_allowed_types))).hexdigest()
+                # use cached samples for variable assignments if possible for efficiency and performance comparability between operators
+                if (cached_assignments := var_assignment_cache.get(aggregator_hash)) is None:
+                    var_assignments = self.find_all_possible_assignments(sql_template, table)
+                    var_assignment_cache[aggregator_hash] = var_assignments
+                else:
+                    var_assignments = cached_assignments
+
+                # if condition is true create a template for the count operator additionally to the actual aggregator in the first iteration
+                # a) for metadata statistics (field aggregation_num_rows of the dataset) if do_count_augmentation is True or
+                # b) for explicit count questions in the dataset if self._explicit_count_definition is not None
+                if (do_count_augmentation or self._explicit_count_definition is not None) and op_idx == 0:
+                    count_template_obj = SQLTemplate.from_template(
+                        sql_template_obj,
+                        operator=SQLOperatorTemplate.from_template(
+                            sql_template_obj.operator,
+                            operator_name='count',
+                            ),
+                        )
+                    count_template = count_template_obj.generate()
+
+                    all_question_count_hashes = []  # condition assignments (count_hash) of all questions
+                    unique_count_configurations = {}  # map of unique count_hash to first assignment with this count_hash encountered
+                    for assignment in var_assignments:
+                        # sampled condition variables for each assignment (excluding the aggregation column since count is the same for all columns)
+                        # first element in assignment is always the aggregation_column by convention -> count_hash key is all but the first element
+                        configuration = ','.join([str(elem) for elem in list(assignment.values())[1:]])
+                        all_question_count_hashes.append(configuration)
+                        if unique_count_configurations.get(configuration) is None:
+                            unique_count_configurations[configuration] = assignment
+                    # parse dict into two aligned lists of configuration hashes and variable assignments for easy processing later on
+                    if len(unique_count_configurations) == 0:  # initiallizes empty lists if dict is empty
+                        count_configurations, count_var_assignments = [], []
+                    else:
+                        count_configurations, count_var_assignments = zip(*unique_count_configurations.items())
+
+                    compiled_count_sql_statements = [count_template.format(**assignment)
+                                                     for assignment in count_var_assignments
+                                                     ]
+
+                    # consider natural language questions and alternatives thereof only if count operator is specified explicitly
+                    # (e.g. real questions should be genereted; count is not only used for statistical property determination)
+                    if self._explicit_count_definition is not None:
+                        compiled_count_nl_questions = [self._nl_template.format(**dict(assignment,
+                                                                                       op=self._explicit_count_definition.text,
+                                                                                       )
+                                                                                )
+                                                       for assignment in count_var_assignments
+                                                       ]
+                        if create_alternatives:
+                            compiled_count_alternatives = [self._nl_template.format(**dict(assignment, op=alt))
+                                                           for assignment in count_var_assignments
+                                                           for alt in self._explicit_count_definition.text_alternatives
+                                                           ]
+                            compiled_count_nl_questions += compiled_count_alternatives
+                            compiled_count_sql_statements += (
+                                len(compiled_count_alternatives)
+                                * compiled_count_sql_statements
+                            )
+
+                        count_aggregation_column_assignments = [self.extract_aggregation_column(assignment) for assignment in count_var_assignments]
+                        condition_variables = self.extract_condition_variables()
+                        count_condition_assignments = [self.extract_condition_assignments(condition_variables, assignment) for assignment in count_var_assignments]
+
+                        count_questions = [
+                            TableQuestion(
+                                nl, table, sql, 'count',
+                                aggregation_column=agg_col,
+                                condition_assignments=condition_assign,
+                                _template_hash=self._template_hash,
+                                _count_hash=count_config,
+                                )
+                            for nl, sql, agg_col, condition_assign, count_config in zip(
+                                compiled_count_nl_questions,
+                                compiled_count_sql_statements,
+                                count_aggregation_column_assignments,
+                                count_condition_assignments,
+                                count_configurations,
+                                )
+                            ]
+                        generated_count_questions.extend(count_questions)
+                    else:
+                        count_questions = [TableQuestion('', table, sql, 'count', _template_hash=self._template_hash, _count_hash=count_config)
+                                           for sql, count_config in zip(compiled_count_sql_statements, count_configurations)
+                                           ]
+                        generated_count_questions.extend(count_questions)
+
+                # after potentially having initiallized the count aggregator and having computed the count_hash for all questions
+                # fill the template slots for questions with the actual aggregator of the iteration
                 compiled_sql_statements = [sql_template.format(**assignment)
                                            for assignment in var_assignments
                                            ]
-                compiled_nl_questions = [self._nl_template.format(**dict(assignment,
-                                                                         op=operator.text))
+                compiled_nl_questions = [self._nl_template.format(**dict(assignment, op=operator.text))
                                          for assignment in var_assignments
                                          ]
                 if create_alternatives:
-                    compiled_alternatives = [self._nl_template.format(**dict(assignment,
-                                                                             op=alt))
+                    compiled_alternatives = [self._nl_template.format(**dict(assignment, op=alt))
                                              for assignment in var_assignments
                                              for alt in operator.text_alternatives
                                              ]
                     compiled_nl_questions += compiled_alternatives
+                    # TODO answer hashing in compute answer for efficiency
                     compiled_sql_statements += (
                         len(compiled_alternatives)
                         * compiled_sql_statements
                     )
+
+                aggregation_column_assignments = [self.extract_aggregation_column(assignment) for assignment in var_assignments]
+                condition_variables = self.extract_condition_variables()
+                condition_assignments = [self.extract_condition_assignments(condition_variables, assignment) for assignment in var_assignments]
+
                 questions = [TableQuestion(nl, table, sql, operator.sql,
-                                           is_from_template=True)
-                             for nl, sql in zip(compiled_nl_questions,
-                                                compiled_sql_statements
-                                                )
+                                           aggregation_column=agg_col,
+                                           condition_assignments=condition_cols,
+                                           _template_hash=self._template_hash,
+                                           _count_hash=count_config,
+                                           )
+                             for nl, sql, agg_col, condition_cols, count_config in zip(
+                                 compiled_nl_questions,
+                                 compiled_sql_statements,
+                                 aggregation_column_assignments,
+                                 condition_assignments,
+                                 all_question_count_hashes or [None] * len(compiled_sql_statements),
+                                 )
                              ]
                 generated_questions.extend(questions)
         """
@@ -752,7 +936,7 @@ class QuestionTemplate:
                         generated_count_questions.extend(count_questions)
         """
 
-        return generated_questions
+        return generated_questions, generated_count_questions
 
 
 class TableQuestionDataSet:
@@ -762,7 +946,8 @@ class TableQuestionDataSet:
                  description: Optional[str] = None,
                  question_templates: Optional[List[QuestionTemplate]] = None,
                  tables: Optional[List[Table]] = None,
-                 compute_answers=True
+                 compute_answers=True,
+                 allow_multiple_answers=True,
                  ) -> None:
         self.name = name
         self.description = description
@@ -773,8 +958,20 @@ class TableQuestionDataSet:
                                                      tables,
                                                      compute_answers=compute_answers
                                                      )
+        self._questions_by_table_id = lambda: None  # callable since weakref is also callable
+
+        # TODO define behavior when value changes
+        # a) questions initiallized after value change are afected
+        # b) global effect: filter all multi value answers or recompute all existing questions
+        # c) no effect
+        # d) make property (no change possible after init)
+        self._allow_multiple_answers = allow_multiple_answers
+
         if compute_answers:
             self._remove_unanswered_questions()
+            if not allow_multiple_answers:
+                self.remove_multi_answer_questions()
+
         self._is_answers_computed = compute_answers
 
     @property
@@ -788,6 +985,21 @@ class TableQuestionDataSet:
             in the dataset.
         """
         return copy.copy(self._questions)
+
+    @property
+    def questions_by_table_id(self) -> Union[Dict[str, TableQuestion],
+                                             weakref.ReferenceType[Dict[str, TableQuestion]],
+                                             ]:
+        if self._questions_by_table_id() is None:
+            questions_by_table = WeakRefableDict()
+            for question in self._questions:
+                if questions_by_table.get(question._table._table_id) is None:
+                    questions_by_table[question._table._table_id] = [question]
+                else:
+                    questions_by_table[question._table._table_id].append(question)
+            self._questions_by_table_id = weakref.ref(questions_by_table)
+            return questions_by_table
+        return self._questions_by_table_id()
 
     @property
     def ground_truth(self):
@@ -840,37 +1052,83 @@ class TableQuestionDataSet:
     def to_huggingface(self) -> Dataset:
         """Creates a huggingface datasets.Dataset from the questions in this dataset."""
         logger.info('Grouping questions by table...')
+        # TODO refactor: use self.questions_by_table
         questions_by_table = {}
-        for question in tqdm(self._questions):
+        for question in (progress_bar := tqdm(self._questions)):
+            progress_bar.set_description("Saving questions by table: Questions processed")
             if questions_by_table.get(question._table._table_id) is None:
                 questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
+                                                                 'question_lengths': [len(question._nl_question)],
                                                                  # TODO handle string conversion elsewhere
-                                                                 'answers': [str(question._answer)]}
+                                                                 'answers': [str(question._answer)],
+                                                                 'answer_lengths': [len(str(question._answer))],
+                                                                 'is_multy_row_answer': [question._multi_row_answer],
+                                                                 'aggregators': [question._operator],
+                                                                 'aggregation_columns': [question.aggregation_column],
+                                                                 'aggregation_column_types': [question.aggregation_column_type],
+                                                                 'num_conditions': [question.num_conditions],
+                                                                 'aggregation_num_rows': [str(question._num_rows_aggregated_in_answer)],
+                                                                 }
             else:
                 questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
+                questions_by_table[question._table._table_id]['question_lengths'].append(len(question._nl_question))
                 # TODO handle string conversion elsewhere
                 questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
+                questions_by_table[question._table._table_id]['answer_lengths'].append(len(str(question._answer)))
+                questions_by_table[question._table._table_id]['is_multy_row_answer'].append(question._multi_row_answer)
+                questions_by_table[question._table._table_id]['aggregators'].append(question._operator)
+                questions_by_table[question._table._table_id]['aggregation_columns'].append(question.aggregation_column)
+                questions_by_table[question._table._table_id]['aggregation_column_types'].append(question.aggregation_column_type)
+                questions_by_table[question._table._table_id]['num_conditions'].append(question.num_conditions)
+                questions_by_table[question._table._table_id]['aggregation_num_rows'].append(str(question._num_rows_aggregated_in_answer))
         table = []
         questions = []
+        question_lengths = []
         answers = []
+        answer_lengths = []
+        is_multy_row_answer = []
+        aggregators = []
+        aggregation_columns = []
+        aggregation_column_types = []
+        num_conditions = []
+        aggregation_num_rows = []
         logger.info('Grouping questions by table...')
-        for table_id, content_dict in tqdm(questions_by_table.items()):
+        for table_id, content_dict in (progress_bar := tqdm(questions_by_table.items())):
+            progress_bar.set_description("Saving questions by table: Tables prepared")
             table.append(self._tables[table_id].to_state_dict())
             questions.append(content_dict['questions'])
+            question_lengths.append(content_dict['question_lengths'])
             answers.append(content_dict['answers'])
-        return Dataset.from_dict({
+            answer_lengths.append(content_dict['answer_lengths'])
+            is_multy_row_answer.append(content_dict['is_multy_row_answer'])
+            aggregators.append(content_dict['aggregators'])
+            aggregation_columns.append(content_dict['aggregation_columns'])
+            aggregation_column_types.append(content_dict['aggregation_column_types'])
+            num_conditions.append(content_dict['num_conditions'])
+            aggregation_num_rows.append(content_dict['aggregation_num_rows'])
+        return datasets.Dataset.from_dict({
             'table': table,
             'questions': questions,
+            'question_lengths': question_lengths,
             'answers': answers,
+            # TODO alternative answers
+            'answer_lengths': answer_lengths,
+            'is_multy_row_answer': is_multy_row_answer,
+            'aggregators': aggregators,
+            'aggregation_columns': aggregation_columns,
+            'aggregation_column_types': aggregation_column_types,
+            'num_conditions': num_conditions,
+            'aggregation_num_rows': aggregation_num_rows,
         })
 
     def to_json(self):
         return json.dumps(self, default=lambda x: x.__dict__, sort_keys=True, indent=4)
 
     def _initialize_questions(self,
-                              question_templates: QuestionTemplate,
+                              question_templates: List[QuestionTemplate],
                               tables: List[Table],
-                              compute_answers=True
+                              compute_answers=True,
+                              do_count_augmentation=True,
                               ) -> List[TableQuestion]:
         """Creates the quelstions from the datasets' question templates and tables.
 
@@ -888,16 +1146,79 @@ class TableQuestionDataSet:
         """
         if self._question_templates is None or self._tables is None:
             return []
-        question_batches = [question_template.create_questions(tables)
-                            for question_template in question_templates]
+        # generate questions from templates and keep count operator and other operators seperate for now (more flexibility of when to
+        # explicitly use count as questions vs. when to only infer pre-aggregation row count as statistical property of the question)
+        question_batches, count_question_batches = zip(
+            *[question_template.create_questions(tables,
+                                                 do_count_augmentation=do_count_augmentation,
+                                                 )
+              for question_template in question_templates]
+            )
+
         flattened_question_list = [question
-                                   for question_batch in question_batches
-                                   for question in question_batch]
+                                   for question_template_batch in question_batches
+                                   for question in question_template_batch]
+        flattened_count_question_list = [question
+                                         for question_template_batch in count_question_batches
+                                         for question in question_template_batch]
+        # remove duplicates
+        flattened_question_list = list(set(flattened_question_list))
+        flattened_count_question_list = list(set(flattened_count_question_list))
+
+        # compute and cache the results of counting rows per condition assignment
+        count_result_cache = {}
+        if do_count_augmentation:
+            logger.info('Computing pre-aggregation row counts of table questions...')
+            for question in (progress_bar := tqdm(flattened_count_question_list)):
+                progress_bar.set_description("Computing pre-aggregation row counts")
+                question.compute_answer()
+                # store count answer to be reused for similar questions (same condition)
+                # although question is hashable create new hash such that all questions
+                # with the same condition assignment have the same count result
+                # condition_hash = hashlib.sha256(str(tuple(question.condition_assignments)).encode()).hexdigest()
+                # contains all assignments explicitly while condition_assignments collapsed all multi-column expressions into one
+                # TODO Fallback to second line of SQL (WHERE condition part) if no explicit _count_hash exists (see below)
+                # but maybe leave out since the format of custom sql is not known (better to differentiate between custom and template versions?
+                # but there is _is_from_template)
+                # condition_hash = question._count_hash or hashlib.sha256(''.join(question._sql_query.split('\n')[1:])).hexdigest()
+                condition_hash = question._count_hash
+                count_result_cache[condition_hash] = question._answer
+
+        # compute answers to the questions (use cached answers for questions with equivalent SQL)
+        answer_result_cache = {}
         if compute_answers:
             logger.info('Computing answers to table questions...')
-            for question in tqdm(flattened_question_list):
-                question.compute_answer()
-        self._is_answers_computed = compute_answers
+            for question in (progress_bar := tqdm(flattened_question_list)):
+                progress_bar.set_description("Computing answers to table questions")
+                if (cached_answer := answer_result_cache.get(question._sql_query)) is None:
+                    question.compute_answer()
+                    # cache answers for questions with same sql
+                    answer_result_cache[question._sql_query] = question._answer
+                else:
+                    # do not compute same sql query twice, but use cached answer
+                    question._answer = cached_answer
+                self._is_answers_computed = compute_answers
+
+            # determine which questions with count aggregator should be explicit questions in the dataset
+            # rather than just used for meta data and add them
+            explicit_count_questions = []
+            has_template_explicit_count_question = {template.template_hash: template._explicit_count_definition is not None
+                                                    for template in question_templates}
+            for question in flattened_count_question_list:
+                if has_template_explicit_count_question[question.template_hash]:
+                    explicit_count_questions.append(question)
+                    if question._answer is None:
+                        question.compute_answer()
+            flattened_question_list.extend(explicit_count_questions)
+
+        # add row counts before aggregation as statistical property (meta data) of the TableQuestion
+        if do_count_augmentation:
+            for question in flattened_question_list:
+                # condition_hash = hashlib.sha256(str(tuple(question.condition_assignments)).encode()).hexdigest()
+                condition_hash = question._count_hash
+                if count_result_cache.get(condition_hash) is None:
+                    print(condition_hash)
+                question._num_rows_aggregated_in_answer = count_result_cache.get(condition_hash, 'No count result')
         return flattened_question_list
 
     def _remove_unanswered_questions(self) -> None:

@@ -1,8 +1,11 @@
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Tuple, List, Union, Optional
+from typing import Tuple, List, Dict, Union, Optional, TypeVar, Type
 
+
+OP = TypeVar('OP', bound='SQLOperatorTemplate')
+T = TypeVar('T', bound='SQLTemplate')
 
 @dataclass(frozen=True)
 class SQLOperator:
@@ -30,6 +33,9 @@ MAX = SQLOperator('max',
                   )
 AVG = SQLOperator('avg', ('numeric',), 'average', ('mean',), False)
 SUM = SQLOperator('sum', ('numeric',), 'sum', ('total',), False)
+# Note that there is some special behaviour implemented for the count operator for efficiency reasons
+# (e.g. count of rows will be the same regardless the column it is applied to -> only add once to dataset for every condition assignment)
+COUNT = SQLOperator('count', ('numeric', 'text', 'alphanumeric'), 'count', ('number of rows',), False)
 NOOP = SQLOperator('', ('numeric',), 'value', tuple(), False)
 
 
