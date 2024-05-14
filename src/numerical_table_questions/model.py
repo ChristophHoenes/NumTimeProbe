@@ -521,10 +521,3 @@ def get_model_module(training_args, **kwargs):
         # TODO try search path
         raise NotImplementedError(f"No initialization implemented for model {training_args.model_name_or_path}!")
     return LightningWrapper(model, training_args, **kwargs, **non_default_kwargs)
-
-
-@dataclass
-class ModelArgs:
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.999
-    adam_epsilon: float = 1e-8
