@@ -32,7 +32,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         return len(self.index_dict)
 
     def __getitem__(self, idx):
-        table_id, question_number = index[idx]
+        table_id, question_number = self.index_dict[idx]
         table_data = self.table_dataset[table_id]
         # maybe leave for collate for more flexibility
         # table = Table.from_state_dict(table_data['table'])
