@@ -245,9 +245,10 @@ class TokenizationArgs:
         default='max_length',
         help="Whether to pad all sequences to the longest provided sequence length, the max_length or not at all (default).",
     )
-    truncation: Literal['longest_first', 'do_not_truncate', 'only_first', 'only_second', 'True', 'False'] = dArg(
+    truncation: Literal['longest_first', 'do_not_truncate', 'only_first', 'only_second', 'True', 'False', 'drop_rows_to_fit'] = dArg(
         default='True',
         help=("Whether to truncate sequences that are longer than max_lenghth. "
+              "For explanations of the options plese consult the documentation of the tokenizer in use."
               "'only_first' and 'only_second' are applicable if sequences are provided as pairs "
               "and only truncate one of the sequences for each sample."),
     )

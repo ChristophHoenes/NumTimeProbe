@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import warnings
+from functools import partial
 from dataclasses import asdict
 from datetime import datetime
 from itertools import chain
@@ -508,7 +509,15 @@ class TableQADataModule(L.LightningDataModule):
 
     def _get_dataloader(self, split_name:str, split_config:dict) -> DataLoader:
         # determine collate function for processing during data loading
-        collate_fn = table_collate if self.lazy_data_loading else None
+        if self.lazy_data_loading:
+            collate_fn = partial(
+                table_collate,
+                tokenizer=self.tokenizer,
+                truncation=self.tokenizing_args['truncation'],
+                padding=self.tokenizing_args['padding']
+                )
+        else:
+            collate_fn = None
         # load default config from self and (partially) override with custom split config
         data_loader_args = copy.deepcopy(self.data_loader_args)
         data_loader_args.update(split_config)
