@@ -506,33 +506,28 @@ class TableQADataModule(L.LightningDataModule):
                 self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dir)
                 check_dataset_type('test')
 
+    def _get_dataloader(self, split_name:str, split_config:dict) -> DataLoader:
+        # determine collate function for processing during data loading
+        collate_fn = table_collate if self.lazy_data_loading else None
+        # load default config from self and (partially) override with custom split config
+        data_loader_args = copy.deepcopy(self.data_loader_args)
+        data_loader_args.update(split_config)
+        # ensure to always have a batch in the format Tuple[Tuple[inputs], Union[Optional[target], Tuple[targets]]]
+        if isinstance(self.splits[split_name], torch.utils.data.TensorDataset):
+            return WrapCustomTupleDataLoader(self.splits[split_name], custom_tuple=(None,), collate_fn=collate_fn, **data_loader_args)
+        return DataLoader(self.splits[split_name], collate_fn=collate_fn, **data_loader_args)
+
     def train_dataloader(self):
-        train_loader_args = copy.deepcopy(self.data_loader_args)
-        train_loader_args.update(dict(batch_size=self.train_batch_size, shuffle=True))
-        if isinstance(self.splits['train'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['train'], custom_tuple=(None,), **train_loader_args)
-        return DataLoader(self.splits['train'], **train_loader_args)
+        return self._get_dataloader(split_name='train', split_config=dict(batch_size=self.train_batch_size, shuffle=True))
 
     def val_dataloader(self):
-        val_loader_args = copy.deepcopy(self.data_loader_args)
-        val_loader_args.update(dict(batch_size=self.eval_batch_size))
-        if isinstance(self.splits['validation'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['validation'], custom_tuple=(None,), **val_loader_args)
-        return DataLoader(self.splits['validation'], **val_loader_args)
+        return self._get_dataloader(split_name='validation', split_config=dict(batch_size=self.eval_batch_size))
 
     def test_dataloader(self):
-        test_loader_args = copy.deepcopy(self.data_loader_args)
-        test_loader_args.update(dict(batch_size=self.eval_batch_size))
-        if isinstance(self.splits['test'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['test'], custom_tuple=(None,), **test_loader_args)
-        return DataLoader(self.splits['test'], **test_loader_args)
+        return self._get_dataloader(split_name='test', split_config=dict(batch_size=self.eval_batch_size))
 
     def predict_dataloader(self):
-        predict_loader_args = copy.deepcopy(self.data_loader_args)
-        predict_loader_args.update(dict(batch_size=self.eval_batch_size))
-        if isinstance(self.splits['test'], torch.utils.data.TensorDataset):
-            return WrapCustomTupleDataLoader(self.splits['test'], custom_tuple=(None,), **predict_loader_args)
-        return DataLoader(self.splits['test'], **predict_loader_args)
+        return self._get_dataloader(split_name='test', split_config=dict(batch_size=self.eval_batch_size))
 
 
 class LMDataModule(L.LightningDataModule):
