@@ -21,7 +21,7 @@ def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
 
 class QuestionTableIndexDataset(torch.utils.data.Dataset):
     def __init__(self, table_dataset: Union[str, Path, datasets.Dataset]):
-        if isinstance(table_dataset, str, Path):
+        if isinstance(table_dataset, (str, Path)):
             self.path = table_dataset
             table_dataset = caching(self.path)
         else:
@@ -41,7 +41,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         return {'table_data': table_data, 'question_number': question_number, 'question_id': idx}
 
 
-def table_collate(batch_of_index_ids, tokenizer, truncation='drop_rows_to_fit', padding='max_length'):
+def table_collate(batch_of_index_ids, model_name, tokenizer, truncation='drop_rows_to_fit', padding='max_length'):
     tokenized = []
     # get table and question from dataset
     for sample_idx in batch_of_index_ids:
@@ -52,7 +52,7 @@ def table_collate(batch_of_index_ids, tokenizer, truncation='drop_rows_to_fit', 
         # apply informed row deletion (delete percentage of rows that are unaffected by condition, infer from answer_coordinates)
         # apply column permutation
         # apply row permutation
-        tokenizer_inputs = prepare_for_tokenizer([table_data], question_number=question_number, truncation=truncation, padding=padding)
+        tokenizer_inputs = prepare_for_tokenizer([table_data], model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding)
         table = Table.from_state_dict(table_data['table'])
         table_df = table.pandas_dataframe
         # retrieve question
@@ -85,7 +85,7 @@ if __name__ == "__main__":
         data_by_table_id,  # QuestionTableIndexDataset instead of index iterable
         batch_size=64, shuffle=True,
         # pass tokenizer and other parameters to collate function
-        collate_fn=lambda x: table_collate(x, tokenizer, truncation='drop_rows_to_fit', padding='max_length')
+        collate_fn=lambda x: table_collate(x, 'tapas', tokenizer, truncation='drop_rows_to_fit', padding='max_length')
         )
 
     for batch in dataloader:
