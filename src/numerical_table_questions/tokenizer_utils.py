@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from typing import Union
 
-import tqdm
+from tqdm import tqdm
 from loguru import logger  # TODO check difference to custom python logger and maybe change
 from transformers import TapexTokenizer, TapasTokenizer
 from transformers.models.auto.tokenization_auto import AutoTokenizer
