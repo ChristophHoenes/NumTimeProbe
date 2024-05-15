@@ -65,6 +65,11 @@ def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], mod
                 for table_id, content_dict in tqdm(questions_by_table.items())
             ]
         else:
+            if lazy:
+                data_iterable = data
+            else:
+                data_iterable = tqdm(data)
+                data_iterable.set_description("transfer to TAPEX tokenizer format...")
             return [
                 (
                     {
@@ -83,7 +88,7 @@ def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], mod
                         'return_tensors': return_tensors,
                     }
                 )
-                for table_batch in tqdm(data)
+                for table_batch in data_iterable
             ]
     elif model_name == 'tapas':
         if isinstance(data, TableQuestionDataSet):
