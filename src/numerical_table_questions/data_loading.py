@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import warnings
+from collections.abc import Iterable
 from functools import partial
 from dataclasses import asdict
 from datetime import datetime
@@ -196,39 +197,34 @@ def unbind_table_batch(bound_table_batches: Union[torch.Tensor, List[torch.Tenso
     return batch_unbound, end_of_sequence_idxs
 
 
-def truncate(tokenized: dict[torch.Tensor],
+def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
              truncation_type: Union[bool, str],
              max_sequence_length: int,
              query_first: bool = True,
-             allow_custom_truncation: bool = True,
+             num_reserved: Optional[Union[int, Iterable[Iterable[int]]]] = None,
              ):
     logger.info("Apply truncation strategy...")
+    # wrap in list if single tensor (only one table batch)
+    if isinstance(tokenized, torch.Tensor):
+        tokenized = [tokenized]
     # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
     if truncation_type in (True, 'longest_first'):
-        truncated = {}
-        for tokenizer_output in tokenized.keys():
-            is_like_input_sequence = (
-                isinstance(tokenized[tokenizer_output][0], torch.Tensor)
-                and tokenized[tokenizer_output][0].shape[-1] == tokenized['input_ids'][0].shape[-1]
-            )
-            if is_like_input_sequence:
-                truncated[tokenizer_output] = [
-                    table_question[:max_sequence_length] if query_first else table_question[-max_sequence_length:]
-                    for table_question in tokenized[tokenizer_output]
-                    ]
-            else:
-                truncated[tokenizer_output] = tokenized[tokenizer_output]
+        truncated = [table_question[:max_sequence_length] if query_first else table_question[-max_sequence_length:]
+                     for table_question in tokenized
+                     ]
     elif truncation_type in (False, 'do_not_truncate'):
+        # determine how many steps in each sequence to reserve for additional input
+        if num_reserved is None:
+            num_reserved = 0
+        if isinstance(num_reserved, int):
+            num_reserved = [[num_reserved] * batch.shape[-1] for batch in tokenized]
         # filter out sequences larger than model's max_length
-        truncated = {}
-        for tokenizer_output in tokenized.keys():
-            truncated[tokenizer_output] = [
-                table_question
-                for i, table_question in enumerate(tokenized[tokenizer_output])
-                if tokenized['input_ids'][i].shape[-1] + tokenized['targets'][i].shape[-1] <= max_sequence_length
-            ]
-    elif allow_custom_truncation is True:
-        truncated = tokenized
+        truncated = [
+            table_question
+            for b in range(len(tokenized))
+            for i, table_question in enumerate(tokenized)
+            if tokenized[b][i].shape[-1] + num_reserved[b][i] <= max_sequence_length
+        ]
     else:
         # for compatibility with huggingface implement only_first & only_second but not needed up to now
         # TODO think about value error and check allowed argument values?
