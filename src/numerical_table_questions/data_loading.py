@@ -318,8 +318,8 @@ class TableQADataModule(L.LightningDataModule):
                  train_batch_size: int = 32,
                  eval_batch_size: int = 64,
                  tokenizing_args=None,
-                 is_batch_dir: bool = True,
-                 lazy_data_loading: bool = True,
+                 lazy_data_processing: bool = True,
+                 is_batch_dict: bool = True,
                  data_dir: str = './data/NumTabQA/.cache',
                  overwrite_cache: bool = False,
                  num_dataloader_workers: int = 0,
@@ -333,8 +333,12 @@ class TableQADataModule(L.LightningDataModule):
         self.dataset_name = dataset_name
         self.train_batch_size = train_batch_size
         self.eval_batch_size = eval_batch_size
-        self.is_batch_dir = is_batch_dir
-        self.lazy_data_loading = lazy_data_loading
+        self.lazy_data_processing = lazy_data_processing
+        # TODO maybe implement tensor batch conversion (but maybe pointless as no performance gain when done on the fly?)
+        if not is_batch_dict and lazy_data_processing:
+            warnings.warn("For lazy_data_processing batch will always be a dict! is_batch_dict=True was set automatically.")
+            is_batch_dict = True
+        self.is_batch_dict = is_batch_dict
         self.tokenizing_args = asdict(tokenizing_args) if tokenizing_args is not None else dict()
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
         self.max_num_tokens = self.tokenizing_args.get('max_length') or 1024
@@ -354,7 +358,7 @@ class TableQADataModule(L.LightningDataModule):
 
     def prepare_data(self):
         # download not needed as locally on disk from data_synthesis
-        if self.lazy_data_loading:
+        if self.lazy_data_processing:
             return  # no preparation needed if it is doene on the fly during data loading
         # but once published download from huggingface datasets
         for split in ['train', 'validation', 'test']:
@@ -472,7 +476,7 @@ class TableQADataModule(L.LightningDataModule):
         print('setup', stage)
 
         def check_dataset_type(split_name):
-            if not self.is_batch_dir and not isinstance(self.splits[split_name], torch.utils.data.StackDataset):
+            if not self.is_batch_dict and not isinstance(self.splits[split_name], torch.utils.data.StackDataset):
                 # TODO think of using TypeError instead
                 warnings.warn(
                     f"Dataset should have type 'torch.utils.data.StackDataset' if there are targets but is of type '{type(self.splits[split_name])}'! "
@@ -483,33 +487,33 @@ class TableQADataModule(L.LightningDataModule):
 
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
-            if self.lazy_data_loading:
+            if self.lazy_data_processing:
                 self.splits['train'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, self.model_name, 'train'))
                 self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, self.model_name, 'validation'))
             else:
-                self.splits['train'] = load_split_tensor('train', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dir)
+                self.splits['train'] = load_split_tensor('train', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('train')
-                self.splits['validation'] = load_split_tensor('validation', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dir)
+                self.splits['validation'] = load_split_tensor('validation', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('validation')
 
         # Assign test dataset for use in dataloader(s)
         if stage == 'test':
-            if self.lazy_data_loading:
+            if self.lazy_data_processing:
                 self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, self.model_name, 'test'))
             else:
-                self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dir)
+                self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
 
         if stage == 'predict':
-            if self.lazy_data_loading:
+            if self.lazy_data_processing:
                 self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, self.model_name, 'test'))
             else:
-                self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dir)
+                self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
 
-    def _get_dataloader(self, split_name:str, split_config:dict) -> DataLoader:
+    def _get_dataloader(self, split_name: str, split_config: dict) -> DataLoader:
         # determine collate function for processing during data loading
-        if self.lazy_data_loading:
+        if self.lazy_data_processing:
             collate_fn = partial(
                 table_collate,
                 tokenizer=self.tokenizer,
