@@ -147,6 +147,16 @@ class TrainingArgs:
         help="If set, try to auto-infer batch_size_per_device and gradient_accumulation_steps based on number of devices given by --num_devices.",  # noqa: E501
         aliases=["--eb"],
     )
+    lazy_data_processing: bool = dArg(
+        default=True,
+        help=("If True (default) will execute data processing (e.g tokenization) during data loading. "
+              "Else will process the whole dataset before the main loop and save it to disk (might consume a lot of disk space!))."
+              ),
+    )
+    is_batch_dict: bool = dArg(
+        default=True,
+        help=("If True (default) will data loader will return batch as dict. Else will return tuple of tensors."),
+    )
     learning_rate: float = dArg(default=5e-5, aliases="--lr")
     lr_warmup: float = dArg(
         default=0.1,
