@@ -128,15 +128,15 @@ def load_split_tensor(split: str, table_corpus: str, dataset_name: str, model_na
         return inputs_dataset
 
 
-def batch_end_of_sequence(batch, pad_token_id):
+def batch_end_of_sequence(batch: torch.Tensor, pad_token_id: int, sequence_dimension: int = 1) -> torch.Tensor:
     """ Returns the indices where the pad token occurs for the first time. """
     is_padding = batch == pad_token_id
-    any_padding = is_padding.sum(dim=1) >= 1
-    first_padding = is_padding.int().argmax(dim=1)  # TODO is -1 more general?
+    any_padding = is_padding.sum(dim=sequence_dimension) >= 1
+    first_padding = is_padding.int().argmax(dim=sequence_dimension)
     return torch.where(any_padding, first_padding, batch.shape[-1])
 
 
-def cast_to_reduced_int(ints, num_values: Optional[int] = None):
+def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
     """
         Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.
         If num_values is None the amount of values (e.g. vocab size) is estimated by the maximum of the
@@ -178,47 +178,22 @@ def apply_sequence_transform(seqence_data:  Union[torch.Tensor, Dict[str, Union[
         return transform_fn(seqence_data, **kwargs)
 
 
-def unbind_table_batch(bound_table_batches, pad_token_id):
+def unbind_table_batch(bound_table_batches: Union[torch.Tensor, List[torch.Tensor]],
+                       pad_token_id: int,
+                       end_of_sequence_idxs: Optional[List[int]] = None,
+                       sequence_dimension: int = 1,
+                       ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     """ Unbind single questions and aswers from a table batch and remove batch padding. """
-    # TODO maybe remove also end of sequence token in input before target mask? - I think not
     logger.info("Unbinding table batches...")
-    # save the end of sequence of input_ids (last id before first padding) for every batch
-    end_of_sequence_idxs = []
-    # also save the original sequence length of every batch (before removing padding)
-    input_seq_len = []
-    # manually ensure the order such that all fields are processed like input_ids except target_ids
-    # (which then changes the state of end_of_sequence_idxs & input_seq_len)
-    tokenizer_keys = list(bound_table_batches.keys())
-    tokenizer_keys.remove('input_ids')
-    tokenizer_keys.remove('targets')
-    tokenizer_keys = ['input_ids', *tokenizer_keys, 'targets']
-    for key in tokenizer_keys:
-        batches_unbound = []
-        value = bound_table_batches[key]
-        for b, batch in enumerate(value):
-            if key in ['input_ids', 'targets']:
-                # save the states of input_ids to apply them to all other fields
-                # only recompute for targets which have different sequence lengths
-                end_of_sequence_idx = batch_end_of_sequence(batch, pad_token_id)
-                end_of_sequence_idxs.append(end_of_sequence_idx)
-                input_seq_len.append(bound_table_batches['input_ids'][b].shape[-1])
-            else:
-                # lookup input_ids state
-                end_of_sequence_idx = end_of_sequence_idxs[b]
-            # test if the field is a tensor with the same sequence length as the input tokens
-            is_like_input_sequence = (
-                isinstance(bound_table_batches[key][0], torch.Tensor)
-                and bound_table_batches[key][b].shape[-1] == input_seq_len[b]
-            )  # define condition before if clause for readability
-            if is_like_input_sequence or key == 'targets':
-                # only apply padding removal for fields that relate to input_ids
-                batch_unbound = [row[:end_of_sequence_idx[i]] for i, row in enumerate(batch)]
-            else:
-                # leave unchanged
-                batch_unbound = batch
-            batches_unbound.append(batch_unbound)
-        bound_table_batches[key] = [question for table_batch in batches_unbound for question in table_batch]
-    return bound_table_batches
+    # wrap in list if single tensor (only one table batch)
+    if isinstance(bound_table_batches, torch.Tensor):
+        bound_table_batches = [bound_table_batches]
+    # if the end of sequence ids are not provided calculate them based on the first occurance of padding token
+    if end_of_sequence_idxs is None:
+        end_of_sequence_idxs = [batch_end_of_sequence(batch, pad_token_id, sequence_dimension) for batch in bound_table_batches]
+    # flatten rows (questions) in each (table) batch and discard everything after the respective entry in end_of_sequence_idxs (first pad token)
+    batch_unbound = [row[:end_of_sequence_idxs[b][r]] for b, batch in enumerate(bound_table_batches) for r, row in enumerate(batch)]
+    return batch_unbound, end_of_sequence_idxs
 
 
 def truncate(tokenized: dict[torch.Tensor],
