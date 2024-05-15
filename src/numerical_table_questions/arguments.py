@@ -268,6 +268,19 @@ class TokenizationArgs:
         aliases="--tensor_format",
     )
 
+    def __post_init__(self):
+        # convert strings 'True' and 'False' to bool for padding and truncation
+        # circumvents only one type for each argument constraint of dArg
+        if self.padding == 'True':
+            self.padding = True
+        elif self.padding == 'False':
+            self.padding = False
+
+        if self.truncation == 'True':
+            self.truncation = True
+        elif self.truncation == 'False':
+            self.truncation = False
+
 
 @dataclass
 class DataProcessingArgs:
