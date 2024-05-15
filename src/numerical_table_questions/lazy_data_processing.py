@@ -4,6 +4,7 @@ from typing import Union, Dict, Tuple
 import datasets
 import torch
 
+from numerical_table_questions.data_caching import caching
 from numerical_table_questions.data_synthesis import Table
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer
 
@@ -22,7 +23,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
     def __init__(self, table_dataset: Union[str, Path, datasets.Dataset]):
         if isinstance(table_dataset, str, Path):
             self.path = table_dataset
-            table_dataset = datasets.Dataset.load_from_disk(self.path)
+            table_dataset = caching(self.path)
         else:
             self.path = None
         self.index_dict = generate_question_index(table_dataset)
