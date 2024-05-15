@@ -22,7 +22,7 @@ MAX_THREADS = 100
 CLEANUP_PATIENCE = 1.0
 
 
-def caching(cache_file_name, cache_path='../data/NumTabQA/.cache') -> Optional[Any]:
+def caching(cache_file_name, cache_path='./data/NumTabQA/.cache') -> Optional[Any]:
     """ Checks for pickle or arrow file(s) and loads if exist, otherwise return None. """
     cache_path_obj = Path(cache_path)
     # check for latest version (via timestamp)
@@ -57,7 +57,7 @@ def caching(cache_file_name, cache_path='../data/NumTabQA/.cache') -> Optional[A
                 )
 
 
-def clear_cache(cache_path: str = '../data/NumTabQA/.cache',
+def clear_cache(cache_path: str = './data/NumTabQA/.cache',
                 prefix: Optional[str] = None,
                 postfix: Optional[str] = None,
                 keep_latest: bool = True,
