@@ -522,6 +522,7 @@ class TableQADataModule(L.LightningDataModule):
         if self.lazy_data_processing:
             collate_fn = partial(
                 table_collate,
+                model_name=self.model_name,
                 tokenizer=self.tokenizer,
                 truncation=self.tokenizing_args['truncation'],
                 padding=self.tokenizing_args['padding']
