@@ -211,7 +211,7 @@ def truncate(tokenized: dict[torch.Tensor],
              ):
     logger.info("Apply truncation strategy...")
     # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
-    if truncation_type in ('True', 'longest_first'):
+    if truncation_type in (True, 'longest_first'):
         truncated = {}
         for tokenizer_output in tokenized.keys():
             is_like_input_sequence = (
@@ -225,7 +225,7 @@ def truncate(tokenized: dict[torch.Tensor],
                     ]
             else:
                 truncated[tokenizer_output] = tokenized[tokenizer_output]
-    elif truncation_type in ('False', 'do_not_truncate'):
+    elif truncation_type in (False, 'do_not_truncate'):
         # filter out sequences larger than model's max_length
         truncated = {}
         for tokenizer_output in tokenized.keys():
@@ -249,7 +249,7 @@ def pad(tokenized:  dict[torch.Tensor],
         pad_token_id: int,
         ):
     logger.info("Apply padding strategy...")
-    if padding_type in ('True', 'max_length', 'longest'):
+    if padding_type in (True, 'max_length', 'longest'):
         padded = {}
         for tokenizer_output in tokenized.keys():
             is_like_input_sequence = (
@@ -257,7 +257,7 @@ def pad(tokenized:  dict[torch.Tensor],
                 and tokenized[tokenizer_output][0].shape[-1] == tokenized['input_ids'][0].shape[-1]
             )
             if is_like_input_sequence and tokenizer_output:
-                if padding_type in ('True', 'max_length') and tokenizer_output != 'targets':
+                if padding_type in (True, 'max_length') and tokenizer_output != 'targets':
                     # determine shape of tensor and alter last dimension to maximum sequence length of model
                     tensor_shape = list(tokenized[tokenizer_output][0].shape)
                     tensor_shape[-1] = max_sequence_length
@@ -272,7 +272,7 @@ def pad(tokenized:  dict[torch.Tensor],
                         padding_value=float(pad_token_id) if 'mask' not in tokenizer_output else 0.,
                     )
                 ))
-                if padding_type in ('True', 'max_length'):
+                if padding_type in (True, 'max_length'):
                     # pop dummy tensor that was previously appended
                     padded[tokenizer_output] = padded[tokenizer_output][:-1]
             else:
