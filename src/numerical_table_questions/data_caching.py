@@ -46,7 +46,7 @@ def caching(cache_file_name, cache_path='./data/NumTabQA/.cache') -> Optional[An
         pickle_target = latest_cache_version / (cache_file_name + '.pickle')
         if len(arrow_files) > 0:
             logger.info("Loading arrow from cache (%s)", latest_cache_version.name)
-            return Dataset.load_from_disk(latest_cache_version)
+            return Dataset.load_from_disk(str(latest_cache_version))
         elif pickle_target.is_file():
             logger.info("Loading pickle from cache (%s)", latest_cache_version.name)
             with pickle_target.open('rb') as f:
