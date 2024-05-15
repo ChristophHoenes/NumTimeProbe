@@ -1,10 +1,12 @@
-import datasets
+from collections.abc import Iterable
+from typing import Union
+
 import tqdm
 from loguru import logger  # TODO check difference to custom python logger and maybe change
 from transformers import TapexTokenizer, TapasTokenizer
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet
 
 
 def get_tokenizer(model_name, **kwargs):
@@ -18,7 +20,7 @@ def get_tokenizer(model_name, **kwargs):
         raise NotImplementedError(f"No tokenizer getter implemented for model '{model_name}'!")
 
 
-def prepare_for_tokenizer(data, model_name, lazy: bool = False, **kwargs):
+def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name, lazy: bool = False, **kwargs):
     # TODO implement other models' specific pre-tokenizer formatting and default case
     # TODO maybe a dict of functions instead of long if/elif/else would be cleaner
     if model_name == 'tapex':
@@ -29,7 +31,7 @@ def prepare_for_tokenizer(data, model_name, lazy: bool = False, **kwargs):
         truncation = kwargs.get('truncation') or True
         max_length = kwargs.get('max_length') or 1024
         return_tensors = kwargs.get('return_tensors') or 'pt'
-        if not isinstance(data, datasets.Dataset):
+        if isinstance(data, TableQuestionDataSet):
             if lazy:
                 raise NotImplementedError("No processing implemented for lazy oprion and non-datasets serialization!")
             questions_by_table = {}
@@ -84,7 +86,7 @@ def prepare_for_tokenizer(data, model_name, lazy: bool = False, **kwargs):
                 for table_batch in tqdm(data)
             ]
     elif model_name == 'tapas':
-        if not isinstance(data, datasets.Dataset):
+        if isinstance(data, TableQuestionDataSet):
             raise NotImplementedError("Preparation of TAPAS tokenizer format is only implemented for huggingface datasets serialization!")
         else:
             if lazy:
