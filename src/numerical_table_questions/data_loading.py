@@ -173,6 +173,7 @@ def apply_sequence_transform(seqence_data:  Union[torch.Tensor, Dict[str, Union[
         if field_names is None:
             raise ValueError("Must specify to which fields (dict keys) the transform should be applied! But field_names was None, expected list of strings.")
         for field in field_names:
+            logger.info(f"Processing field '{field}':")
             seqence_data[field] = transform_fn(seqence_data[field], **kwargs)
         return seqence_data
     else:
@@ -203,7 +204,7 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
              query_first: bool = True,
              num_reserved: Optional[Union[int, Iterable[Iterable[int]]]] = None,
              ):
-    logger.info("Apply truncation strategy...")
+    logger.info(f"Applying truncation strategy '{truncation_type}'...")
     # wrap in list if single tensor (only one table batch)
     if isinstance(tokenized, torch.Tensor):
         tokenized = [tokenized]
