@@ -282,34 +282,71 @@ def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
     return padded
 
 
-def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length: int, pad_token_id: int, mask_token_id: int):
-    truncated = truncate(tokenized,
-                         tokenizing_args['truncation'],
-                         max_sequence_length,
-                         query_first=tokenizing_args['query_first'],
-                         allow_custom_truncation=tokenizing_args['allow_custom_truncation'],
-                         )
+def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length: int, pad_token_id: int,
+                    mask_token_id: int, model_name: str, sequence_dimension: int = 1):
+    if model_name == 'tapex':
+        # TODO maybe break down in reusable blocks for other models
+        # first truncate sequences that are too long to fit into the model
+        # save target lengths to determine token budget of input ids
+        target_lengths = [tensor.shape[sequence_dimension] for tensor in tokenized['targets']]
+        # if target does not fit into model warn and truncate target
+        if any([target_len > max_sequence_length for target_len in target_lengths]):
+            warnings.warn("Encountered target, that is greater than max_sequence_length! You might want to check your configuration.")
+            truncated_targets = truncate(
+                tokenized['targets'],
+                truncation_type=tokenizing_args['truncation'],
+                max_sequence_length=max_sequence_length,
+                query_first=True,  # always truncate in the back for targets
+                sequence_dimension=sequence_dimension,
+                )
+        else:
+            truncated_targets = tokenized['targets']
 
-    # save input lengths to know at what index to inject target masks for every sample
-    input_lengths = [table_question.shape[-1] for table_question in truncated['input_ids']]
-    target_lengths = [table_question.shape[-1] for table_question in truncated['targets']]
+        # apply same truncation to 'input_ids' and 'attention_mask' considering the target_lengths as well
+        truncated_dict = apply_sequence_transform(
+            sequence_data=tokenized,
+            transform_fn=truncate,
+            field_names=['input_ids', 'attention_mask'],
+            truncation_type=tokenizing_args['truncation'],
+            max_sequence_length=max_sequence_length,
+            query_first=tokenizing_args['query_first'],
+            # targets and input need to fit into the model at once
+            num_reserved=target_lengths,
+            sequence_dimension=sequence_dimension,
+            )
 
-    padded = pad(truncated,
-                 tokenizing_args['padding'],
-                 max_sequence_length,
-                 pad_token_id,
-                 )
-    # fill mask tokens for target predictions
-    target_dummy = torch.ones_like(padded['input_ids'][0]) * mask_token_id
-    full_sequence_targets = []
-    for i, (input_end_idx, target_length) in enumerate(zip(input_lengths, target_lengths)):
-        # inputs do not need a label mask
-        #padded['input_ids'][i][input_end_idx:input_end_idx+target_length] = mask_token_id
-        template = torch.clone(target_dummy)
-        template[:target_length] = padded['targets'][i][:target_length]
-        full_sequence_targets.append(template)
-    padded['targets'] = full_sequence_targets
-    return padded
+        # fill up samples that are too short with padding
+        padded_input_ids = pad(
+            truncated_dict['input_ids'],
+            padding_type=tokenizing_args['padding'],
+            max_sequence_length=max_sequence_length,
+            pad_token_id=pad_token_id,
+            sequence_dimension=sequence_dimension,
+            )
+
+        padded_attention_mask = pad(
+            truncated_dict['attention_mask'],
+            padding_type=tokenizing_args['padding'],
+            max_sequence_length=max_sequence_length,
+            pad_token_id=0,  # fill up attention mask with zeros (where input has padding tokens)
+            sequence_dimension=sequence_dimension,
+            )
+
+        padded_targets = pad(
+            truncated_targets,
+            padding_type=tokenizing_args['padding'],
+            max_sequence_length=max_sequence_length,
+            pad_token_id=mask_token_id,  # Bart for CLM required target to be 'padded' with mask_token_id (e.g. -100)
+            sequence_dimension=sequence_dimension,
+            )
+
+        processed = {'input_ids': padded_input_ids,
+                     'attention_mask': padded_attention_mask,
+                     'targets': padded_targets,
+                     }
+    else:
+        raise NotImplementedError(f"Custom post tokenization is not implemented for model '{model_name}'!")
+    return processed
 
 
 class TableQADataModule(L.LightningDataModule):
@@ -383,6 +420,7 @@ class TableQADataModule(L.LightningDataModule):
                                                       self.max_num_tokens,
                                                       self.model_specs.pad_token_id,
                                                       self.model_specs.mask_token_id,
+                                                      self.model_name,
                                                       )
                 # save fully processed dataset
                 datasets.Dataset.from_dict(processed_sequences).save_to_disk(
