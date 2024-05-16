@@ -212,17 +212,17 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
     if isinstance(tokenized, torch.Tensor):
         single_tensor = True
         tokenized = [tokenized]
+    # determine how many steps in each sequence to reserve for additional input
+    if num_reserved is None:
+        num_reserved = 0
+    if isinstance(num_reserved, int):
+        num_reserved = [[num_reserved] * batch.shape[-1] for batch in tokenized]
     # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
     if truncation_type in (True, 'longest_first'):
-        truncated = [table_question[:max_sequence_length] if query_first else table_question[-max_sequence_length:]
+        truncated = [table_question[:(max_sequence_length-num_reserved)] if query_first else table_question[-(max_sequence_length-num_reserved):]
                      for table_question in tokenized
                      ]
     elif truncation_type in (False, 'do_not_truncate'):
-        # determine how many steps in each sequence to reserve for additional input
-        if num_reserved is None:
-            num_reserved = 0
-        if isinstance(num_reserved, int):
-            num_reserved = [[num_reserved] * batch.shape[-1] for batch in tokenized]
         # filter out sequences larger than model's max_length
         truncated = [
             table_question
