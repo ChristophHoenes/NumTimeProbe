@@ -161,23 +161,23 @@ def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
     return ints.to(cast_to)
 
 
-def apply_sequence_transform(seqence_data:  Union[torch.Tensor, Dict[str, Union[torch.Tensor, List[torch.Tensor]]]],
+def apply_sequence_transform(sequence_data:  Union[torch.Tensor, List[torch.Tensor], Dict[str, Union[torch.Tensor, List[torch.Tensor]]]],
                              transform_fn: Callable[[torch.Tensor], torch.Tensor],
                              field_names: Optional[List[str]] = None,
                              **kwargs
-                             ) -> Union[torch.Tensor, Dict[torch.Tensor]]:
+                             ) -> Union[torch.Tensor, List[torch.Tensor], Dict[torch.Tensor]]:
     """ Applies a sequence transform to every tensor in seqence_data.
         Has side effects on seqence_data if it is a dictionary (changes contents at key=field_names in place).
     """
-    if isinstance(seqence_data, dict):
+    if isinstance(sequence_data, dict):
         if field_names is None:
             raise ValueError("Must specify to which fields (dict keys) the transform should be applied! But field_names was None, expected list of strings.")
         for field in field_names:
             logger.info(f"Processing field '{field}':")
-            seqence_data[field] = transform_fn(seqence_data[field], **kwargs)
-        return seqence_data
+            sequence_data[field] = transform_fn(sequence_data[field], **kwargs)
+        return sequence_data
     else:
-        return transform_fn(seqence_data, **kwargs)
+        return transform_fn(sequence_data, **kwargs)
 
 
 def unbind_table_batch(bound_table_batches: Union[torch.Tensor, List[torch.Tensor]],
