@@ -359,6 +359,7 @@ class TableQADataModule(L.LightningDataModule):
                  tokenizing_args=None,
                  lazy_data_processing: bool = True,
                  is_batch_dict: bool = True,
+                 keep_oversized_samples: bool = True,
                  data_dir: str = './data/NumTabQA/.cache',
                  overwrite_cache: bool = False,
                  num_dataloader_workers: int = 0,
@@ -378,6 +379,7 @@ class TableQADataModule(L.LightningDataModule):
             warnings.warn("For lazy_data_processing batch will always be a dict! is_batch_dict=True was set automatically.")
             is_batch_dict = True
         self.is_batch_dict = is_batch_dict
+        self.keep_ooc_samples = keep_oversized_samples
         self.tokenizing_args = asdict(tokenizing_args) if tokenizing_args is not None else dict()
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
         self.max_num_tokens = self.tokenizing_args.get('max_length') or 1024
@@ -415,6 +417,15 @@ class TableQADataModule(L.LightningDataModule):
                 tokenized_dict = {field: [tokenized_dict[i][field] for i in range(tokenized_dict.num_rows)]
                                   for field in tokenized_dict.column_names
                                   }
+
+                # check if truncation is set to a valid value in combination with keep vs. filter too long samples option
+                reducing_truncation = [True, 'longest_first']
+                if self.keep_ooc_samples and not self.tokenizing_args.get('truncation') in reducing_truncation:
+                    raise ValueError("If samples that do not fit into the model should be kept the truncation strategy must reduce the samples size accordingly! "
+                                     f"Current options are {reducing_truncation} but selected truncation is {self.tokenizing_args.get('truncation')}."
+                                     )
+
+                # model specific custom post-tokenization processing (truncation, padding, filtering tokenizer outputs, adding additional fields, etc.)
                 processed_sequences = post_tokenizing(tokenized_dict,
                                                       self.tokenizing_args,
                                                       self.max_num_tokens,
