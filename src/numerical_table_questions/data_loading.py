@@ -397,6 +397,38 @@ class TableQADataModule(L.LightningDataModule):
             else None,
         )
 
+    def process_sequences_from_intermediate(self, intermediate_dict: dict, huggingface_base_dir: str, split: str):
+        # check if truncation is set to a valid value in combination with keep vs. filter too long samples option
+        reducing_truncation = [True, 'longest_first']
+        if self.keep_ooc_samples and not self.tokenizing_args.get('truncation') in reducing_truncation:
+            raise ValueError("If samples that do not fit into the model should be kept the truncation strategy must reduce the samples size accordingly! "
+                             f"Current options are {reducing_truncation} but selected truncation is {self.tokenizing_args.get('truncation')}."
+                             )
+
+        # model specific custom post-tokenization processing (truncation, padding, filtering tokenizer outputs, adding additional fields, etc.)
+        processed_sequences = post_tokenizing(intermediate_dict,
+                                              self.tokenizing_args,
+                                              self.max_num_tokens,
+                                              self.model_specs.pad_token_id,
+                                              self.model_specs.mask_token_id,
+                                              self.model_name,
+                                              )
+        # save fully processed dataset
+        # TODO think about what to do with other files that might already be in this directory but have a different
+        # name (e.g. pickle or different shard numbers) so they do not get overwritten
+        # (e.g delete, move to subfolder with previous versions)
+        datasets.Dataset.from_dict(processed_sequences).save_to_disk(
+            self.data_dir
+            + '/viable_tensors/'
+            + huggingface_base_dir
+            + f"/{split}"
+        )
+        # save as metadata (in extra text file) the length of the dataset after post_tokenizing
+        num_samples_after_filtering = len(processed_sequences['input_ids'])
+        with (Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
+            f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_after_filtering}\n")
+
+
     def prepare_data(self):
         # download not needed as locally on disk from data_synthesis
         if self.lazy_data_processing:
@@ -418,28 +450,8 @@ class TableQADataModule(L.LightningDataModule):
                                   for field in tokenized_dict.column_names
                                   }
 
-                # check if truncation is set to a valid value in combination with keep vs. filter too long samples option
-                reducing_truncation = [True, 'longest_first']
-                if self.keep_ooc_samples and not self.tokenizing_args.get('truncation') in reducing_truncation:
-                    raise ValueError("If samples that do not fit into the model should be kept the truncation strategy must reduce the samples size accordingly! "
-                                     f"Current options are {reducing_truncation} but selected truncation is {self.tokenizing_args.get('truncation')}."
-                                     )
-
-                # model specific custom post-tokenization processing (truncation, padding, filtering tokenizer outputs, adding additional fields, etc.)
-                processed_sequences = post_tokenizing(tokenized_dict,
-                                                      self.tokenizing_args,
-                                                      self.max_num_tokens,
-                                                      self.model_specs.pad_token_id,
-                                                      self.model_specs.mask_token_id,
-                                                      self.model_name,
-                                                      )
-                # save fully processed dataset
-                datasets.Dataset.from_dict(processed_sequences).save_to_disk(
-                    self.data_dir
-                    + '/viable_tensors/'
-                    + huggingface_base_dir
-                    + f"/{split}"
-                )
+                # run model specific custom post-tokenization processing (e.g. truncation, padding, etc.) and save results
+                self.process_sequences_from_intermediate(tokenized_dict, huggingface_base_dir, split)
             else:
                 # load raw TableQuestionDataset and do full processing
                 # TODO replace 'wikitables' with variable to allow for different source datasets
@@ -502,26 +514,8 @@ class TableQADataModule(L.LightningDataModule):
                 with (Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
                     f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_before_filtering}\n")
 
-                processed_sequences = post_tokenizing(tokenized_dict,
-                                                      self.tokenizing_args,
-                                                      self.max_num_tokens,
-                                                      self.model_specs.pad_token_id,
-                                                      self.model_specs.mask_token_id,
-                                                      )
-                # save fully processed dataset
-                # TODO think about what to do with other files that might already be in this directory but have a different
-                # name (e.g. pickle or different shard numbers) so they do not get overwritten
-                # (e.g delete, move to subfolder with previous versions)
-                datasets.Dataset.from_dict(processed_sequences).save_to_disk(
-                    self.data_dir
-                    + '/viable_tensors/'
-                    + huggingface_base_dir
-                    + f"/{split}"
-                )
-                # save as metadata (in extra text file) the length of the dataset after post_tokenizing
-                num_samples_after_filtering = len(processed_sequences['input_ids'])
-                with (Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
-                    f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_after_filtering}\n")
+                # run model specific custom post-tokenization processing (e.g. truncation, padding, etc.) and save results
+                self.process_sequences_from_intermediate(tokenized_dict, huggingface_base_dir, split)
 
     def setup(self, stage: str):
         print('setup', stage)
