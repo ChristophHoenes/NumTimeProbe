@@ -233,42 +233,37 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
     return truncated
 
 
-def pad(tokenized:  dict[torch.Tensor],
+def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
         padding_type: Union[bool, str],
         max_sequence_length: int,
         pad_token_id: int,
+        sequence_dimension: int = 1,
         ):
-    logger.info("Apply padding strategy...")
+    logger.info(f"Applying padding strategy '{padding_type}'...")
+    # wrap in list if single tensor (only one table batch)
+    if isinstance(tokenized, torch.Tensor):
+        tokenized = [tokenized]
     if padding_type in (True, 'max_length', 'longest'):
-        padded = {}
-        for tokenizer_output in tokenized.keys():
-            is_like_input_sequence = (
-                isinstance(tokenized[tokenizer_output][0], torch.Tensor)
-                and tokenized[tokenizer_output][0].shape[-1] == tokenized['input_ids'][0].shape[-1]
-            )
-            if is_like_input_sequence and tokenizer_output:
-                if padding_type in (True, 'max_length') and tokenizer_output != 'targets':
-                    # determine shape of tensor and alter last dimension to maximum sequence length of model
-                    tensor_shape = list(tokenized[tokenizer_output][0].shape)
-                    tensor_shape[-1] = max_sequence_length
-                    # append dummy tensor to ensure maximum length sequence is present
-                    tokenized[tokenizer_output].append(torch.zeros(tensor_shape))
-                # pad to longest sequence and unbind to list of single samples again
-                padded[tokenizer_output] = list(torch.unbind(
-                    torch.nn.utils.rnn.pad_sequence(
-                        [table_question for table_question in tokenized[tokenizer_output]],
-                        batch_first=True,
-                        # TODO check semantics of pad token for masks
-                        padding_value=float(pad_token_id) if 'mask' not in tokenizer_output else 0.,
+        if padding_type in (True, 'max_length'):
+            # infer shape of tokenized tensors (or table batches) and change the sequence_dimension
+            # to the maximum context length of the model
+            tensor_shape = list(tokenized[0].shape)
+            tensor_shape[sequence_dimension] = max_sequence_length
+            # append dummy tensor to ensure maximum length sequence is present
+            tokenized.append(torch.zeros(tensor_shape))
+        # pad to longest sequence and unbind to list of single samples again
+        padded = list(
+            torch.unbind(
+                torch.nn.utils.rnn.pad_sequence(
+                    [table_question for table_question in tokenized],
+                    batch_first=True,
+                    padding_value=float(pad_token_id),
                     )
-                ))
-                if padding_type in (True, 'max_length'):
-                    # pop dummy tensor that was previously appended
-                    padded[tokenizer_output] = padded[tokenizer_output][:-1]
-            else:
-                # TODO think of removing unbind and instead move vstack here such that
-                # by convention after padding there is a tensor instead of a list of samples
-                padded[tokenizer_output] = tokenized[tokenizer_output]
+                )
+            )
+        # for True and 'max_length' pop dummy tensor that was previously appended
+        if padding_type in (True, 'max_length'):
+            padded = padded[:-1]
     elif padding_type in (False, 'do_not_pad'):
         padded = tokenized
     else:
