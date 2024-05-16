@@ -203,10 +203,14 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
              max_sequence_length: int,
              query_first: bool = True,
              num_reserved: Optional[Union[int, Iterable[Iterable[int]]]] = None,
-             ):
+             sequence_dimension: int = 1,
+             ) -> Union[torch.Tensor, List[torch.Tensor]]:
     logger.info(f"Applying truncation strategy '{truncation_type}'...")
     # wrap in list if single tensor (only one table batch)
+    # TODO maybe use decorator for (un)wrapping
+    single_tensor = False
     if isinstance(tokenized, torch.Tensor):
+        single_tensor = True
         tokenized = [tokenized]
     # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
     if truncation_type in (True, 'longest_first'):
@@ -224,12 +228,14 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
             table_question
             for b in range(len(tokenized))
             for i, table_question in enumerate(tokenized)
-            if tokenized[b][i].shape[-1] + num_reserved[b][i] <= max_sequence_length
+            if tokenized[b][i].shape[sequence_dimension] + num_reserved[b][i] <= max_sequence_length
         ]
     else:
         # for compatibility with huggingface implement only_first & only_second but not needed up to now
         # TODO think about value error and check allowed argument values?
         raise NotImplementedError(f"Truncation strategy '{truncation_type}' is not implemented!")
+    if single_tensor:
+        return truncated[0]
     return truncated
 
 
@@ -241,7 +247,10 @@ def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
         ):
     logger.info(f"Applying padding strategy '{padding_type}'...")
     # wrap in list if single tensor (only one table batch)
+    # # TODO maybe use decorator for (un)wrapping
+    single_tensor = False
     if isinstance(tokenized, torch.Tensor):
+        single_tensor = True
         tokenized = [tokenized]
     if padding_type in (True, 'max_length', 'longest'):
         if padding_type in (True, 'max_length'):
@@ -268,6 +277,8 @@ def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
         padded = tokenized
     else:
         raise NotImplementedError(f"Padding strategy '{padding_type}' is not implemented!")
+    if single_tensor:
+        return padded[0]
     return padded
 
 
