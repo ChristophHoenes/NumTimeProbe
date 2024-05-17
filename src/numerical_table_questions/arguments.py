@@ -262,6 +262,10 @@ class TokenizationArgs:
               "'only_first' and 'only_second' are applicable if sequences are provided as pairs "
               "and only truncate one of the sequences for each sample."),
     )
+    optimize_int_type: bool = dArg(
+        default=True,
+        help="Whether or not to convert integers to the smallest possible int dtype to conserve disk space.",
+    )
     return_tensors: Literal['pt', 'tf', 'np'] = dArg(
         default='pt',
         help="Whether to return tensors as PyTorch = 'pt' (default), Tensorflow = 'tf' or numpy = 'np' type.",
