@@ -262,6 +262,11 @@ class TokenizationArgs:
               "'only_first' and 'only_second' are applicable if sequences are provided as pairs "
               "and only truncate one of the sequences for each sample."),
     )
+    keep_oversized_samples: bool = dArg(
+        default=False,
+        help=("Whether or not to keep examples that do not fit into memory. If False, too long sequences are filtered (default), "
+              "requires truncation 'do_not_truncate' or 'False'."),
+    )
     optimize_int_type: bool = dArg(
         default=True,
         help="Whether or not to convert integers to the smallest possible int dtype to conserve disk space.",
@@ -284,6 +289,13 @@ class TokenizationArgs:
             self.truncation = True
         elif self.truncation == 'False':
             self.truncation = False
+
+        # check if truncation is set to a valid value in combination with keep vs. filter too long samples option
+        reducing_truncation = [True, 'longest_first']
+        if self.keep_oversized_samples and self.truncation not in reducing_truncation:
+            raise ValueError("If samples that do not fit into the model should be kept the truncation strategy must reduce the samples size accordingly! "
+                             f"Current options are {reducing_truncation} but selected truncation is {self.truncation}."
+                             )
 
 
 @dataclass
