@@ -26,7 +26,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from numerical_table_questions.data_caching import caching
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset, table_collate
 from numerical_table_questions.model import get_model_type_info
-from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer
+from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing
 from dlib.frameworks.pytorch import (
     get_rank,
     main_process_first,
@@ -135,30 +135,6 @@ def batch_end_of_sequence(batch: torch.Tensor, pad_token_id: int, sequence_dimen
     any_padding = is_padding.sum(dim=sequence_dimension) >= 1
     first_padding = is_padding.int().argmax(dim=sequence_dimension)
     return torch.where(any_padding, first_padding, batch.shape[-1])
-
-
-def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
-    """
-        Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.
-        If num_values is None the amount of values (e.g. vocab size) is estimated by the maximum of the
-        values in the tensor plus one (for id zero).
-    """
-    # if num_values is None infer the coding size
-    if num_values is None:
-        num_values = ints.max() + 1
-    if num_values <= 2:
-        cast_to = torch.bool
-    elif num_values <= 128:
-        cast_to = torch.int8
-    elif num_values <= 256 and ints.min() >= 0:
-        cast_to = torch.uint8
-    elif num_values <= 32768:
-        cast_to = torch.int16
-    elif num_values <= 2_147_483_648:
-        cast_to = torch.int32
-    else:
-        cast_to = torch.int64
-    return ints.to(cast_to)
 
 
 def apply_sequence_transform(sequence_data:  Union[torch.Tensor, List[torch.Tensor], Dict[str, Union[torch.Tensor, List[torch.Tensor]]]],
@@ -428,7 +404,6 @@ class TableQADataModule(L.LightningDataModule):
         with (Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
             f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_after_filtering}\n")
 
-
     def prepare_data(self):
         # download not needed as locally on disk from data_synthesis
         if self.lazy_data_processing:
@@ -472,20 +447,7 @@ class TableQADataModule(L.LightningDataModule):
                 # transform input to format expected by tokenizer (only considering input and target fields)
                 tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, **tokenizing_args)
                 logger.info("Tokenize examples...")
-                tokenized = [(self.tokenizer(**table_question), self.tokenizer(**target)['input_ids'])
-                             for table_question, target in tqdm(tokenizer_inputs)]
-                tokenizer_output_names = tokenized[0][0].keys()
-                # convert tuple of tokenized model inputs (outputs depend on tokenizer)
-                # and target token_ids to dict of tensors and infer smallest possible int dtype to represent the ids
-                tokenized_dict = {key: [cast_to_reduced_int(sample[0][key], num_values=self.tokenizer.vocab_size)
-                                        # for tokenized (non-mask) outputs pick smallest possible int dtype for the vocab_size
-                                        if 'mask' not in key
-                                        # for masks infer the coding size (most likely binary)
-                                        else cast_to_reduced_int(sample[0][key])
-                                        for sample in tokenized
-                                        ]
-                                  for key in tokenizer_output_names}
-                tokenized_dict['targets'] = [cast_to_reduced_int(sample[1], self.tokenizer.vocab_size) for sample in tokenized]
+                tokenized_dict = model_specific_tokenizing(self.tokenizer, tokenizer_inputs, self.model_name, **tokenizing_args)
 
                 # add other fields of data split that did not go through the tokenizer
                 missing_fields = list(set(data_split.column_names)
@@ -510,7 +472,7 @@ class TableQADataModule(L.LightningDataModule):
                     + f"/{split}"
                 )
                 # save as metadata (in extra text file) the length of the dataset before post_tokenizing (e.g. before filtering too long sequences)
-                num_samples_before_filtering = len(tokenized_dict['input_ids'])
+                num_samples_before_filtering = len(tokenized_dict.get('input_ids', []))
                 with (Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split / 'custom_metadata.txt').open('a+') as f:
                     f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')} num_rows {num_samples_before_filtering}\n")
 

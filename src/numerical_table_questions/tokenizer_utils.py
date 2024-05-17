@@ -1,6 +1,7 @@
 from collections.abc import Iterable
-from typing import Union
+from typing import Union, Optional
 
+import torch
 from tqdm import tqdm
 from loguru import logger  # TODO check difference to custom python logger and maybe change
 from transformers import TapexTokenizer, TapasTokenizer
@@ -26,7 +27,8 @@ def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], mod
     if model_name == 'tapex':
         # TODO try performance with list of tables (duplicated) references as well
         # TODO flatten each question to sample also considering alternative answers
-        logger.info("Flattening examples to tokenizer format...")
+        if not lazy:  # do not spam logger with messages every batch (lazy processing during data loading)
+            logger.info("Flattening examples to tokenizer format...")
         padding = kwargs.get('padding') or True
         truncation = kwargs.get('truncation') or True
         max_length = kwargs.get('max_length') or 1024
@@ -118,3 +120,55 @@ def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], mod
                 raise NotImplementedError("No Tapas tokenizer preparation implemented for non-lazy option!")
     else:
         raise NotImplementedError(f"No tokenization behavior implemented for model '{model_name}'!")
+
+
+def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
+    """
+        Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.
+        If num_values is None the amount of values (e.g. vocab size) is estimated by the maximum of the
+        values in the tensor plus one (for id zero).
+    """
+    # if num_values is None infer the coding size
+    if num_values is None:
+        num_values = ints.max() + 1
+    if num_values <= 2:
+        cast_to = torch.bool
+    elif num_values <= 128:
+        cast_to = torch.int8
+    elif num_values <= 256 and ints.min() >= 0:
+        cast_to = torch.uint8
+    elif num_values <= 32768:
+        cast_to = torch.int16
+    elif num_values <= 2_147_483_648:
+        cast_to = torch.int32
+    else:
+        cast_to = torch.int64
+    return ints.to(cast_to)
+
+
+def model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name: str, **kwargs):
+    if model_name == 'tapex':
+        progress_bar = tqdm(tokenizer_inputs)
+        progress_bar.set_description("Tapex Tokenizing (inputs and targets separately)...")
+        tokenized = [
+            (tokenizer(**table_question), tokenizer(**target)['input_ids'])
+            for table_question, target in progress_bar
+            ]
+        # convert to dict of input-target tuples
+        tokenized = {key: (input_dict[key], target_dict[key]) for input_dict, target_dict in tokenized for key in input_dict.keys()} 
+        if kwargs.get('optimize_int_type'):
+            # infer smallest possible int dtype to represent the ids
+            tokenized['input_ids'] = [cast_to_reduced_int(sample[0], num_values=tokenizer.vocab_size) for sample in tokenized['input_ids']]
+            # use mask of input_ids; mask has only two values -> reduce to binary int format
+            tokenized['attention_mask'] = [cast_to_reduced_int(sample[0], num_values=2) for sample in tokenized['attention_mask']]
+            tokenized['targets'] = [cast_to_reduced_int(sample[1], num_values=tokenizer.vocab_size) for sample in tokenized['input_ids']]
+            # TODO potentially remaining keys
+        return tokenized
+    else:
+        logger.info(f"No custom tokenizing procedure for model '{model_name}'. Using standard tokenizer call.")
+        tokenized = tokenizer(**tokenizer_inputs)
+        if kwargs.get('optimize_int_type'):
+            if tokenized.get('input_ids'):
+                tokenized['input_ids'] = [cast_to_reduced_int(sample, num_values=tokenizer.vocab_size) for sample in tokenized['input_ids']]
+                # TODO potentially remaining keys
+        return tokenized
