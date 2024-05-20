@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import Union, Optional
+from typing import Union, Optional, List, Dict
 
 import torch
 from tqdm import tqdm
@@ -146,29 +146,73 @@ def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
     return ints.to(cast_to)
 
 
-def model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name: str, **kwargs):
+def list_of_dict_2_dict_of_lists(list_of_dicts: List[dict]) -> Dict[str, list]:
+    if len(list_of_dicts) == 0:
+        return dict()
+    keys = list_of_dicts[0].keys()
+    if any([sample.keys() != keys for sample in list_of_dicts]):
+        raise KeyError("Encountered mismatch between keys of different dictionaries!")
+    return {key: [sample[key] for sample in list_of_dicts] for key in keys}
+
+
+def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict], model_name: str, **kwargs):
     if model_name == 'tapex':
         progress_bar = tqdm(tokenizer_inputs)
         progress_bar.set_description("Tapex Tokenizing (inputs and targets separately)...")
-        tokenized = [
+        tokenized_tuples = [
             (tokenizer(**table_question), tokenizer(**target)['input_ids'])
             for table_question, target in progress_bar
             ]
-        # convert to dict of input-target tuples
-        tokenized = {key: (input_dict[key], target_dict[key]) for input_dict, target_dict in tokenized for key in input_dict.keys()} 
+        # convert list of tuples to list of dicts (add target ids to input's tokenized dict)
+        tokenized = []
+        for input_tokenized, target_input_ids in tokenized_tuples:
+            input_tokenized['answers'] = target_input_ids
+            tokenized.append(input_tokenized)
+
+        """
+        apply_sequence_transform(tokenized
+                             transform_fn=unbind_table_batch,
+                             field_names=['input_ids'],  # apply to all keys (assuming all tokenizer outputs have the same keys)
+                             pad_token_id=,
+                       end_of_sequence_idxs=None,
+                       sequence_dimension=1,
+                             )
+        apply_sequence_transform(tokenized
+                             transform_fn=unbind_table_batch,
+                             field_names=list(tokenized[0].keys()),  # apply to all keys (assuming all tokenizer outputs have the same keys)
+                             pad_token_id=,
+                       end_of_sequence_idxs: Optional[List[int]] = None,
+                       sequence_dimension: int = 1,
+                             )
+        # flatten the table batches to sequence of questions
+        tokenized_dict = unbind_table_batch(tokenized, self.model_specs.pad_token_id)
+        """
         if kwargs.get('optimize_int_type'):
             # infer smallest possible int dtype to represent the ids
-            tokenized['input_ids'] = [cast_to_reduced_int(sample[0], num_values=tokenizer.vocab_size) for sample in tokenized['input_ids']]
-            # use mask of input_ids; mask has only two values -> reduce to binary int format
-            tokenized['attention_mask'] = [cast_to_reduced_int(sample[0], num_values=2) for sample in tokenized['attention_mask']]
-            tokenized['targets'] = [cast_to_reduced_int(sample[1], num_values=tokenizer.vocab_size) for sample in tokenized['input_ids']]
-            # TODO potentially remaining keys
-        return tokenized
+            tokenized = [
+                sample | {  # keep all keys of sample but update the following
+                    'input_ids': cast_to_reduced_int(sample['input_ids'], num_values=tokenizer.vocab_size),
+                    'attention_mask': cast_to_reduced_int(sample['attention_mask'], num_values=2),  # reduce to binary int format for mask
+                    'answers': cast_to_reduced_int(sample['answers'], num_values=tokenizer.vocab_size),
+                    }
+                for sample in tokenized
+                ]
+        # convert to dict of lists
+        return list_of_dict_2_dict_of_lists(tokenized)
     else:
         logger.info(f"No custom tokenizing procedure for model '{model_name}'. Using standard tokenizer call.")
-        tokenized = tokenizer(**tokenizer_inputs)
+        progress_bar = tqdm(tokenizer_inputs)
+        progress_bar.set_description("Generic Tokenization...")
+        if isinstance(tokenizer_inputs, list):  # sample by sample
+            tokenized = [tokenizer(**sample) for sample in tokenizer_inputs]
+        else:  # batched
+            tokenized = tokenizer(**tokenizer_inputs)
         if kwargs.get('optimize_int_type'):
-            if tokenized.get('input_ids'):
-                tokenized['input_ids'] = [cast_to_reduced_int(sample, num_values=tokenizer.vocab_size) for sample in tokenized['input_ids']]
-                # TODO potentially remaining keys
-        return tokenized
+            # infer smallest possible int dtype to represent the ids
+            tokenized = [
+                sample | {  # keep all keys of sample but update the following
+                    'input_ids': cast_to_reduced_int(sample['input_ids'], num_values=tokenizer.vocab_size)
+                    }
+                for sample in tokenized
+                ]
+        return list_of_dict_2_dict_of_lists(tokenized)
