@@ -140,8 +140,9 @@ def batch_end_of_sequence(batch: torch.Tensor, pad_token_id: int, sequence_dimen
 def apply_sequence_transform(sequence_data:  Union[torch.Tensor, List[torch.Tensor], Dict[str, Union[torch.Tensor, List[torch.Tensor]]]],
                              transform_fn: Callable[[torch.Tensor], torch.Tensor],
                              field_names: Optional[List[str]] = None,
+                             verbose: bool = True,
                              **kwargs
-                             ) -> Union[torch.Tensor, List[torch.Tensor], Dict[torch.Tensor]]:
+                             ) -> Union[torch.Tensor, List[torch.Tensor], Dict[str, torch.Tensor]]:
     """ Applies a sequence transform to every tensor in seqence_data.
         Has side effects on seqence_data if it is a dictionary (changes contents at key=field_names in place).
     """
@@ -170,7 +171,12 @@ def unbind_table_batch(bound_table_batches: Union[torch.Tensor, List[torch.Tenso
     if end_of_sequence_idxs is None:
         end_of_sequence_idxs = [batch_end_of_sequence(batch, pad_token_id, sequence_dimension) for batch in bound_table_batches]
     # flatten rows (questions) in each (table) batch and discard everything after the respective entry in end_of_sequence_idxs (first pad token)
-    batch_unbound = [row[:end_of_sequence_idxs[b][r]] for b, batch in enumerate(bound_table_batches) for r, row in enumerate(batch)]
+    batch_unbound = [row[:end_of_sequence_idxs[b][r]].unsqueeze(dim=0)
+                     if keep_batch_dim
+                     else row[:end_of_sequence_idxs[b][r]]
+                     for b, batch in enumerate(bound_table_batches)
+                     for r, row in enumerate(batch)
+                     ]
     return batch_unbound, end_of_sequence_idxs
 
 
@@ -195,8 +201,10 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
         num_reserved = [[num_reserved] * batch.shape[-1] for batch in tokenized]
     # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
     if truncation_type in (True, 'longest_first'):
-        truncated = [table_question[:(max_sequence_length-num_reserved)] if query_first else table_question[-(max_sequence_length-num_reserved):]
-                     for table_question in tokenized
+        truncated = [table_question[:(max_sequence_length - num_reserved[tq])]  # truncate from right
+                     if query_first
+                     else table_question[-(max_sequence_length - num_reserved[tq]):]  # truncate from left
+                     for tq, table_question in enumerate(tokenized)
                      ]
     elif truncation_type in (False, 'do_not_truncate'):
         # filter out sequences larger than model's max_length
@@ -240,7 +248,7 @@ def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
         padded = list(
             torch.unbind(
                 torch.nn.utils.rnn.pad_sequence(
-                    [table_question for table_question in tokenized],
+                    [table_question.squeeze() for table_question in tokenized],
                     batch_first=True,
                     padding_value=float(pad_token_id),
                     )
@@ -262,21 +270,62 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
                     mask_token_id: int, model_name: str, sequence_dimension: int = 1):
     if model_name == 'tapex':
         # TODO maybe break down in reusable blocks for other models
-        # first truncate sequences that are too long to fit into the model
+        # first unbind (flatten) table batches to a list with one tensor per question (removes table batch padding)
+        # save sizes of table batches for repeating constant features in tokenized
+        table_batch_sizes = [table_batch.shape[0] for table_batch in tokenized['input_ids']]
+
+        if verbose:
+            logger.info("Processing field 'input_ids':")
+        tokenized['input_ids'], end_seq_idxs = unbind_table_batch(tokenized['input_ids'],
+                                                                  pad_token_id=pad_token_id,
+                                                                  sequence_dimension=sequence_dimension,
+                                                                  verbose=verbose,
+                                                                  )
+        # reuse computed end_of_sequence_idxs (row-wise last non-padding token) from 'input_ids' and apply to 'attention_mask'
+        # they are inferred from pad_token_id which does not exist in masks, also saves computation
+        if verbose:
+            logger.info("Processing field 'attention_mask':")
+        tokenized['attention_mask'], _ = unbind_table_batch(tokenized['attention_mask'],
+                                                            pad_token_id=pad_token_id,
+                                                            end_of_sequence_idxs=end_seq_idxs,
+                                                            sequence_dimension=sequence_dimension,
+                                                            verbose=verbose,
+                                                            )
+        # targets are tokenized separately from 'input_ids' and have their own end_of_sequence_idxs
+        if verbose:
+            logger.info("Processing field 'answers':")
+        tokenized['answers'], _ = unbind_table_batch(tokenized['answers'],
+                                                     pad_token_id=pad_token_id,
+                                                     sequence_dimension=sequence_dimension,
+                                                     verbose=verbose,
+                                                     )
+        # flatten also additional keys in tokenized to allign with the tokenized fields
+        for key in tokenized.keys():
+            if key in ['input_ids', 'attention_mask', 'answers']:
+                continue
+            flattened = []
+            for table_value, num_questions in zip(tokenized[key], table_batch_sizes):
+                if isinstance(table_value, Iterable):
+                    flattened.extend(table_value)
+                else:
+                    flattened.extend([table_value] * num_questions)
+            tokenized[key] = flattened
+
         # save target lengths to determine token budget of input ids
-        target_lengths = [tensor.shape[sequence_dimension] for tensor in tokenized['targets']]
+        target_lengths = [tensor.shape[sequence_dimension] for tensor in tokenized['answers']]
+
         # if target does not fit into model warn and truncate target
         if any([target_len > max_sequence_length for target_len in target_lengths]):
             warnings.warn("Encountered target, that is greater than max_sequence_length! You might want to check your configuration.")
             truncated_targets = truncate(
-                tokenized['targets'],
+                tokenized['answers'],
                 truncation_type=tokenizing_args['truncation'],
                 max_sequence_length=max_sequence_length,
                 query_first=True,  # always truncate in the back for targets
                 sequence_dimension=sequence_dimension,
                 )
         else:
-            truncated_targets = tokenized['targets']
+            truncated_targets = tokenized['answers']
 
         # apply same truncation to 'input_ids' and 'attention_mask' considering the target_lengths as well
         truncated_dict = apply_sequence_transform(
@@ -316,13 +365,30 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
             sequence_dimension=sequence_dimension,
             )
 
-        processed = {'input_ids': padded_input_ids,
-                     'attention_mask': padded_attention_mask,
-                     'targets': padded_targets,
+        processed = {'input_ids': padded_input_ids if isinstance(padded_input_ids, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
+                     'attention_mask': padded_attention_mask if isinstance(padded_attention_mask, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
+                     'answers': padded_targets if isinstance(padded_targets, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
                      }
+        tokenized.update(processed)
     else:
         raise NotImplementedError(f"Custom post tokenization is not implemented for model '{model_name}'!")
-    return processed
+    return tokenized
+
+
+def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict):
+    # add other fields of data split that did not go through the tokenizer
+    missing_fields = list(set(original_data.column_names)
+                          # TODO remove obsolete fields ('column_name', 'aggregator', 'condition_value') from data and this code
+                          - set(['table', 'column_name', 'aggregator', 'condition_value'])  # do not copy table for each question
+                          - set(tokenized_data.keys())
+                          )
+    additional_fields_dict = {field: original_data[field] for field in missing_fields}
+    # since table was removed from keys for efficiency, add column with table_id for reference (repeat id for each question to the table)
+    additional_fields_dict['table_id'] = [[table_batch['table']['table_id']] * len(table_batch['questions'])
+                                          for table_batch in original_data
+                                          ]
+    # TODO table num rows, table num cols, unique values aggregation column
+    tokenized_data.update(additional_fields_dict)
 
 
 class TableQADataModule(L.LightningDataModule):
@@ -439,22 +505,12 @@ class TableQADataModule(L.LightningDataModule):
                 # transform input to format expected by tokenizer (only considering input and target fields)
                 tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, **tokenizing_args)
                 logger.info("Tokenize examples...")
+                # run tokenization and return tokenized fields
+                # from list of tokenizer input fields (list of dicts) to dict of tokenizer output fields (dict with lists of question samples as values)
                 tokenized_dict = model_specific_tokenizing(self.tokenizer, tokenizer_inputs, self.model_name, **tokenizing_args)
 
-                # add other fields of data split that did not go through the tokenizer
-                missing_fields = list(set(data_split.column_names)
-                                      - set(['table'])  # do not copy table for each question
-                                      - set(tokenized_dict.keys())
-                                      )
-                additional_fields_dict = {field: data_split[field] for field in missing_fields}
-                # since table was removed from keys for efficiency, add column with table_id for reference (repeat id for each question to the table)
-                additional_fields_dict['table_id'] = [[table_batch['table']['table_id']] * len(table_batch['questions'])
-                                                      for table_batch in data_split
-                                                      ]
-                # TODO table num rows, table num cols, unique values aggregation column
-                tokenized_dict.update(additional_fields_dict)
-                # flatten the table batches to sequence of questions
-                tokenized_dict = unbind_table_batch(tokenized_dict, self.model_specs.pad_token_id)
+                # add back the fields that did not go through tokenization
+                restore_metadata(data_split, tokenized_dict)
 
                 # save raw tokenizer outputs (sequences with variable length)
                 datasets.Dataset.from_dict(tokenized_dict).save_to_disk(
