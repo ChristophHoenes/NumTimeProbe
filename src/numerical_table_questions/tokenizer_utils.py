@@ -35,7 +35,7 @@ def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], mod
         return_tensors = kwargs.get('return_tensors') or 'pt'
         if isinstance(data, TableQuestionDataSet):
             if lazy:
-                raise NotImplementedError("No processing implemented for lazy oprion and non-datasets serialization!")
+                raise NotImplementedError("No processing implemented for lazy oprion and non-huggingface-datasets serialization!")
             questions_by_table = {}
             for question in data._questions:
                 if questions_by_table.get(question._table._table_id) is None:
@@ -68,30 +68,50 @@ def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], mod
             ]
         else:
             if lazy:
-                data_iterable = data
+                # extract only single sample at specific question_number from a table batch
+                return [
+                    (
+                        {
+                            'table': Table.from_state_dict(table_batch['table']).pandas_dataframe,
+                            'query': table_batch['questions'][kwargs['question_number']],
+                            'padding': padding,
+                            'truncation': truncation,
+                            'max_length': max_length,
+                            'return_tensors': return_tensors,
+                        },
+                        {
+                            'answer': table_batch['answers'][kwargs['question_number']],
+                            'padding': padding,
+                            'truncation': truncation,
+                            'max_length': max_length,
+                            'return_tensors': return_tensors,
+                        }
+                    )
+                    for table_batch in data
+                ]
             else:
                 data_iterable = tqdm(data)
                 data_iterable.set_description("transfer to TAPEX tokenizer format...")
-            return [
-                (
-                    {
-                        'table': Table.from_state_dict(table_batch['table']).pandas_dataframe,
-                        'query': table_batch['questions'],
-                        'padding': padding,
-                        'truncation': truncation,
-                        'max_length': max_length,
-                        'return_tensors': return_tensors,
-                    },
-                    {
-                        'answer': table_batch['answers'],
-                        'padding': padding,
-                        'truncation': truncation,
-                        'max_length': max_length,
-                        'return_tensors': return_tensors,
-                    }
-                )
-                for table_batch in data_iterable
-            ]
+                return [
+                    (
+                        {
+                            'table': Table.from_state_dict(table_batch['table']).pandas_dataframe,
+                            'query': table_batch['questions'],
+                            'padding': padding,
+                            'truncation': truncation,
+                            'max_length': max_length,
+                            'return_tensors': return_tensors,
+                        },
+                        {
+                            'answer': table_batch['answers'],
+                            'padding': padding,
+                            'truncation': truncation,
+                            'max_length': max_length,
+                            'return_tensors': return_tensors,
+                        }
+                    )
+                    for table_batch in data_iterable
+                ]
     elif model_name == 'tapas':
         if isinstance(data, TableQuestionDataSet):
             raise NotImplementedError("Preparation of TAPAS tokenizer format is only implemented for huggingface datasets serialization!")
