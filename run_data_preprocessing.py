@@ -23,4 +23,6 @@ def main(parsed_arg_groups):
 
 if __name__ == "__main__":
     parsed_arg_groups = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
+    # TODO logger
+    print(parsed_arg_groups)
     main(parsed_arg_groups)
