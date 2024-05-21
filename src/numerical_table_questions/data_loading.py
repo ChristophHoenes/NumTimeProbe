@@ -598,8 +598,10 @@ class TableQADataModule(L.LightningDataModule):
                 table_collate,
                 model_name=self.model_name,
                 tokenizer=self.tokenizer,
+                tokenizing_args=self.tokenizing_args,
+                pad_token_id=self.model_specs.pad_token_id,
                 truncation=self.tokenizing_args['truncation'],
-                padding=self.tokenizing_args['padding']
+                padding=self.tokenizing_args['padding'],
                 )
         else:
             collate_fn = None

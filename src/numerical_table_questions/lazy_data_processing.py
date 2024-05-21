@@ -6,7 +6,7 @@ import torch
 
 from numerical_table_questions.data_caching import caching
 from numerical_table_questions.data_synthesis import Table
-from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer
+from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata
 
 
 def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
@@ -41,8 +41,8 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         return {'table_data': table_data, 'question_number': question_number, 'question_id': idx}
 
 
-def table_collate(batch_of_index_ids, model_name, tokenizer, truncation='drop_rows_to_fit', padding='max_length'):
-    tokenized = []
+def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pad_token_id: int, truncation='drop_rows_to_fit', padding='max_length'):
+    tokenized_batch = []
     # get table and question from dataset
     for sample_idx in batch_of_index_ids:
         table_data = sample_idx['table_data']
@@ -52,25 +52,32 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, truncation='drop_ro
         # apply informed row deletion (delete percentage of rows that are unaffected by condition, infer from answer_coordinates)
         # apply column permutation
         # apply row permutation
-        tokenizer_inputs = prepare_for_tokenizer([table_data], model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding)
-        table = Table.from_state_dict(table_data['table'])
-        table_df = table.pandas_dataframe
-        # retrieve question
-        question = table_data['questions'][question_number]
-        answer_coordinates = [(0, 0)]  # TODO remove dummy after answer_coordinates is implemented during synthesis
-        # tokenize (auto truncate, pad to max seq len)
-        tokenized.append(tokenizer(table=table_df, queries=[question], answer_coordinates=[answer_coordinates], answer_text=table_data["answers"][question_number], truncation=truncation, padding=padding, return_tensors="pt"))
-        # ooc (out of context label for test set)
-        # if no padding idx -> add label ooc (is sep present when truncated?)
+        tokenizer_inputs = []
+        tokenizer_inputs.extend(
+            prepare_for_tokenizer([table_data], model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding)
+            )
+        tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, **tokenizing_args)
+        restore_metadata(table_data, tokenized_dict)
+        tokenized_batch.append(tokenized_dict)
     # concat at batch dimension
-    tokenizer_output_names = tokenized[0].keys()
-    tokenized_batch = {key: torch.cat([sample[key] for sample in tokenized]) for key in tokenizer_output_names}
-    pad_token_id = 0
-    is_truncated_feature = [sample['input_ids'][:, -1] != pad_token_id for sample in tokenized]
+    tokenizer_output_names = tokenized_dict[0].keys()
+    is_all_tensors = {key: all([isinstance(sample[key], torch.Tensor) for sample in tokenized_batch]) for key in tokenizer_output_names}
+    tokenized_batch = {key: (torch.cat([sample[key] for sample in tokenized_batch])  # concat tensors of samples if possible
+                             if is_all_tensors[key]
+                             else [sample[key]for sample in tokenized_batch]  # if field is not tensor type return a list of samples
+                             )
+                       for key in tokenizer_output_names
+                       }
+
+    # add additional fields as meta info
+    # if no padding idx is present -> add ooc (out of context) label for test set performance insights
+    # TODO is sep token present when truncated? is this a problem? when comparing for pad_token_id perfect fit examples get mislabeled
+    is_truncated_feature = [sample['input_ids'][:, -1] != pad_token_id for sample in tokenized_batch]
     tokenized_batch['is_truncated'] = torch.BoolTensor(is_truncated_feature)
-    # for simplifying debugging include question_id
-    question_id = torch.IntTensor([sample['question_id'] for sample in batch_of_index_ids])
-    tokenized_batch['question_id'] = question_id
+    # for simplifying debugging include table / question id
+    tokenized_batch['question_id'] = torch.IntTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
+    tokenized_batch['table_id'] = [sample['table_data']['table_id'] for sample in batch_of_index_ids]
+    tokenized_batch['question_number'] = torch.IntTensor([sample['question_number'] for sample in batch_of_index_ids])  # local id within table batch
     return tokenized_batch
 
 
