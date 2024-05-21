@@ -1,6 +1,8 @@
-from collections.abc import Iterable
-from typing import Union, Optional, List, Dict
+import warnings
+from collections.abc import Iterable, Callable
+from typing import Union, Optional, List, Dict, Tuple
 
+import datasets
 import torch
 from tqdm import tqdm
 from loguru import logger  # TODO check difference to custom python logger and maybe change
@@ -236,3 +238,286 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
                 for sample in tokenized
                 ]
         return list_of_dict_2_dict_of_lists(tokenized)
+
+
+def batch_end_of_sequence(batch: torch.Tensor, pad_token_id: int, sequence_dimension: int = 1) -> torch.Tensor:
+    """ Returns the indices where the pad token occurs for the first time. """
+    is_padding = batch == pad_token_id
+    any_padding = is_padding.sum(dim=sequence_dimension) >= 1
+    first_padding = is_padding.int().argmax(dim=sequence_dimension)
+    return torch.where(any_padding, first_padding, batch.shape[-1])
+
+
+def apply_sequence_transform(sequence_data:  Union[torch.Tensor, List[torch.Tensor], Dict[str, Union[torch.Tensor, List[torch.Tensor]]]],
+                             transform_fn: Callable[[torch.Tensor], torch.Tensor],
+                             field_names: Optional[List[str]] = None,
+                             verbose: bool = True,
+                             **kwargs
+                             ) -> Union[torch.Tensor, List[torch.Tensor], Dict[str, torch.Tensor]]:
+    """ Applies a sequence transform to every tensor in seqence_data.
+        Has side effects on seqence_data if it is a dictionary (changes contents at key=field_names in place).
+    """
+    if isinstance(sequence_data, dict):
+        if field_names is None:
+            raise ValueError("Must specify to which fields (dict keys) the transform should be applied! But field_names was None, expected list of strings.")
+        for field in field_names:
+            if verbose:  # possibility to disable logging for many consecutive calls
+                logger.info(f"Processing field '{field}':")
+            sequence_data[field] = transform_fn(sequence_data[field], verbose=verbose, **kwargs)
+        return sequence_data
+    else:
+        return transform_fn(sequence_data, **kwargs)
+
+
+def unbind_table_batch(bound_table_batches: Union[torch.Tensor, List[torch.Tensor]],
+                       pad_token_id: int,
+                       end_of_sequence_idxs: Optional[List[int]] = None,
+                       keep_batch_dim: bool = True,
+                       sequence_dimension: int = 1,
+                       verbose: bool = True,
+                       ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    """ Unbind single questions and aswers from a table batch and remove batch padding. """
+    if verbose:  # possibility to disable logging for many consecutive calls
+        logger.info("Unbinding table batches...")
+    # wrap in list if single tensor (only one table batch)
+    if isinstance(bound_table_batches, torch.Tensor):
+        bound_table_batches = [bound_table_batches]
+    # if the end of sequence ids are not provided calculate them based on the first occurance of padding token
+    if end_of_sequence_idxs is None:
+        end_of_sequence_idxs = [batch_end_of_sequence(batch, pad_token_id, sequence_dimension) for batch in bound_table_batches]
+    # flatten rows (questions) in each (table) batch and discard everything after the respective entry in end_of_sequence_idxs (first pad token)
+    batch_unbound = [row[:end_of_sequence_idxs[b][r]].unsqueeze(dim=0)
+                     if keep_batch_dim
+                     else row[:end_of_sequence_idxs[b][r]]
+                     for b, batch in enumerate(bound_table_batches)
+                     for r, row in enumerate(batch)
+                     ]
+    return batch_unbound, end_of_sequence_idxs
+
+
+def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
+             truncation_type: Union[bool, str],
+             max_sequence_length: int,
+             query_first: bool = True,
+             num_reserved: Optional[Union[int, Iterable[Iterable[int]]]] = None,
+             sequence_dimension: int = 1,
+             verbose: bool = True,
+             ) -> Union[torch.Tensor, List[torch.Tensor]]:
+    if verbose:  # possibility to disable logging for many consecutive calls
+        logger.info(f"Applying truncation strategy '{truncation_type}'...")
+    # wrap in list if single tensor (only one table batch)
+    # TODO maybe use decorator for (un)wrapping
+    single_tensor = False
+    if isinstance(tokenized, torch.Tensor):
+        single_tensor = True
+        tokenized = [tokenized]
+    # determine how many steps in each sequence to reserve for additional input
+    if num_reserved is None:
+        num_reserved = 0
+    if isinstance(num_reserved, int):
+        num_reserved = [[num_reserved] * batch.shape[-1] for batch in tokenized]
+    # TODO option to drop tokens using heuristic such that question is still solvable (e.g drop unused column)
+    if truncation_type in (True, 'longest_first'):
+        truncated = [table_question[:(max_sequence_length - num_reserved[tq])]  # truncate from right
+                     if query_first
+                     else table_question[-(max_sequence_length - num_reserved[tq]):]  # truncate from left
+                     for tq, table_question in enumerate(tokenized)
+                     ]
+    elif truncation_type in (False, 'do_not_truncate'):
+        # filter out sequences larger than model's max_length
+        truncated = [
+            table_question
+            for b in range(len(tokenized))
+            for i, table_question in enumerate(tokenized)
+            if tokenized[b][i].shape[sequence_dimension] + num_reserved[b][i] <= max_sequence_length
+        ]
+    else:
+        # for compatibility with huggingface implement only_first & only_second but not needed up to now
+        # TODO think about value error and check allowed argument values?
+        raise NotImplementedError(f"Truncation strategy '{truncation_type}' is not implemented!")
+    if single_tensor:
+        return truncated[0]
+    return truncated
+
+
+def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
+        padding_type: Union[bool, str],
+        max_sequence_length: int,
+        pad_token_id: int,
+        sequence_dimension: int = 1,
+        verbose: bool = True,
+        ):
+    if verbose:  # possibility to disable logging for many consecutive calls
+        logger.info(f"Applying padding strategy '{padding_type}'...")
+    # wrap in list if single tensor (only one table batch)
+    # # TODO maybe use decorator for (un)wrapping
+    single_tensor = False
+    if isinstance(tokenized, torch.Tensor):
+        single_tensor = True
+        tokenized = [tokenized]
+    if padding_type in (True, 'max_length', 'longest'):
+        if padding_type in (True, 'max_length'):
+            # infer shape of tokenized tensors (or table batches) and change the sequence_dimension
+            # to the maximum context length of the model
+            tensor_shape = list(tokenized[0].shape)
+            tensor_shape[sequence_dimension] = max_sequence_length
+            # append dummy tensor to ensure maximum length sequence is present
+            tokenized.append(torch.zeros(tensor_shape))
+        # pad to longest sequence and unbind to list of single samples again
+        padded = list(
+            torch.unbind(
+                torch.nn.utils.rnn.pad_sequence(
+                    [table_question.squeeze() for table_question in tokenized],
+                    batch_first=True,
+                    padding_value=float(pad_token_id),
+                    )
+                )
+            )
+        # for True and 'max_length' pop dummy tensor that was previously appended
+        if padding_type in (True, 'max_length'):
+            padded = padded[:-1]
+    elif padding_type in (False, 'do_not_pad'):
+        padded = tokenized
+    else:
+        raise NotImplementedError(f"Padding strategy '{padding_type}' is not implemented!")
+    if single_tensor:
+        return padded[0]
+    return padded
+
+
+def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length: int, pad_token_id: int,
+                    mask_token_id: int, model_name: str, sequence_dimension: int = 1, verbose: bool = True):
+    if model_name == 'tapex':
+        # TODO maybe break down in reusable blocks for other models
+        # first unbind (flatten) table batches to a list with one tensor per question (removes table batch padding)
+        # save sizes of table batches for repeating constant features in tokenized
+        table_batch_sizes = [table_batch.shape[0] for table_batch in tokenized['input_ids']]
+
+        if verbose:
+            logger.info("Processing field 'input_ids':")
+        tokenized['input_ids'], end_seq_idxs = unbind_table_batch(tokenized['input_ids'],
+                                                                  pad_token_id=pad_token_id,
+                                                                  sequence_dimension=sequence_dimension,
+                                                                  verbose=verbose,
+                                                                  )
+        # reuse computed end_of_sequence_idxs (row-wise last non-padding token) from 'input_ids' and apply to 'attention_mask'
+        # they are inferred from pad_token_id which does not exist in masks, also saves computation
+        if verbose:
+            logger.info("Processing field 'attention_mask':")
+        tokenized['attention_mask'], _ = unbind_table_batch(tokenized['attention_mask'],
+                                                            pad_token_id=pad_token_id,
+                                                            end_of_sequence_idxs=end_seq_idxs,
+                                                            sequence_dimension=sequence_dimension,
+                                                            verbose=verbose,
+                                                            )
+        # targets are tokenized separately from 'input_ids' and have their own end_of_sequence_idxs
+        if verbose:
+            logger.info("Processing field 'answers':")
+        tokenized['answers'], _ = unbind_table_batch(tokenized['answers'],
+                                                     pad_token_id=pad_token_id,
+                                                     sequence_dimension=sequence_dimension,
+                                                     verbose=verbose,
+                                                     )
+        # flatten also additional keys in tokenized to allign with the tokenized fields
+        for key in tokenized.keys():
+            if key in ['input_ids', 'attention_mask', 'answers']:
+                continue
+            flattened = []
+            for table_value, num_questions in zip(tokenized[key], table_batch_sizes):
+                if isinstance(table_value, Iterable):
+                    flattened.extend(table_value)
+                else:
+                    flattened.extend([table_value] * num_questions)
+            tokenized[key] = flattened
+
+        # save target lengths to determine token budget of input ids
+        target_lengths = [tensor.shape[sequence_dimension] for tensor in tokenized['answers']]
+
+        # if target does not fit into model warn and truncate target
+        if any([target_len > max_sequence_length for target_len in target_lengths]):
+            warnings.warn("Encountered target, that is greater than max_sequence_length! You might want to check your configuration.")
+            if verbose:
+                logger.info("Processing field 'answers':")
+            truncated_targets = truncate(
+                tokenized['answers'],
+                truncation_type=tokenizing_args['truncation'],
+                max_sequence_length=max_sequence_length,
+                query_first=True,  # always truncate in the back for targets
+                sequence_dimension=sequence_dimension,
+                verbose=verbose,
+                )
+        else:
+            truncated_targets = tokenized['answers']
+
+        # apply same truncation to 'input_ids' and 'attention_mask' considering the target_lengths as well
+        truncated_dict = apply_sequence_transform(
+            sequence_data=tokenized,
+            transform_fn=truncate,
+            field_names=['input_ids', 'attention_mask'],
+            truncation_type=tokenizing_args['truncation'],
+            max_sequence_length=max_sequence_length,
+            query_first=tokenizing_args['query_first'],
+            # targets and input need to fit into the model at once
+            num_reserved=target_lengths,
+            sequence_dimension=sequence_dimension,
+            verbose=verbose,
+            )
+
+        # fill up samples that are too short with padding
+        if verbose:
+            logger.info("Processing field 'input_ids':")
+        padded_input_ids = pad(
+            truncated_dict['input_ids'],
+            padding_type=tokenizing_args['padding'],
+            max_sequence_length=max_sequence_length,
+            pad_token_id=pad_token_id,
+            sequence_dimension=sequence_dimension,
+            verbose=verbose,
+            )
+
+        if verbose:
+            logger.info("Processing field 'attention_mask':")
+        padded_attention_mask = pad(
+            truncated_dict['attention_mask'],
+            padding_type=tokenizing_args['padding'],
+            max_sequence_length=max_sequence_length,
+            pad_token_id=0,  # fill up attention mask with zeros (where input has padding tokens)
+            sequence_dimension=sequence_dimension,
+            verbose=verbose,
+            )
+
+        if verbose:
+            logger.info("Processing field 'answers':")
+        padded_targets = pad(
+            truncated_targets,
+            padding_type=tokenizing_args['padding'],
+            max_sequence_length=max_sequence_length,
+            pad_token_id=mask_token_id,  # Bart for CLM required target to be 'padded' with mask_token_id (e.g. -100)
+            sequence_dimension=sequence_dimension,
+            verbose=verbose,
+            )
+
+        processed = {'input_ids': padded_input_ids if isinstance(padded_input_ids, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
+                     'attention_mask': padded_attention_mask if isinstance(padded_attention_mask, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
+                     'answers': padded_targets if isinstance(padded_targets, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
+                     }
+        tokenized.update(processed)
+    else:
+        raise NotImplementedError(f"Custom post tokenization is not implemented for model '{model_name}'!")
+    return tokenized
+
+
+def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict):
+    # add other fields of data split that did not go through the tokenizer
+    missing_fields = list(set(original_data.column_names)
+                          # TODO remove obsolete fields ('column_name', 'aggregator', 'condition_value') from data and this code
+                          - set(['table', 'column_name', 'aggregator', 'condition_value'])  # do not copy table for each question
+                          - set(tokenized_data.keys())
+                          )
+    additional_fields_dict = {field: original_data[field] for field in missing_fields}
+    # since table was removed from keys for efficiency, add column with table_id for reference (repeat id for each question to the table)
+    additional_fields_dict['table_id'] = [[table_batch['table']['table_id']] * len(table_batch['questions'])
+                                          for table_batch in original_data
+                                          ]
+    # TODO table num rows, table num cols, unique values aggregation column
+    tokenized_data.update(additional_fields_dict)
