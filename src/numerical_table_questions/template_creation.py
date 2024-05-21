@@ -3,9 +3,9 @@ import warnings
 
 from typing import Optional, Tuple, List
 
-from data_caching import save_version, caching
-from data_synthesis import QuestionTemplate, Table, TableQuestionDataSet, load_table_dataset
-from sql_templates import (
+from numerical_table_questions.data_caching import save_version, caching
+from numerical_table_questions.data_synthesis import QuestionTemplate, Table, TableQuestionDataSet, load_table_dataset
+from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
 )
