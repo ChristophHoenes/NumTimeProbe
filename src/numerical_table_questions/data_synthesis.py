@@ -1597,7 +1597,7 @@ def load_table_dataset(table_corpus: str = 'wikitables',
                        split: Optional[str] = None,
                        cache_path: str = './data/NumTabQA/.cache',
                        ) -> Optional[List[Table]]:
-    cache_file_name = f'{table_corpus}_{split or 'all'}_tables'
+    cache_file_name = f"{table_corpus}_{split or 'all'}_tables"
     tables = caching(cache_file_name, cache_path=cache_path)
     if tables is not None:
         # restore original format by loading from state dict
