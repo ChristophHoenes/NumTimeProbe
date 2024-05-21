@@ -152,6 +152,7 @@ class TrainingArgs:
         help=("If True (default) will execute data processing (e.g tokenization) during data loading. "
               "Else will process the whole dataset before the main loop and save it to disk (might consume a lot of disk space!))."
               ),
+        aliases=["--lazy"],
     )
     is_batch_dict: bool = dArg(
         default=True,
