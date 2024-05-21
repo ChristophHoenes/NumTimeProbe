@@ -150,8 +150,9 @@ def apply_sequence_transform(sequence_data:  Union[torch.Tensor, List[torch.Tens
         if field_names is None:
             raise ValueError("Must specify to which fields (dict keys) the transform should be applied! But field_names was None, expected list of strings.")
         for field in field_names:
-            logger.info(f"Processing field '{field}':")
-            sequence_data[field] = transform_fn(sequence_data[field], **kwargs)
+            if verbose:  # possibility to disable logging for many consecutive calls
+                logger.info(f"Processing field '{field}':")
+            sequence_data[field] = transform_fn(sequence_data[field], verbose=verbose, **kwargs)
         return sequence_data
     else:
         return transform_fn(sequence_data, **kwargs)
@@ -160,10 +161,13 @@ def apply_sequence_transform(sequence_data:  Union[torch.Tensor, List[torch.Tens
 def unbind_table_batch(bound_table_batches: Union[torch.Tensor, List[torch.Tensor]],
                        pad_token_id: int,
                        end_of_sequence_idxs: Optional[List[int]] = None,
+                       keep_batch_dim: bool = True,
                        sequence_dimension: int = 1,
+                       verbose: bool = True,
                        ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     """ Unbind single questions and aswers from a table batch and remove batch padding. """
-    logger.info("Unbinding table batches...")
+    if verbose:  # possibility to disable logging for many consecutive calls
+        logger.info("Unbinding table batches...")
     # wrap in list if single tensor (only one table batch)
     if isinstance(bound_table_batches, torch.Tensor):
         bound_table_batches = [bound_table_batches]
@@ -186,8 +190,10 @@ def truncate(tokenized: Union[torch.Tensor, List[torch.Tensor]],
              query_first: bool = True,
              num_reserved: Optional[Union[int, Iterable[Iterable[int]]]] = None,
              sequence_dimension: int = 1,
+             verbose: bool = True,
              ) -> Union[torch.Tensor, List[torch.Tensor]]:
-    logger.info(f"Applying truncation strategy '{truncation_type}'...")
+    if verbose:  # possibility to disable logging for many consecutive calls
+        logger.info(f"Applying truncation strategy '{truncation_type}'...")
     # wrap in list if single tensor (only one table batch)
     # TODO maybe use decorator for (un)wrapping
     single_tensor = False
@@ -228,8 +234,10 @@ def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
         max_sequence_length: int,
         pad_token_id: int,
         sequence_dimension: int = 1,
+        verbose: bool = True,
         ):
-    logger.info(f"Applying padding strategy '{padding_type}'...")
+    if verbose:  # possibility to disable logging for many consecutive calls
+        logger.info(f"Applying padding strategy '{padding_type}'...")
     # wrap in list if single tensor (only one table batch)
     # # TODO maybe use decorator for (un)wrapping
     single_tensor = False
@@ -267,7 +275,7 @@ def pad(tokenized: Union[torch.Tensor, List[torch.Tensor]],
 
 
 def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length: int, pad_token_id: int,
-                    mask_token_id: int, model_name: str, sequence_dimension: int = 1):
+                    mask_token_id: int, model_name: str, sequence_dimension: int = 1, verbose: bool = True):
     if model_name == 'tapex':
         # TODO maybe break down in reusable blocks for other models
         # first unbind (flatten) table batches to a list with one tensor per question (removes table batch padding)
@@ -317,12 +325,15 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
         # if target does not fit into model warn and truncate target
         if any([target_len > max_sequence_length for target_len in target_lengths]):
             warnings.warn("Encountered target, that is greater than max_sequence_length! You might want to check your configuration.")
+            if verbose:
+                logger.info("Processing field 'answers':")
             truncated_targets = truncate(
                 tokenized['answers'],
                 truncation_type=tokenizing_args['truncation'],
                 max_sequence_length=max_sequence_length,
                 query_first=True,  # always truncate in the back for targets
                 sequence_dimension=sequence_dimension,
+                verbose=verbose,
                 )
         else:
             truncated_targets = tokenized['answers']
@@ -338,31 +349,41 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
             # targets and input need to fit into the model at once
             num_reserved=target_lengths,
             sequence_dimension=sequence_dimension,
+            verbose=verbose,
             )
 
         # fill up samples that are too short with padding
+        if verbose:
+            logger.info("Processing field 'input_ids':")
         padded_input_ids = pad(
             truncated_dict['input_ids'],
             padding_type=tokenizing_args['padding'],
             max_sequence_length=max_sequence_length,
             pad_token_id=pad_token_id,
             sequence_dimension=sequence_dimension,
+            verbose=verbose,
             )
 
+        if verbose:
+            logger.info("Processing field 'attention_mask':")
         padded_attention_mask = pad(
             truncated_dict['attention_mask'],
             padding_type=tokenizing_args['padding'],
             max_sequence_length=max_sequence_length,
             pad_token_id=0,  # fill up attention mask with zeros (where input has padding tokens)
             sequence_dimension=sequence_dimension,
+            verbose=verbose,
             )
 
+        if verbose:
+            logger.info("Processing field 'answers':")
         padded_targets = pad(
             truncated_targets,
             padding_type=tokenizing_args['padding'],
             max_sequence_length=max_sequence_length,
             pad_token_id=mask_token_id,  # Bart for CLM required target to be 'padded' with mask_token_id (e.g. -100)
             sequence_dimension=sequence_dimension,
+            verbose=verbose,
             )
 
         processed = {'input_ids': padded_input_ids if isinstance(padded_input_ids, torch.Tensor) else torch.cat(padded_input_ids, dim=0),
@@ -468,14 +489,18 @@ class TableQADataModule(L.LightningDataModule):
             return  # no preparation needed if it is doene on the fly during data loading
         # but once published download from huggingface datasets
         for split in ['train', 'validation', 'test']:
+            logger.info(f"Preparing split '{split}'")
             # path definitions to check for saved files
             huggingface_base_dir = f"{self.table_corpus}_{self.dataset_name}_{self.model_name}_tokenized"
             final_processing_path = Path(self.data_dir) / 'viable_tensors' / huggingface_base_dir / split
             intermediate_processing_path = Path(self.data_dir) / 'full_dict' / huggingface_base_dir / split
+
             if final_processing_path.exists() and not self.overwrite_cache:
                 # load fully processed tensor dataset to ensure no error occurs
+                logger.info(f"Found processed 'viable_tensors' file for split '{split}'. Loading...")
                 data_split = datasets.load_from_disk(final_processing_path)
             elif intermediate_processing_path.exists() and not self.overwrite_cache:
+                logger.info(f"Found intermediate 'full_dict' file for split '{split}'. Execute post-tokenization...")
                 # load from intermediate step (all examples) and apply custom post-processing and filtering
                 tokenized_dict = datasets.load_from_disk(intermediate_processing_path).with_format('torch')
                 # convert to dict while keeping the tensor format
