@@ -529,7 +529,7 @@ def get_model_module(training_args, **kwargs):
         non_default_kwargs['generation_metrics'] = {
             'str_match_accuracy':  (str_match_accuracy,
                                     {
-                                       'strip_whitespace': True,
+                                       'post_processing_fn': lambda x: [item.strip() for item in x],
                                     }
                                     )
         }

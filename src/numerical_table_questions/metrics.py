@@ -44,10 +44,7 @@ def accuracy_extract_target_position(model_outputs, ground_truth, compare_string
     return sum(eval_results) / len(eval_results), eval_results
 
 
-def str_match_accuracy(predictions, targets, strip_whitespace=False):
-    if strip_whitespace:
-        predictions = [item.strip() for item in predictions]
-        targets = [item.strip() for item in targets]
+def str_match_accuracy(predictions, targets):
     is_correct = [pred == targ for pred, targ in zip(predictions, targets)]
     return sum(is_correct)/len(is_correct), is_correct
 
