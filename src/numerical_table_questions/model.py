@@ -133,7 +133,10 @@ class LightningWrapper(L.LightningModule):
         if not training_args.resume_training:
             self.save_hyperparameters(
                 ignore=(
-                    ["effective_batch_size_per_step", "samples_processed", "tokens_processed"]
+                    ["effective_batch_size_per_step",
+                     # no need to save input arguments as state changes during training and
+                     # they are registered as buffers which are saved with the model checkpoint
+                     "samples_processed", "tokens_processed"]
                     + _nn_module_arguments
                     )
                 )  # nn.Module objects are already saved within a checkpoint file
@@ -167,6 +170,8 @@ class LightningWrapper(L.LightningModule):
             self.effective_batch_size_per_step = -training_args.batch_size_per_device
         else:
             self.effective_batch_size_per_step = effective_batch_size_per_step
+        # when resuming from a checkpoint samples_processed and tokens_processed should already exist as buffers
+        # for a new (fresh created) model register as buffers with provided start values (most likely 0)
         if not training_args.resume_training:
             self.register_buffer("samples_processed", torch.tensor(samples_processed))
             self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
@@ -234,6 +239,7 @@ class LightningWrapper(L.LightningModule):
             inputs = {key: value for key, value in batch.items() if key != 'targets'}
         else:
             inputs, target = batch
+
         # only consider first couple of input tokens as NL-question-only sanity check
         if self.args.only_first_x_tokens > 0:
             if isinstance(batch, dict):
@@ -242,7 +248,9 @@ class LightningWrapper(L.LightningModule):
             else:
                 inputs[0][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
                 inputs[1][:, self.args.only_first_x_tokens:] = 0
+
         outputs = self(inputs, target)
+
         if self.model_specs.loss_out_id is None:
             # compute loss
             predictions = outputs[self.model_specs.prediction_scores_out_id]
@@ -344,7 +352,7 @@ class LightningWrapper(L.LightningModule):
                         safe_target = torch.where(target != -100, target, self.model_specs.pad_token_id)
                         text_targets = self.tokenizer.batch_decode(safe_target, skip_special_tokens=True, clean_up_tokenization_spaces=True)
                     else:
-                        text_targets = target[1]
+                        text_targets = target[1]  # if tuple assume second position is text targets
                 except KeyError as e:
                     raise ValueError("Batch must be provided as a dictionary "
                                      "since the TensorDataset (in-memory) configuration does not support string items!"
@@ -382,6 +390,7 @@ class LightningWrapper(L.LightningModule):
                 # compute generation metric on postprocessed texts
                 metric_outputs = metric_function(processed_predictions, processed_targets, **metric_kwargs)
                 # log metric result
+                # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
                 batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
                 # TODO handling of logging additional outputs, if neccesary for some metric
 
