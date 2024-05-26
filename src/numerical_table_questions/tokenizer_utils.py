@@ -168,7 +168,7 @@ def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
     return ints.to(cast_to)
 
 
-def list_of_dict_2_dict_of_lists(list_of_dicts: List[dict]) -> Dict[str, list]:
+def list_of_dicts_2_dict_of_lists(list_of_dicts: List[dict]) -> Dict[str, list]:
     if len(list_of_dicts) == 0:
         return dict()
     keys = list_of_dicts[0].keys()
