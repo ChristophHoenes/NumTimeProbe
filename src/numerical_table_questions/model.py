@@ -59,6 +59,7 @@ class ModelTypeInfo:
     # any additional model specific arguments
     # (if key is of type int it is interpreted as positional or otherwise as keyword argument)
     input_mapping: dict = field(default_factory=dict)
+    dict_input_mapping: dict = field(default_factory=dict)
 
     def __post_init__(self):
         # TODO value checks
@@ -187,15 +188,8 @@ class LightningWrapper(L.LightningModule):
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
         if isinstance(inputs, dict):
-            forward_args = sorted(
-                [(model_input_id, inputs[data_input_id] if data_input_id != 'targets' else target)
-                 for model_input_id, data_input_id in self.model_specs.input_mapping.items()
-                 if isinstance(model_input_id, int)
-                 ]
-                )
-            forward_args = [tup[1] for tup in forward_args]  # drop sort index, only keep value
             forward_kwargs = {model_input_id: inputs[data_input_id] if data_input_id != 'targets' else target
-                              for model_input_id, data_input_id in self.model_specs.input_mapping.items()
+                              for model_input_id, data_input_id in self.model_specs.dict_input_mapping.items()
                               if isinstance(model_input_id, str)
                               }
             # make sure all int tensors to have dtype long; non-int-tensors stay unchanged
@@ -505,7 +499,12 @@ def get_model_type_info(model_name_or_path: str):
                 input_mapping={
                     '*': None,
                     'labels': lambda x, y: y,
-                    }
+                    },
+                dict_input_mapping={
+                    'input_ids': 'input_ids',
+                    'attention_mask': 'attention_mask',
+                    'labels': 'targets',
+                    },
                 )
         case _:
             warnings.warn(f"Unknown model '{model_name_or_path}'! No ModelTypeInfo will be defined, relying on default config.")
