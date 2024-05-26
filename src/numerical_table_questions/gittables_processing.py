@@ -82,7 +82,7 @@ def create_git_tables_dataset(data_dir_path: str = '/home/mamba/.cache/GitTables
     split_name_map = {i: split_name for i, split_name in enumerate(split_tables.keys())}
     no_splits_found = False  # only relevant if use_cache=True (caching is looking for splits)
     if use_cache:
-        loaded_split_tables = {split_name: caching(cache_file_name.replace('<SPLIT_NAME>', 'split_name'), cache_path=cache_path)
+        loaded_split_tables = {split_name: caching(cache_file_name.replace('<SPLIT_NAME>', split_name), cache_path=cache_path)
                                for split_name in split_name_map.values()
                                }
         splits_found = [tables is not None for tables in loaded_split_tables.values()]
