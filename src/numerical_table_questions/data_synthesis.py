@@ -509,14 +509,19 @@ def compute_arithmetic_expression_str(expression: str):
     # test expression format to avoid execution of malicious code,
     # hence do NOT use NUMBER_REGEX constant for security reasons but rather keep it hard-coded
     number_regex = r'-?(?:(?:\.\d+)|(?:(?:\d+|(?:\d{1,3}(?:,\d{3})+))(?:\.\d+)?))'
-    full_regex = fr'"{number_regex}"|(\(?"{number_regex}"[+*/-]"{number_regex}"\)?)+'
+    full_regex = fr'{number_regex}|(\(?{number_regex}[+*/-]{number_regex}\)?)+'
     compiled_regex = re.compile(full_regex)
-    if compiled_regex.match(expression):
-        return eval(expression
-                    .replace('""', '0')  # treat empty string numbers as 0
-                    .replace('"', '')  # remove quotes
-                    .replace(',', '')  # remove , formating (e.g 1,000,000 -> 1000000)
-                    )
+    # column variables are wrapped in double quotes in SQL generation -> values for the columns are wrapped as well
+    # -> remove double quotes before evaluation
+    processed_expression = (expression
+                            .replace('""', '0')  # treat empty string numbers as 0
+                            .replace("''", '0')  # treat empty string numbers as 0
+                            .replace('"', '')  # remove double quotes
+                            .replace("'", '')  # remove single quotes
+                            .replace(',', '')  # remove , formating (e.g 1,000,000 -> 1000000)
+                            )
+    if compiled_regex.match(processed_expression):
+        return eval(processed_expression)
     else:
         warnings.warn("Provided Expression: "
                       f"'{expression[:10]+'...'+expression[-10:] if len(expression) > 20 else expression}'"
