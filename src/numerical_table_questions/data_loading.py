@@ -68,7 +68,7 @@ class _WrapCustomTupleDataLoaderIter:
         return len(self.wrapped_iter)
 
 
-def path_from_components(data_dir, table_corpus, dataset_name, split, model_name=None) -> str:
+def path_from_components(table_corpus, dataset_name, split, model_name=None, data_dir: str = './data/NumTabQA/.cache') -> str:
     if model_name is None:
         # only filename of table question dataset (grouped by table; pre-tokenization) -> use with caching
         path = f"{table_corpus}_{split}_{dataset_name}"
@@ -82,7 +82,7 @@ def path_from_components(data_dir, table_corpus, dataset_name, split, model_name
 def load_split_tensor(split: str, table_corpus: str, dataset_name: str, model_name: str,
                       data_dir: str = './data/NumTabQA/.cache', full_path=None, output_dict: bool = False):
     if full_path is None:
-        full_path = path_from_components(data_dir, table_corpus, dataset_name, split, model_name=model_name)
+        full_path = path_from_components(table_corpus, dataset_name, split, model_name=model_name, data_dir=data_dir)
     data_dict = datasets.Dataset.load_from_disk(full_path).with_format('torch')
 
     if output_dict:
@@ -283,8 +283,8 @@ class TableQADataModule(L.LightningDataModule):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
             if self.lazy_data_processing:
-                self.splits['train'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, 'train'))
-                self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, 'validation'))
+                self.splits['train'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'train'))
+                self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'validation'))
             else:
                 self.splits['train'] = load_split_tensor('train', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('train')
@@ -294,14 +294,14 @@ class TableQADataModule(L.LightningDataModule):
         # Assign test dataset for use in dataloader(s)
         if stage == 'test':
             if self.lazy_data_processing:
-                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, self.model_name, 'test'))
+                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'test'))
             else:
                 self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
 
         if stage == 'predict':
             if self.lazy_data_processing:
-                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.data_dir, self.table_corpus, self.dataset_name, self.model_name, 'test'))
+                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, self.model_name, 'test'))
             else:
                 self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
