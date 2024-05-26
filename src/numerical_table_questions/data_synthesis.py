@@ -772,7 +772,7 @@ class QuestionTemplate:
                                               )
                                 computed_value = compute_arithmetic_expression_str(
                                     expression.format(**value_computation_kwargs)
-                                    .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace
+                                    .replace('""', '"1"')  # empty strings are also interpreted as 0 -> replace with 1 for safe division
                                     .replace('0', '1')
                                     )
                         computed_values[value_var] = computed_value
