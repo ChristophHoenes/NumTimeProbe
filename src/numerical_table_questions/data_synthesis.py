@@ -1507,19 +1507,55 @@ def execute_sql(query: str, dataframe: pd.DataFrame, debug_empty_result=False,
     return query_result
 
 
-def compute_answer_coordinates(query: str, dataframe: pd.DataFrame) -> AnswerCoordinates:
-    regex = re.compile(r"select(?P<aggregator_open>.+\()?(?P<column_name>.+)(?P<aggregator_close>\))?.*where", re.DOTALL)
-    match_object = regex.search(query.lower())
+def escape_regex_special_characters(string: str):
+    return (string
+            .replace('(', r'\(')
+            .replace(')', r'\)')
+            .replace('[', r'\[')
+            .replace(']', r'\]')
+            .replace('{', r'\{')
+            .replace('}', r'\}')
+            .replace('?', r'\?')
+            .replace('*', r'\*')
+            .replace('.', r'\.')
+            .replace(r'\\', r'\\\\')
+            )
+
+
+def column_name_from_match(match_object: re.Match, original_sql_query: str) -> str:
+    # extract get only the column name from the match object
     column_name_lower = match_object.group('column_name')
     # if column_name group matched too much (e.g the closing parenthesis of the aggregator plus whitespaces) remove them posthoc
     if match_object.group('aggregator_open') is not None and match_object.group('aggregator_close') is None:
-        column_name_lower = column_name_lower.strip().strip(')')
+        column_name_lower = column_name_lower.strip()
+        if column_name_lower.endswith(')'):
+            column_name_lower = column_name_lower[:-1]  # remove one trailing closing parenthesis (aggregator_close)
+    # use processed column name as search pattern -> escape special characters
+    column_name_pattern = escape_regex_special_characters(column_name_lower)
     # get span of only the column_name group (stripped of additional characters)
-    match_col_name = re.search(column_name_lower, query.lower())
+    match_col_name = re.search(column_name_pattern, original_sql_query.lower())
     col_name_span = match_col_name.span()
     # get column_name part of query in original case
-    column_name = query[col_name_span[0]:col_name_span[1]]
-    column_id = dataframe.columns.get_loc(column_name)
+    return original_sql_query[col_name_span[0]:col_name_span[1]].strip('"')  # remove double quote wrapping
+
+
+def compute_answer_coordinates(query: str, dataframe: pd.DataFrame, allowed_aggregators=('max', 'min', 'avg', 'sum', 'count')) -> AnswerCoordinates:
+    # match the SQL query to extract the aggregation column
+    regex = re.compile(rf"select(?P<aggregator_open>\s+({'|'.join(allowed_aggregators)})\()?"
+                       r"(?P<column_name>.+)"
+                       r"(?P<aggregator_close>\))?"
+                       r"(?P<window_and_from>.*from.*)"
+                       r"(?P<where>where.*)",
+                       re.DOTALL,
+                       )
+    match_object = regex.search(query.lower())
+    # get column_name part of query in original case
+    column_name = column_name_from_match(match_object, query)
+    if column_name in dataframe.columns:
+        column_id = dataframe.columns.get_loc(column_name)
+    else:
+        raise KeyError(f"Column name {column_name} was not found in table columns {list(dataframe.columns)}!")
+    # TODO use where group instead of searching again
     if 'where' not in (match_object.group('aggregator_open') or '') and 'where' not in (match_object.group('column_name') or ''):
         where_start = re.search('where', query.lower()).start()  # assumes 'where' does not occur in aggregator or column name
     else:
@@ -1786,7 +1822,13 @@ def remove_duplicate_qa_pairs(data_sample):
 def main():
     #table_dataset = create_table_dataset(base_dataset_split='validation', use_cache=False)
     #return create_basic_table_question_dataset(table_dataset, name='count_wikitables_validation', use_cache=False)
-    create_basic_postprocessed_versions()
+    #create_basic_postprocessed_versions()
+    table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
+    # run column_name deduplication (since code changed since table dataset creation)
+    for table in table_dataset:
+        table.column_names = tuple(table.deduplicate_column_names(table.column_names))
+        table._col2idx, table._idx2col = name_id_mapping(table.column_names, both_ways=True)
+    return create_basic_table_question_dataset(table_dataset, name='gittables_subset_10_train', use_cache=False, cache_path='/home/mamba/.cache')
 
 
 if __name__ == "__main__":
