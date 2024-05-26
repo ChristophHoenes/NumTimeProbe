@@ -206,6 +206,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
                            eval_batch_size=args.eval_batch_size_per_device,
                            lazy_data_processing=args.lazy_data_processing,
                            is_batch_dict=args.is_batch_dict,
+                           data_dir=args.data_dir,
                            tokenizing_args=tokenizer_args,
                            num_dataloader_workers=args.workers,
                            too_many_open_files_fix=misc_args.too_many_open_files_fix,

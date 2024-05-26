@@ -34,7 +34,7 @@ class TrainingArgs:
         aliases="--tokenizer",
     )
     data_dir: str = dArg(
-        default="./data",
+        default="./data/NumTabQA/.cache",
         help="Path to the data directory. By default, expects a train.txt and dev.txt file inside the directory.",  # noqa: E501
         aliases="-d",
     )
