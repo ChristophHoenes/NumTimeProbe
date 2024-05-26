@@ -439,7 +439,8 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
         if verbose:
             logger.info("Processing field 'answers':")
         tokenized['answers'], _ = unbind_table_batch(tokenized['answers'],
-                                                     pad_token_id=pad_token_id,
+                                                     # TODO rethink name mask token id <mask> token vs. mask target padding
+                                                     pad_token_id=mask_token_id,  # targets are padded with padding mask token (e.g. -100 for BART)
                                                      sequence_dimension=sequence_dimension,
                                                      verbose=verbose,
                                                      )
