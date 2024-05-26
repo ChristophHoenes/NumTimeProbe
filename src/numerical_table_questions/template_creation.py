@@ -422,17 +422,17 @@ def main(table_corpus: str = 'wikitablequestions', split: Optional[str] = None, 
     # single col
     main_expressions.append(SQLColumnExpression('{col1}'))
     dataset_names.append('filtered_col')
-    descriptions.append('')
+    descriptions.append('Basic dataset with an aggregator over a single column combined with all standard filter conditions.')
     expression_descriptions.append(None)
     # diff
     main_expressions.append(SQLColumnExpression(('{col1}', '{col2}',), '-'))
     dataset_names.append('difference')
-    descriptions.append('')
+    descriptions.append('Aggregator over difference between two columns combined with all standard filter conditions.')
     expression_descriptions.append(None)
     # ratio
     main_expressions.append(SQLColumnExpression(('{col1}', '{col2}',), '/'))
     dataset_names.append('ratio')
-    descriptions.append('')
+    descriptions.append('Aggregator over ratio between two columns combined with all standard filter conditions.')
     expression_descriptions.append(None)
     # complex expression one
     main_expressions.append(SQLColumnExpression(
@@ -450,12 +450,12 @@ def main(table_corpus: str = 'wikitablequestions', split: Optional[str] = None, 
         )
     )
     dataset_names.append('complex_expression_1')
-    descriptions.append('')
+    descriptions.append('Aggregator over complex arithmetic expression (x*y/x^2+y^2) combined with all standard filter conditions.')
     expression_descriptions.append(None)
     # add one
     main_expressions.append(SQLColumnExpression(('{col1}', '1',), '+'))
     dataset_names.append('add_one')
-    descriptions.append('')
+    descriptions.append('Aggregator over single column after adding a constant of one to it combined with all standard filter conditions.')
     expression_descriptions.append("of column {col1} after adding one to every value")
 
     if split is None:
