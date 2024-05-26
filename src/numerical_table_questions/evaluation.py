@@ -222,7 +222,9 @@ if __name__ == "__main__":
         # new training data (agg count 0%)
         #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
         # zero shot
-        evaluate_trained(args, misc_args, tokenizer_args)
+        #evaluate_trained(args, misc_args, tokenizer_args)
+        # trained with lazy processing (e.g. truncating too long tables)
+        evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
         wandb.finish()
     except:
         logger.error("Uncaught exception: %s", traceback.format_exc())
