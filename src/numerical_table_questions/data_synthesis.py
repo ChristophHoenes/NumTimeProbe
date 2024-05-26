@@ -658,15 +658,11 @@ class QuestionTemplate:
         for condition in self.conditions:
             # if two SQLColumnExpressions are compared in the condition no value needs to be sampled
             if not isinstance(condition.value, SQLColumnExpression):
-                value_computation_expression = condition.condition_column.generate()
+                value_computation_expression = condition.condition_string
                 condition_variables = {
                     'comparator': condition.comparator,
                     'column_vars': find_template_variables(value_computation_expression),
-                    'value_vars': (
-                        condition_val_vars
-                        if len(condition_val_vars := find_template_variables(condition.value)) > 0
-                        else []
-                        ),
+                    'value_vars': find_template_variables(condition.value_string),
                     'value_computation': value_computation_expression,
                     }
             condition_info.append(condition_variables)

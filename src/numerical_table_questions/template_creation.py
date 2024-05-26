@@ -97,15 +97,12 @@ def create_templates(main_expr: SQLColumnExpression,
             nl_condition_part = f"the expresion {base_condition.condition_column.generate()}"
         else:
             # single column variable
-            nl_condition_part = f"column {base_condition.generate(in_parts=True)['condition_column'].strip('"')}"
+            nl_condition_part = f"column {base_condition.condition_string.strip('"')}"
         if isinstance(base_condition.value, SQLColumnExpression):
             nl_value_part = f"the expression {base_condition.value.generate()}"
         else:
-            nl_value_part = base_condition.generate(in_parts=True)['value']
-        # old behavior (throw error # TODO delete)
-        #if isinstance(base_condition.condition_column, SQLColumnExpression) or isinstance(base_condition.value, SQLColumnExpression):
-        #    raise ValueError("The provided base_condition contains SQLColumnExpression(s)! "
-        #                     "This function only works for basic conditions with a simple condition column variable and a value variable. ")
+            nl_value_part = base_condition.value_string
+
         match base_condition.comparator:
             case '=': return f" given that {nl_condition_part} has a value equal to {nl_value_part}"
             case '!=': return f" given that {nl_condition_part} has a value different from {nl_value_part}"

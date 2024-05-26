@@ -210,7 +210,7 @@ class SQLConditionTemplate:
             "comparator must be in {self._allowed_comparators}!"
         self.comparator = comparator
         # correct processing based on datatype (str or SQLColumnExpression)
-        # like wrapping single column name in double quotes is handled in generate
+        # like wrapping single column name in double quotes is handled in condition_string property
         self.condition_column = condition
         """
         # can be hard coded value but is cast to SQLColumnExpression if template string
@@ -227,22 +227,27 @@ class SQLConditionTemplate:
                           "Make sure all additional variables occur in a previous condition or are of type column.")
         self.value = value
 
-    def generate(self, in_parts=False):
+    @property
+    def condition_string(self) -> str:
         if isinstance(self.condition_column, SQLColumnExpression):
-            condition_str = self.condition_column.generate()
+            return self.condition_column.generate()
         else:
+            # TODO make sure in table processing that " does not occur in any column name
             if self.condition_column.startswith('"') and self.condition_column.endswith('"'):
-                condition_str = self.condition_column
+                return self.condition_column
             else:
-                condition_str = f'"{self.condition_column}"'
+                return f'"{self.condition_column}"'
+
+    @property
+    def value_string(self) -> str:
         if isinstance(self.value, SQLColumnExpression):
-            value_str = self.value.generate()
+            return self.value.generate()
         else:
             # two single quotes as fallback if value is empty (e.g empty string)
-            value_str = (self.value or r"''")
-        if in_parts:
-            return {'condition_column': condition_str, 'comparator': self.comparator, 'value': value_str}
-        return f"\n\tAND {condition_str} {self.comparator} {value_str}"
+            return (self.value or r"''")
+
+    def generate(self):
+        return f"\n\tAND {self.condition_string} {self.comparator} {self.value_string}"
 
 
 class SQLTemplate:
