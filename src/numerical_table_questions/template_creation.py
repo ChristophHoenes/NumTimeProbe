@@ -64,7 +64,7 @@ def create_templates(main_expr: SQLColumnExpression,
     # transform main expression to natural languagr template string
     main_expr_str = main_expr.generate()
     main_variables = find_template_variables(main_expr_str)
-    if len(main_variables) > 1:
+    if len(main_variables) > 1 or expression_description is not None:
         # complex column expression
         nl_main_expression = "What is the {op}" + (expression_description or f" of the expression {main_expr_str}")
     elif len(main_variables) > 0:
@@ -147,7 +147,7 @@ def create_templates(main_expr: SQLColumnExpression,
                     var_type = 'value'
                 else:
                     var_type = 'column'
-                if (isinstance(condition.condition_column, SQLColumnExpression) 
+                if (isinstance(condition.condition_column, SQLColumnExpression)
                         or isinstance(condition.value, SQLColumnExpression)
                         or condition.comparator in ('<', '<=', '>', '>=')):
                     allowed_dtypes = ['numeric']
