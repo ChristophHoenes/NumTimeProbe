@@ -72,8 +72,7 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pa
     # add additional fields as meta info
     # if no padding idx is present -> add ooc (out of context) label for test set performance insights
     # TODO is sep token present when truncated? is this a problem? when comparing for pad_token_id perfect fit examples get mislabeled
-    is_truncated_feature = [sample['input_ids'][:, -1] != pad_token_id for sample in tokenized_batch]
-    tokenized_batch['is_truncated'] = torch.BoolTensor(is_truncated_feature)
+    tokenized_batch['is_truncated'] = tokenized_batch['input_ids'] != pad_token_id  # if not ending with pad token assume truncation
     # for simplifying debugging include table / question id
     tokenized_batch['question_id'] = torch.LongTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
     tokenized_batch['table_id'] = [sample['table_data'][0]['table']['table_id'] for sample in batch_of_index_ids]
