@@ -177,10 +177,25 @@ def list_of_dict_2_dict_of_lists(list_of_dicts: List[dict]) -> Dict[str, list]:
     return {key: [sample[key] for sample in list_of_dicts] for key in keys}
 
 
-def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict], model_name: str, **kwargs):
+def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict],
+                              model_name: str,
+                              # TODO maybe infer from model type info but maybe better instance-wise -> more direct/safe
+                              pad_token_id: int, mask_token_id: int,
+                              verbose: bool = True, **kwargs):
+    # if a single sample (dict) is passed temporarily wrap in list for generalization
+    if isinstance(tokenizer_inputs, dict):
+        tokenizer_inputs = [tokenizer_inputs]
+        single_example = True
+    else:
+        single_example = False
+
     if model_name == 'tapex':
-        progress_bar = tqdm(tokenizer_inputs)
-        progress_bar.set_description("Tapex Tokenizing (inputs and targets separately)...")
+        if verbose:
+            progress_bar = tqdm(tokenizer_inputs)
+            progress_bar.set_description("Tapex Tokenizing (inputs and targets separately)...")
+        else:
+            progress_bar = tokenizer_inputs  # no progress bar
+
         tokenized_tuples = [
             (tokenizer(**table_question), tokenizer(**target)['input_ids'])
             for table_question, target in progress_bar
@@ -219,16 +234,19 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
                     }
                 for sample in tokenized
                 ]
-        # convert to dict of lists
-        return list_of_dict_2_dict_of_lists(tokenized)
     else:
-        logger.info(f"No custom tokenizing procedure for model '{model_name}'. Using standard tokenizer call.")
-        progress_bar = tqdm(tokenizer_inputs)
-        progress_bar.set_description("Generic Tokenization...")
+        if verbose:
+            logger.info(f"No custom tokenizing procedure for model '{model_name}'. Using standard tokenizer call.")
+            progress_bar = tqdm(tokenizer_inputs)
+            progress_bar.set_description("Generic Tokenization...")
+        else:
+            progress_bar = tokenizer_inputs  # no progress bar
+
         if isinstance(tokenizer_inputs, list):  # sample by sample
             tokenized = [tokenizer(**sample) for sample in tokenizer_inputs]
         else:  # batched
             tokenized = tokenizer(**tokenizer_inputs)
+
         if kwargs.get('optimize_int_type'):
             # infer smallest possible int dtype to represent the ids
             tokenized = [
@@ -237,7 +255,13 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
                     }
                 for sample in tokenized
                 ]
-        return list_of_dict_2_dict_of_lists(tokenized)
+    # convert from list of samples (dicts) to dict (samples as lists grouped by key)
+    tokenized = list_of_dicts_2_dict_of_lists(tokenized)
+    if single_example:
+        tokenized = {key: value[0]  # unwrap list; extract first (and only) sample
+                     for key, value in tokenized.items()
+                     }
+    return tokenized
 
 
 def batch_end_of_sequence(batch: torch.Tensor, pad_token_id: int, sequence_dimension: int = 1) -> torch.Tensor:
