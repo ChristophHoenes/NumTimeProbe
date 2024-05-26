@@ -308,7 +308,7 @@ class Table:
             "Either a non-empty extension_string or use_numbering=True must be used!"
         original_column_names = column_names
         while_counter = 0
-        while len(set(column_names)) != len(column_names):
+        while len(set([col.lower() for col in column_names])) != len(column_names):
             if while_counter > while_killswitch:
                 raise Exception(
                     f"""
@@ -321,15 +321,15 @@ class Table:
             col_name_counter = dict()
             new_col_names = []
             for col_name in column_names:
-                if col_name_counter.get(col_name) is None:
-                    col_name_counter[col_name] = 1
+                if col_name_counter.get(col_name.lower()) is None:
+                    col_name_counter[col_name.lower()] = 1
                     new_col_names.append(col_name)
                 else:
-                    col_name_counter[col_name] += 1
+                    col_name_counter[col_name.lower()] += 1
                     new_col_names.append(
                         col_name
                         + f"{extension_string}"
-                        + f"{col_name_counter[col_name] if use_numbering else ''}"
+                        + f"{col_name_counter[col_name.lower()] if use_numbering else ''}"
                     )
             column_names = new_col_names
             while_counter += 1
