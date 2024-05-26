@@ -342,8 +342,8 @@ class LightningWrapper(L.LightningModule):
         # if at least one metric that evaluates generation results exists execute generation (can be more expensive than a simple forward pass)
         if len(self.generation_metrics) > 0:
             if isinstance(batch, dict):
-                text_targets = target['text']
-                input_ids = inputs["input_ids"]
+                text_targets = batch['answers']
+                input_ids = inputs['input_ids']
             else:
                 input_ids = inputs[0] if isinstance(inputs, (tuple, list)) else inputs
                 try:
