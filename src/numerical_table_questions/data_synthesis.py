@@ -563,10 +563,9 @@ class QuestionTemplate:
             count_definition = None
         elif len(count_definition) > 1:
             warnings.warn("Encountered multiple different definitions of the COUNT operator! Selecting only the first one.")
-            count_definition = count_definition[0]
 
         non_count_operators = tuple([op for op in operators if op.sql != 'count'])
-        return non_count_operators, count_definition
+        return non_count_operators, count_definition[0]  # always return the first count definition
 
     def extract_aggregation_column(self, assignment: dict):
         if self.main_expression.operand is None:
