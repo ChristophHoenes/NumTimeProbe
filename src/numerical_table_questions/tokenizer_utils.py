@@ -197,12 +197,17 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
             progress_bar = tokenizer_inputs  # no progress bar
 
         tokenized_tuples = [
-            (tokenizer(**table_question), tokenizer(**target)['input_ids'])
+            (table_question['query'], tokenizer(**table_question), target['answer'], tokenizer(**target)['input_ids'])
             for table_question, target in progress_bar
             ]
         # convert list of tuples to list of dicts (add target ids to input's tokenized dict)
         tokenized = []
-        for input_tokenized, target_input_ids in tokenized_tuples:
+        for question, input_tokenized, answer, target_input_ids in tokenized_tuples:
+            # save original text along with tokenized input
+            input_tokenized['questions'] = question
+            input_tokenized['answers'] = answer
+            # add target padding mask (e.g. swap pad tokens with padding mask token e.g. -100 for BART)
+            target_input_ids[target_input_ids == pad_token_id] = mask_token_id
             # add field for tokenized targets
             input_tokenized['targets'] = target_input_ids
             tokenized.append(input_tokenized)
