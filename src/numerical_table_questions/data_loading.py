@@ -247,7 +247,10 @@ class TableQADataModule(L.LightningDataModule):
                 logger.info("Tokenize examples...")
                 # run tokenization and return tokenized fields
                 # from list of tokenizer input fields (list of dicts) to dict of tokenizer output fields (dict with lists of question samples as values)
-                tokenized_dict = model_specific_tokenizing(self.tokenizer, tokenizer_inputs, self.model_name, **tokenizing_args)
+                tokenized_dict = model_specific_tokenizing(self.tokenizer, tokenizer_inputs, self.model_name,
+                                                           self.model_specs.pad_token_id, self.model_specs.mask_token_id,
+                                                           **tokenizing_args,
+                                                           )
 
                 # add back the fields that did not go through tokenization
                 restore_metadata(data_split, tokenized_dict)
@@ -283,8 +286,8 @@ class TableQADataModule(L.LightningDataModule):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
             if self.lazy_data_processing:
-                self.splits['train'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'train'))
-                self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'validation'))
+                self.splits['train'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'train'), data_dir=self.data_dir)
+                self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'validation'), data_dir=self.data_dir)
             else:
                 self.splits['train'] = load_split_tensor('train', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('train')
@@ -294,14 +297,14 @@ class TableQADataModule(L.LightningDataModule):
         # Assign test dataset for use in dataloader(s)
         if stage == 'test':
             if self.lazy_data_processing:
-                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'test'))
+                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'test'), data_dir=self.data_dir)
             else:
                 self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
 
         if stage == 'predict':
             if self.lazy_data_processing:
-                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, self.model_name, 'test'))
+                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, self.model_name, 'test'), data_dir=self.data_dir)
             else:
                 self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
@@ -315,6 +318,7 @@ class TableQADataModule(L.LightningDataModule):
                 tokenizer=self.tokenizer,
                 tokenizing_args=self.tokenizing_args,
                 pad_token_id=self.model_specs.pad_token_id,
+                mask_token_id=self.model_specs.mask_token_id,
                 truncation=self.tokenizing_args['truncation'],
                 padding=self.tokenizing_args['padding'],
                 )

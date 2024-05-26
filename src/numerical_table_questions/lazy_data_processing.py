@@ -6,7 +6,7 @@ import torch
 
 from numerical_table_questions.data_caching import caching
 from numerical_table_questions.data_synthesis import Table
-from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata
+from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
 
 def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
@@ -20,12 +20,16 @@ def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
 
 
 class QuestionTableIndexDataset(torch.utils.data.Dataset):
-    def __init__(self, table_dataset: Union[str, Path, datasets.Dataset]):
+    def __init__(self, table_dataset: Union[str, Path, datasets.Dataset], data_dir: str = './data/NumTabQA/.cache'):
         if isinstance(table_dataset, (str, Path)):
-            self.path = table_dataset
-            table_dataset = caching(self.path)
+            self.data_dir = data_dir
+            self.dataset_version = table_dataset
+            table_dataset = caching(self.dataset_version, cache_path=data_dir)
+            if table_dataset is None:
+                raise FileNotFoundError(f"No table dataset was found at path {self.data_dir + '/' + self.dataset_version}")
         else:
-            self.path = None
+            self.data_dir = None
+            self.dataset_version = None
         self.index_dict = generate_question_index(table_dataset)
         self.table_dataset = {sample['table']['table_id']: sample for sample in table_dataset}
 
@@ -41,7 +45,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         return {'table_data': table_data, 'question_number': question_number, 'question_id': idx}
 
 
-def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pad_token_id: int, truncation='drop_rows_to_fit', padding='max_length'):
+def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pad_token_id: int, mask_token_id: int, truncation='drop_rows_to_fit', padding='max_length'):
     tokenized_batch = []
     # get table and question from dataset
     for sample_idx in batch_of_index_ids:
@@ -54,9 +58,9 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pa
         # apply row permutation
         tokenizer_inputs = []
         tokenizer_inputs.extend(
-            prepare_for_tokenizer([table_data], model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding)
+            prepare_for_tokenizer(table_data, model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding)
             )
-        tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, **tokenizing_args)
+        tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, pad_token_id=pad_token_id, mask_token_id=mask_token_id, verbose=False, **tokenizing_args)
         restore_metadata(table_data, tokenized_dict)
         tokenized_batch.append(tokenized_dict)
     # concat at batch dimension
