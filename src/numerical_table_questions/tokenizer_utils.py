@@ -203,7 +203,8 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
         # convert list of tuples to list of dicts (add target ids to input's tokenized dict)
         tokenized = []
         for input_tokenized, target_input_ids in tokenized_tuples:
-            input_tokenized['answers'] = target_input_ids
+            # add field for tokenized targets
+            input_tokenized['targets'] = target_input_ids
             tokenized.append(input_tokenized)
 
         """
@@ -230,7 +231,7 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
                 sample | {  # keep all keys of sample but update the following
                     'input_ids': cast_to_reduced_int(sample['input_ids'], num_values=tokenizer.vocab_size),
                     'attention_mask': cast_to_reduced_int(sample['attention_mask'], num_values=2),  # reduce to binary int format for mask
-                    'answers': cast_to_reduced_int(sample['answers'], num_values=tokenizer.vocab_size),
+                    'targets': cast_to_reduced_int(sample['targets'], num_values=tokenizer.vocab_size),
                     }
                 for sample in tokenized
                 ]
