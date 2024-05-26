@@ -12,8 +12,8 @@ from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for
 def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
     """Given a TableQuestionDataset compute a mapping from question index to table id and question index within the table."""
     idx = -1
-    question2table_index = {(idx := idx + 1): (table['table']['table_id'], q)
-                            for table in table_dataset
+    question2table_index = {(idx := idx + 1): (t, q)
+                            for t, table in enumerate(table_dataset)
                             for q, _ in enumerate(table['questions'])
                             }
     return question2table_index
@@ -31,18 +31,18 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
             self.data_dir = None
             self.dataset_version = None
         self.index_dict = generate_question_index(table_dataset)
-        self.table_dataset = {sample['table']['table_id']: sample for sample in table_dataset}
+        self.table_dataset = table_dataset
 
     def __len__(self):
         return len(self.index_dict)
 
     def __getitem__(self, idx):
-        table_id, question_number = self.index_dict[idx]
-        table_data = self.table_dataset[table_id]
+        table_idx, question_number = self.index_dict[idx]
+        table_data = self.table_dataset.select([table_idx])
         # maybe leave for collate for more flexibility
         # table = Table.from_state_dict(table_data['table'])
         # question = table_data['questions'][question_number]
-        return {'table_data': table_data, 'question_number': question_number, 'question_id': idx}
+        return {'table_data': table_data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
 
 
 def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pad_token_id: int, mask_token_id: int, truncation='drop_rows_to_fit', padding='max_length'):
@@ -63,12 +63,12 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pa
         tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, pad_token_id=pad_token_id, mask_token_id=mask_token_id, verbose=False, **tokenizing_args)
         restore_metadata(table_data, tokenized_dict)
         tokenized_batch.append(tokenized_dict)
-    # concat at batch dimension
-    tokenizer_output_names = tokenized_dict[0].keys()
-    is_all_tensors = {key: all([isinstance(sample[key], torch.Tensor) for sample in tokenized_batch]) for key in tokenizer_output_names}
-    tokenized_batch = {key: (torch.cat([sample[key] for sample in tokenized_batch])  # concat tensors of samples if possible
+    # concat tensors at batch dimension (from list of single-tensor-item-lists to tensor batch)
+    tokenizer_output_names = tokenized_batch[0].keys()  # all samples should have the same tokenizer outputs
+    is_all_tensors = {key: all([isinstance(sample[key][0], torch.Tensor) for sample in tokenized_batch]) for key in tokenizer_output_names}
+    tokenized_batch = {key: (torch.cat([sample[key][0] for sample in tokenized_batch])  # concat tensors of samples if possible
                              if is_all_tensors[key]
-                             else [sample[key]for sample in tokenized_batch]  # if field is not tensor type return a list of samples
+                             else [sample[key][0] for sample in tokenized_batch]  # if field is not tensor type return a list of samples
                              )
                        for key in tokenizer_output_names
                        }
