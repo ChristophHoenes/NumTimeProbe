@@ -1525,7 +1525,7 @@ def compute_answer_coordinates(query: str, dataframe: pd.DataFrame) -> AnswerCoo
     else:
         where_start = re.search('where true', query.lower()).start()  # assumes where clause starts with 'where true' followed by conditions starting with 'AND'
     df_copy_with_row_idxs = dataframe.assign(__row_idx__=pd.Series(range(dataframe.shape[0])))
-    answer_set_query = 'SELECT __row_idx__\n' + query[where_start:]
+    answer_set_query = 'SELECT "__row_idx__"\n' + query[where_start:]
     answer_row_idxs = execute_sql(answer_set_query, df_copy_with_row_idxs)
     return AnswerCoordinates(column_id, list(answer_row_idxs), dataframe.shape[0], dataframe.shape[1])
 
