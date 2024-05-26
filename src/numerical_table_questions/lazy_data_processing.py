@@ -75,9 +75,14 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pa
     is_truncated_feature = [sample['input_ids'][:, -1] != pad_token_id for sample in tokenized_batch]
     tokenized_batch['is_truncated'] = torch.BoolTensor(is_truncated_feature)
     # for simplifying debugging include table / question id
-    tokenized_batch['question_id'] = torch.IntTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
-    tokenized_batch['table_id'] = [sample['table_data']['table_id'] for sample in batch_of_index_ids]
-    tokenized_batch['question_number'] = torch.IntTensor([sample['question_number'] for sample in batch_of_index_ids])  # local id within table batch
+    tokenized_batch['question_id'] = torch.LongTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
+    tokenized_batch['table_id'] = [sample['table_data'][0]['table']['table_id'] for sample in batch_of_index_ids]
+    tokenized_batch['question_number'] = torch.LongTensor([sample['question_number'] for sample in batch_of_index_ids])  # local id within table batch
+
+    # ensure all int type tensors have dtype long
+    tokenized_batch = {key: convert_to_long_tensor_if_int_tensor(value)
+                       for key, value in tokenized_batch.items()
+                       }
     return tokenized_batch
 
 

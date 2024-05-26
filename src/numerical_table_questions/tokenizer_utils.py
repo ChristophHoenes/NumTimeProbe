@@ -168,6 +168,20 @@ def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
     return ints.to(cast_to)
 
 
+def convert_to_long_tensor_if_int_tensor(feature):
+    """ Auxilary function to ensure long type Tensors as model inputs.
+        Useful when loading potentially reduced int types (see cast_to_reduced_int) from disk.
+        Function allows for any input type and only modifies the input if it is an int tensor.
+        Otherwise the input is returned unchanged. If the tensor is already of type long conversion is skipped as well.
+    """
+    if isinstance(feature, torch.Tensor) and not torch.is_floating_point(feature) and not isinstance(feature, torch.LongTensor):
+        original_device = feature.device
+        converted_tensor = feature.type(torch.LongTensor).to(original_device)
+        return converted_tensor
+    else:
+        return feature  # if not a tensor or float return original value
+
+
 def list_of_dicts_2_dict_of_lists(list_of_dicts: List[dict]) -> Dict[str, list]:
     if len(list_of_dicts) == 0:
         return dict()

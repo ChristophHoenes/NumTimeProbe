@@ -19,7 +19,7 @@ from warmup_scheduler import GradualWarmupScheduler
 
 from dlib.frameworks.pytorch import get_rank
 from numerical_table_questions.metrics import str_match_accuracy
-from numerical_table_questions.tokenizer_utils import get_tokenizer
+from numerical_table_questions.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
 
 if TYPE_CHECKING:
     from train import TrainingArgs
@@ -198,7 +198,11 @@ class LightningWrapper(L.LightningModule):
                               for model_input_id, data_input_id in self.model_specs.input_mapping.items()
                               if isinstance(model_input_id, str)
                               }
-            outputs = self.model(*forward_args, **forward_kwargs)
+            # make sure all int tensors to have dtype long; non-int-tensors stay unchanged
+            forward_kwargs = {key: convert_to_long_tensor_if_int_tensor(value)
+                              for key, value in forward_kwargs.items()
+                              }
+            outputs = self.model(**forward_kwargs)
         else:
             # always wrap inputs in tuple
             if isinstance(inputs, list):
@@ -212,6 +216,11 @@ class LightningWrapper(L.LightningModule):
                 forward_kwargs = {model_input_id: data_function(inputs, target)
                                   for model_input_id, data_function in self.model_specs.input_mapping.items()
                                   if isinstance(model_input_id, str)
+                                  }
+                # make sure all int tensors to have dtype long; non-int-tensors stay unchanged
+                forward_args = [convert_to_long_tensor_if_int_tensor(item) for item in forward_args]
+                forward_kwargs = {key: convert_to_long_tensor_if_int_tensor(value)
+                                  for key, value in forward_kwargs.items()
                                   }
                 outputs = self.model(*forward_args, **forward_kwargs)
             elif self.model_specs.input_targets:
