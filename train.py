@@ -17,9 +17,9 @@ from loguru import logger
 from transformers import PreTrainedModel
 
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
-from dlib.frameworks.lightning import CUDAMetricsCallback
-from dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
-from dlib.frameworks.wandb import (
+from numerical_table_questions.dlib.frameworks.lightning import CUDAMetricsCallback
+from numerical_table_questions.dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
+from numerical_table_questions.dlib.frameworks.wandb import (
     WANDB_ENTITY,
     WANDB_PROJECT,
     WandbCleanupDiskAndCloudSpaceCallback,

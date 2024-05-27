@@ -17,7 +17,7 @@ from transformers.models.auto.modeling_auto import (
 from transformers.optimization import get_scheduler
 from warmup_scheduler import GradualWarmupScheduler
 
-from dlib.frameworks.pytorch import get_rank
+from numerical_table_questions.dlib.frameworks.pytorch import get_rank
 from numerical_table_questions.metrics import str_match_accuracy
 from numerical_table_questions.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
 

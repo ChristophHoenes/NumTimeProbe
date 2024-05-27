@@ -14,7 +14,7 @@ from lightning.pytorch.loggers import WandbLogger
 from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
 
 import numerical_table_questions.data_synthesis
-from dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
+from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from numerical_table_questions.data_loading import TableQADataModule
 from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql

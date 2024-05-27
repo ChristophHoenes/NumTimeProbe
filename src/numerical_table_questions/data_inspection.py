@@ -8,11 +8,11 @@ import datasets
 import numpy as np
 import pandas as pd
 
-from arguments import DataProcessingArgs
-from dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
+from numerical_table_questions.arguments import DataProcessingArgs
+from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 #from src.numerical_table_questions.data_caching import caching
-from data_caching import caching, delete_dataset
-from data_synthesis import Table, remove_duplicate_qa_pairs
+from numerical_table_questions.data_caching import caching, delete_dataset
+from numerical_table_questions.data_synthesis import Table, remove_duplicate_qa_pairs
 
 
 DUMMY_DATA = datasets.Dataset.from_dict({
