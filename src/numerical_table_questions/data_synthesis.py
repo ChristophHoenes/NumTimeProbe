@@ -1507,21 +1507,6 @@ def execute_sql(query: str, dataframe: pd.DataFrame, debug_empty_result=False,
     return query_result
 
 
-def escape_regex_special_characters(string: str):
-    return (string
-            .replace('(', r'\(')
-            .replace(')', r'\)')
-            .replace('[', r'\[')
-            .replace(']', r'\]')
-            .replace('{', r'\{')
-            .replace('}', r'\}')
-            .replace('?', r'\?')
-            .replace('*', r'\*')
-            .replace('.', r'\.')
-            .replace(r'\\', r'\\\\')
-            )
-
-
 def compute_answer_coordinates(column_name: str, dataframe: pd.DataFrame, query: str) -> AnswerCoordinates:
     if column_name in dataframe.columns:
         column_id = dataframe.columns.get_loc(column_name)
