@@ -27,7 +27,7 @@ from dlib.frameworks.wandb import (
     check_for_wandb_checkpoint_and_download_if_necessary,
 )
 from numerical_table_questions.data_loading import TableQADataModule
-from numerical_table_questions.helpers import (
+from numerical_table_questions.system_helpers import (
     choose_auto_accelerator,
     choose_auto_devices,
     handle_batch_size_logic_,
