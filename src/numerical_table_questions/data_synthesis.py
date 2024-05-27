@@ -476,7 +476,7 @@ class TableQuestion:
         # TODO add Count question to table dataset explicitly for every condition type and condition columns hash
         query_result = execute_sql(self._sql_query, self._table.pandas_dataframe)
         if compute_coordinates:
-            self._answer_coordinates = compute_answer_coordinates(self._sql_query, self._table.pandas_dataframe)
+            self._answer_coordinates = compute_answer_coordinates(self.aggregation_column, self._table.pandas_dataframe, self._sql_query)
         if len(query_result) > 1:
             self._multi_row_answer = True
             # do not warn because it spams the console during dataset creation;
@@ -1522,46 +1522,14 @@ def escape_regex_special_characters(string: str):
             )
 
 
-def column_name_from_match(match_object: re.Match, original_sql_query: str) -> str:
-    # extract get only the column name from the match object
-    column_name_lower = match_object.group('column_name')
-    # if column_name group matched too much (e.g the closing parenthesis of the aggregator plus whitespaces) remove them posthoc
-    if match_object.group('aggregator_open') is not None and match_object.group('aggregator_close') is None:
-        column_name_lower = column_name_lower.strip()
-        if column_name_lower.endswith(')'):
-            column_name_lower = column_name_lower[:-1]  # remove one trailing closing parenthesis (aggregator_close)
-    # use processed column name as search pattern -> escape special characters
-    column_name_pattern = escape_regex_special_characters(column_name_lower)
-    # get span of only the column_name group (stripped of additional characters)
-    match_col_name = re.search(column_name_pattern, original_sql_query.lower())
-    col_name_span = match_col_name.span()
-    # get column_name part of query in original case
-    return original_sql_query[col_name_span[0]:col_name_span[1]].strip('"')  # remove double quote wrapping
-
-
-def compute_answer_coordinates(query: str, dataframe: pd.DataFrame, allowed_aggregators=('max', 'min', 'avg', 'sum', 'count')) -> AnswerCoordinates:
-    # match the SQL query to extract the aggregation column
-    regex = re.compile(rf"select(?P<aggregator_open>\s+({'|'.join(allowed_aggregators)})\()?"
-                       r"(?P<column_name>.+)"
-                       r"(?P<aggregator_close>\))?"
-                       r"(?P<window_and_from>.*from.*)"
-                       r"(?P<where>where.*)",
-                       re.DOTALL,
-                       )
-    match_object = regex.search(query.lower())
-    # get column_name part of query in original case
-    column_name = column_name_from_match(match_object, query)
+def compute_answer_coordinates(column_name: str, dataframe: pd.DataFrame, query: str) -> AnswerCoordinates:
     if column_name in dataframe.columns:
         column_id = dataframe.columns.get_loc(column_name)
     else:
         raise KeyError(f"Column name {column_name} was not found in table columns {list(dataframe.columns)}!")
-    # TODO use where group instead of searching again
-    if 'where' not in (match_object.group('aggregator_open') or '') and 'where' not in (match_object.group('column_name') or ''):
-        where_start = re.search('where', query.lower()).start()  # assumes 'where' does not occur in aggregator or column name
-    else:
-        where_start = re.search('where true', query.lower()).start()  # assumes where clause starts with 'where true' followed by conditions starting with 'AND'
+    where_start = re.search(r'from df\s+where', query.lower()).start()  # assumes 'from df where' does not occur in aggregator or column name
     df_copy_with_row_idxs = dataframe.assign(__row_idx__=pd.Series(range(dataframe.shape[0])))
-    answer_set_query = 'SELECT "__row_idx__"\n' + query[where_start:]
+    answer_set_query = 'SELECT "__row_idx__" ' + query[where_start:]
     answer_row_idxs = execute_sql(answer_set_query, df_copy_with_row_idxs)
     return AnswerCoordinates(column_id, list(answer_row_idxs), dataframe.shape[0], dataframe.shape[1])
 
