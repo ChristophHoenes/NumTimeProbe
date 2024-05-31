@@ -233,7 +233,9 @@ if __name__ == "__main__":
         # zero shot
         #evaluate_trained(args, misc_args, tokenizer_args)
         # trained with lazy processing (e.g. truncating too long tables)
-        evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
+        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
+        # trained lazy diff
+        evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
         wandb.finish()
     except:
         logger.error("Uncaught exception: %s", traceback.format_exc())
