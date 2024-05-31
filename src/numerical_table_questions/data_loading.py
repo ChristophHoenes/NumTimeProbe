@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import datetime
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import datasets
 import lightning as L
@@ -23,7 +23,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_caching import caching
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset, table_collate
-from numerical_table_questions.model import get_model_type_info
+from numerical_table_questions.model_utils import get_model_type_info
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, post_tokenizing, restore_metadata
 from numerical_table_questions.dlib.frameworks.pytorch import (
     get_rank,
