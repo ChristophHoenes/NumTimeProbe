@@ -1005,6 +1005,7 @@ class TableQuestionDataSet:
                  question_templates: Optional[List[QuestionTemplate]] = None,
                  tables: Optional[List[Table]] = None,
                  compute_answers=True,
+                 compute_coordinates=True,
                  allow_multiple_answers=True,
                  ) -> None:
         self.name = name
@@ -1012,6 +1013,7 @@ class TableQuestionDataSet:
         self._question_templates = question_templates
         self._tables = {table._table_id: table for table in (tables or [])}
         self._unanswerable_questions = []
+        self._compute_coordinates = compute_coordinates
         self._questions = self._initialize_questions(question_templates,
                                                      tables,
                                                      compute_answers=compute_answers
@@ -1100,7 +1102,7 @@ class TableQuestionDataSet:
             self._questions.extend(artifact)
             self._tables[artifact._table._table_id] = artifact._table
             if artifact._answer is None and compute_answers:
-                artifact.compute_answer()
+                artifact.compute_answer(compute_coordinates=self._compute_coordinates)
         else:
             raise TypeError("Argument artifact must be of type "
                             "Table, QuestionTemplate or TableQuestion!"
@@ -1111,6 +1113,8 @@ class TableQuestionDataSet:
         """Creates a huggingface datasets.Dataset from the questions in this dataset."""
         logger.info('Grouping questions by table...')
         # TODO refactor: use self.questions_by_table
+        # TODO add column_value_densitiy feature per question
+        # and maybe aggregation_value_density/diversity (count distinct/count -> additional query)
         questions_by_table = {}
         for question in (progress_bar := tqdm(self._questions)):
             progress_bar.set_description("Saving questions by table: Questions processed")
@@ -1229,7 +1233,7 @@ class TableQuestionDataSet:
             logger.info('Computing pre-aggregation row counts of table questions...')
             for question in (progress_bar := tqdm(flattened_count_question_list)):
                 progress_bar.set_description("Computing pre-aggregation row counts")
-                question.compute_answer()
+                question.compute_answer(compute_coordinates=self._compute_coordinates)
                 # store count answer to be reused for similar questions (same condition)
                 # although question is hashable create new hash such that all questions
                 # with the same condition assignment have the same count result
@@ -1249,7 +1253,7 @@ class TableQuestionDataSet:
             for question in (progress_bar := tqdm(flattened_question_list)):
                 progress_bar.set_description("Computing answers to table questions")
                 if (cached_answer := answer_result_cache.get(question._sql_query)) is None:
-                    question.compute_answer()
+                    question.compute_answer(compute_coordinates=self._compute_coordinates)
                     # cache answers for questions with same sql
                     answer_result_cache[question._sql_query] = question._answer
                 else:
@@ -1266,7 +1270,7 @@ class TableQuestionDataSet:
                 if has_template_explicit_count_question[question.template_hash]:
                     explicit_count_questions.append(question)
                     if question._answer is None:
-                        question.compute_answer()
+                        question.compute_answer(compute_coordinates=self._compute_coordinates)
             flattened_question_list.extend(explicit_count_questions)
 
         # add row counts before aggregation as statistical property (meta data) of the TableQuestion
