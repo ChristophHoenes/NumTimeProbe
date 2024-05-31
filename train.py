@@ -304,7 +304,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
             logger.success("Saving finished!")
 
         if args.test_after_train_end:
-            if args.num_devices > 1 and current_process_rank == 0:
+            if torch.cuda.device_count() > 1 and current_process_rank == 0:
                 logger.info(f"Training was performed on {args.num_devices} devices. "
                             "Testing should be run on a single device if possible. Skip testing for now (use evaluate.py).")
             else:
