@@ -14,7 +14,7 @@ from lightning.pytorch.loggers import WandbLogger
 from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
 
 import numerical_table_questions.data_synthesis
-from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
+from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from numerical_table_questions.data_loading import TableQADataModule
 from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql
@@ -149,6 +149,13 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
         tags=['eval', *misc_args.wandb_tags],
         name=misc_args.wandb_run_name,
     )
+
+    # process (download) checkpoint_path to enable remote wandb checkpoint paths
+    if args.checkpoint_path:
+        args.checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
+            args.checkpoint_path, wandb_logger.experiment
+        )
+
     # Initialize trainer
     trainer = Trainer(
         max_steps=eval_args.training_goal,
@@ -216,7 +223,6 @@ if __name__ == "__main__":
     # import os
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     args, misc_args, tokenizer_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
-    run = wandb.init(project="table-qa-debug", job_type="add-log")
     try:
         # old training data (agg count 1 a lot)
         #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
