@@ -97,7 +97,8 @@ def create_templates(main_expr: SQLColumnExpression,
             nl_condition_part = f"the expresion {base_condition.condition_column.generate()}"
         else:
             # single column variable
-            nl_condition_part = f"column {base_condition.condition_string.strip('"')}"
+            plain_column_name = base_condition.condition_string.strip('"')
+            nl_condition_part = f"column {plain_column_name}"
         if isinstance(base_condition.value, SQLColumnExpression):
             nl_value_part = f"the expression {base_condition.value.generate()}"
         else:
