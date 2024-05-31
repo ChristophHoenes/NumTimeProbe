@@ -19,7 +19,8 @@ from numerical_table_questions.arguments import TrainingArgs, MiscArgs, Tokeniza
 from numerical_table_questions.data_loading import TableQADataModule
 from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql
 from numerical_table_questions.metrics import token_accuracy
-from numerical_table_questions.model import LightningWrapper, get_model_module
+from numerical_table_questions.model import LightningWrapper
+from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
@@ -165,7 +166,9 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
     # for this to work the hyperparameters need to be saved and no positional arguments in LightningWrapper are allowed
     # alternatively overwrite load_from_checkpoint but not recommended since some other side effects from super() might be lost and model is still needed
     # model = LightningWrapper.load_from_checkpoint(checkpoint_path=resolved_checkpoint_path)
-    model = get_model_module(eval_args)
+    model_module = get_model_module(eval_args.model_name_or_path)
+    model_kwargs = get_model_specific_config(eval_args.model_name_or_path)
+    model = LightningWrapper(model_module, eval_args, **model_kwargs)
     # TODO check local first then wandb
     if resolved_checkpoint_path:
         checkpoint_content = torch.load(resolved_checkpoint_path)

@@ -4,21 +4,13 @@ from typing import TYPE_CHECKING, Optional, Union, Dict, Callable, Tuple, List
 
 import lightning as L
 import torch
-import transformers
 from loguru import logger
 from torch.optim import AdamW
 from torchmetrics import MetricCollection
-from transformers.modeling_utils import PreTrainedModel
-from transformers.models.auto.configuration_auto import AutoConfig
-from transformers.models.auto.modeling_auto import (
-    AutoModelForCausalLM,
-    AutoModelForMaskedLM,
-)
 from transformers.optimization import get_scheduler
 from warmup_scheduler import GradualWarmupScheduler
 
-from numerical_table_questions.dlib.frameworks.pytorch import get_rank
-from numerical_table_questions.metrics import str_match_accuracy
+from numerical_table_questions.model_utils import ModelTypeInfo
 from numerical_table_questions.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
 
 if TYPE_CHECKING:
@@ -39,31 +31,6 @@ class OptimizerArgs:
     def __post_init__(self):
         # pass learning rate as kwarg to the optimizer_class
         self.kwargs['lr'] = self.learning_rate
-
-
-@dataclass
-class ModelTypeInfo:
-    model_name_or_path: str
-    pad_token_id: Optional[int] = None
-    mask_token_id: Optional[int] = None
-    # index of loss in outputs
-    loss_out_id: Optional[Union[int, str]] = None
-    prediction_scores_out_id: Optional[Union[int, str]] = 0
-    hidden_state_out_id: Optional[Union[int, str]] = None
-    attention_out_id: Optional[Union[int, str]] = None
-    # whether the forward pass expects the tragets or not
-    input_targets: bool = False
-    # in data preparation if dataset is converted to TensorDataset filter
-    # the specified attributes from the data dict
-    filter_data_attributes: Optional[List[str]] = None
-    # any additional model specific arguments
-    # (if key is of type int it is interpreted as positional or otherwise as keyword argument)
-    input_mapping: dict = field(default_factory=dict)
-    dict_input_mapping: dict = field(default_factory=dict)
-
-    def __post_init__(self):
-        # TODO value checks
-        pass
 
 
 def order_positional_arguments(inputs, target, input_map: dict) -> tuple:
@@ -493,48 +460,3 @@ class LightningWrapper(L.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},
         }
-
-
-def get_model_type_info(model_name_or_path: str):
-    match model_name_or_path.lower():
-        case 'tapex':
-            return ModelTypeInfo(
-                model_name_or_path=model_name_or_path,
-                pad_token_id=1,
-                mask_token_id=-100,
-                input_targets=True,
-                loss_out_id='loss',
-                filter_data_attributes=['input_ids', 'attention_mask'],
-                input_mapping={
-                    '*': None,
-                    'labels': lambda x, y: y,
-                    },
-                dict_input_mapping={
-                    'input_ids': 'input_ids',
-                    'attention_mask': 'attention_mask',
-                    'labels': 'targets',
-                    },
-                )
-        case _:
-            warnings.warn(f"Unknown model '{model_name_or_path}'! No ModelTypeInfo will be defined, relying on default config.")
-
-
-def get_model_module(training_args, **kwargs):
-    non_default_kwargs = dict()
-    if training_args.model_name_or_path.lower() == 'tapex':
-        model = transformers.BartForConditionalGeneration.from_pretrained("microsoft/tapex-base-finetuned-wtq")
-        # potentially change model config
-        # model.config.xxx = 'xxx'
-        non_default_kwargs['model_type_info'] = get_model_type_info(training_args.model_name_or_path)
-        non_default_kwargs['generation_metrics'] = {
-            'str_match_accuracy':  (str_match_accuracy,
-                                    {
-                                       'post_processing_fn': lambda x: [item.strip() for item in x],
-                                    }
-                                    )
-        }
-
-    else:
-        # TODO try search path
-        raise NotImplementedError(f"No initialization implemented for model {training_args.model_name_or_path}!")
-    return LightningWrapper(model, training_args, **kwargs, **non_default_kwargs)
