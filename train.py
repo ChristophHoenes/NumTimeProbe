@@ -145,26 +145,33 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
 
     ################# Construct model ##############
 
-    # Resume from checkpoint if specified
+    # process (download) checkpoint_path to enable remote wandb checkpoint paths
     if args.checkpoint_path:
         args.checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
             args.checkpoint_path, wandb_logger.experiment
         )
+    # Resume (interrupted) training run from checkpoint if specified (if condition is True)
+    if args.resume_training and args.checkpoint_path:  # load weights, optimizer states, scheduler state, ...\
+        model = LightningWrapper.load_from_checkpoint(
+            args.checkpoint_path,
+            effective_batch_size_per_step=effective_batch_size_per_step,
+        )
+        logger.info(f"Loded model with {model.samples_processed.item()} processed samples from checkpoint. "
+                    " Also loaded all training states - ready to resume training."
+                    )
+    else:  # create new model
+        model_module = get_model_module(args.model_name_or_path)
+        model_config = get_model_specific_config(args.model_name_or_path)
+        model = LightningWrapper(model_module, args, **model_config, effective_batch_size_per_step=effective_batch_size_per_step)
 
-        if args.resume_training:  # load weights, optimizer states, scheduler state, ...\
-            model = LightningWrapper.load_from_checkpoint(
-                args.checkpoint_path,
-                effective_batch_size_per_step=effective_batch_size_per_step,
-            )
-            print(model.samples_processed)
-        else:  # load only weights
-            model = get_model_module(training_args=args, effective_batch_size_per_step=effective_batch_size_per_step)
-            torch_load = torch.load(args.checkpoint_path, map_location=torch.device("cpu"))
-            model.load_state_dict(torch_load["state_dict"], strict=False)
-            model.samples_processed = torch.tensor(0.0)
-            model.tokens_processed = torch.tensor(0.0)
-    else:
-        model = get_model_module(training_args=args, effective_batch_size_per_step=effective_batch_size_per_step)
+    # initiallize from pretrained but do not resume training, instead fresh start (if condition is True)
+    if args.checkpoint_path and not args.resume_training:
+        # load only weights but nooptimizer states, etc.
+        torch_load = torch.load(args.checkpoint_path, map_location=torch.device("cpu"))
+        model.load_state_dict(torch_load["state_dict"], strict=False)
+        # reset for fresh training run
+        model.samples_processed = torch.tensor(0.0)
+        model.tokens_processed = torch.tensor(0.0)
 
     if args.train_only_embeddings:
         if get_rank() == 0:
