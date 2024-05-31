@@ -137,6 +137,7 @@ class TableQADataModule(L.LightningDataModule):
                  tokenizing_args=None,
                  lazy_data_processing: bool = True,
                  is_batch_dict: bool = True,
+                 validation_cutoff=2048,
                  data_dir: str = './data/NumTabQA/.cache',
                  overwrite_cache: bool = False,
                  num_dataloader_workers: int = 0,
@@ -156,6 +157,7 @@ class TableQADataModule(L.LightningDataModule):
             warnings.warn("For lazy_data_processing batch will always be a dict! is_batch_dict=True was set automatically.")
             is_batch_dict = True
         self.is_batch_dict = is_batch_dict
+        self.validation_cutoff = validation_cutoff
         self.tokenizing_args = asdict(tokenizing_args) if tokenizing_args is not None else dict()
         self.tokenizer = get_tokenizer(self.model_name, **self.tokenizing_args)
         self.max_num_tokens = self.tokenizing_args.get('max_length') or 1024
@@ -287,7 +289,7 @@ class TableQADataModule(L.LightningDataModule):
         if stage == "fit":
             if self.lazy_data_processing:
                 self.splits['train'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'train'), data_dir=self.data_dir)
-                self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'validation'), data_dir=self.data_dir)
+                self.splits['validation'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'validation'), data_dir=self.data_dir, cutoff=self.validation_cutoff)
             else:
                 self.splits['train'] = load_split_tensor('train', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('train')

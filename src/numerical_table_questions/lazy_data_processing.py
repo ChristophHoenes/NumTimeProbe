@@ -5,6 +5,7 @@ import datasets
 import torch
 
 from numerical_table_questions.data_caching import caching
+from numerical_table_questions.data_inspection import cutoff_num_questions
 from numerical_table_questions.data_synthesis import Table
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
@@ -20,7 +21,7 @@ def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
 
 
 class QuestionTableIndexDataset(torch.utils.data.Dataset):
-    def __init__(self, table_dataset: Union[str, Path, datasets.Dataset], data_dir: str = './data/NumTabQA/.cache'):
+    def __init__(self, table_dataset: Union[str, Path, datasets.Dataset], data_dir: str = './data/NumTabQA/.cache', cutoff=None):
         if isinstance(table_dataset, (str, Path)):
             self.data_dir = data_dir
             self.dataset_version = table_dataset
@@ -30,6 +31,9 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         else:
             self.data_dir = None
             self.dataset_version = None
+        if cutoff is not None:
+            table_dataset = cutoff_num_questions(table_dataset, cutoff=cutoff)
+
         self.index_dict = generate_question_index(table_dataset)
         self.table_dataset = table_dataset
 

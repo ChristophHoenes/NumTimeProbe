@@ -1,8 +1,9 @@
+import random
 import re
 import wandb
 from dargparser import dargparse
 from pathlib import Path
-from typing import Union, List, Dict
+from typing import Dict, List, Optional, Union
 
 import datasets
 import numpy as np
@@ -172,6 +173,41 @@ def is_prediction_correct(data_sample, comparison_fn=...):
 def is_value_in_condition_col(data_sample):
     df = Table.from_state_dict(data_sample['table']).pandas_dataframe
     return {'is_value_in_condition_col': data_sample['value'] in df.get(data_sample['condition_col'], default=pd.Series()).unique().tolist()}
+
+
+def sample_questions(table_dataset_sample: dict, len_dataset: int = -1, min_num_questions: int = -1, cutoff: Optional[int] = None, seed: Optional[int] = None) -> dict:
+    if len_dataset < 0 or min_num_questions < 0:
+        raise ValueError("Valid (true positive) values need to be passed as kwargs for len_dataset and min_num_questions!")
+    if seed is not None:
+        random.seed(seed)
+    # currently this seems to be a LazyRow object (see https://github.com/huggingface/datasets/blob/main/src/datasets/formatting/formatting.py)
+    fields = list(table_dataset_sample.data.keys())
+    # if there is a cutoff sample equal amounts of questions per table (else min_num_questions)
+    max_questions_per_table = (cutoff or len_dataset*min_num_questions) // len_dataset
+    # draw sample ids at random
+    num_questions = len(table_dataset_sample['questions'])
+    sampled_ids = random.sample(range(num_questions), k=min(max_questions_per_table, num_questions))
+    # filter questions using keeping only sampled_ids
+    output_dict = {field: [table_dataset_sample[field][idx]
+                           for idx in sampled_ids
+                           ]
+                   for field in fields
+                   # only filter fields that have values associated per question (same shape as 'questions' field)
+                   if isinstance(table_dataset_sample[field], list) and len(table_dataset_sample[field]) == num_questions
+                   }
+    return output_dict
+
+
+def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None) -> datasets.Dataset:
+    min_num_questions = min([len(table_sample['questions']) for table_sample in dataset])
+    return dataset.map(sample_questions,
+                       fn_kwargs={
+                           'len_dataset': len(dataset),
+                           'min_num_questions': min_num_questions,
+                           'cutoff': cutoff,
+                           },
+                       desc=f"Sampling a maximum of {cutoff or min_num_questions*len(dataset)} samples in total..."
+                       )
 
 
 def main(args):
