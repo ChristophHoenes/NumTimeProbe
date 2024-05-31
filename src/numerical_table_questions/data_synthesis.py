@@ -10,7 +10,7 @@ import math
 import re
 import warnings
 import weakref
-from collections.abc import Iterable
+from collections.abc import Iterable, Callable
 from pathlib import PurePath
 from typing import Tuple, List, Dict, Union, Optional, Literal
 
@@ -1641,37 +1641,22 @@ def create_range_table_question_dataset(tables,
     return dataset
 
 
-def create_basic_postprocessed_versions(cache_path: str = './data/NumTabQA/.cache'):
-    # train only filter multi answer
-    table_dataset = create_table_dataset(base_dataset_split='train', use_cache=True)
-    base_name = 'count_wikitables_train'
-    dataset = create_basic_table_question_dataset(table_dataset, name=base_name, use_cache=False)
-    dataset.remove_multi_answer_questions()
-    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer')
-    dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
-    save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
-    dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
-    save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
-
-    # validation filter multi answer + 20%/0% tolerance agg_count 1
-    #table_dataset = create_table_dataset(base_dataset_split='validation', use_cache=True)
-    #base_name = 'count_wikitables_validation'
-    #dataset = create_basic_table_question_dataset(table_dataset, name=base_name, use_cache=False)
-    #dataset.remove_multi_answer_questions()
-    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
-    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
-    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
-    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
-
-    # test filter multi answer + 20%/0% tolerance agg_count 1
-    #table_dataset = create_table_dataset(base_dataset_split='test', use_cache=False)
-    #base_name = 'count_wikitables_test'
-    #dataset = create_basic_table_question_dataset(table_dataset, name=base_name, use_cache=False)
-    #dataset.remove_multi_answer_questions()
-    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
-    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
-    #dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
-    #save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
+def create_postprocessed_versions(data_version_function: Callable[..., TableQuestionDataSet] = create_basic_table_question_dataset,
+                                  name: str = 'basic',
+                                  table_corpus='wikitablequestions',
+                                  splits=('test', 'train', 'validation'),
+                                  cache_path: str = './data/NumTabQA/.cache'
+                                  ):
+    for split in splits:
+        table_dataset = create_table_dataset(base_dataset_name=table_corpus, base_dataset_split=split, use_cache=True)
+        base_name = f"{table_corpus}_{split}_{name}"
+        dataset = data_version_function(table_dataset, name=base_name, use_cache=False)
+        dataset.remove_multi_answer_questions()
+        save_version(dataset, cache_path, base_name + '_filtered_multi_answer')
+        dataset.remove_questions_with_lower_aggregation_count(tolerance=0.2)
+        save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_20')
+        dataset.remove_questions_with_lower_aggregation_count(tolerance=0.0)
+        save_version(dataset, cache_path, base_name + '_filtered_multi_answer_filter_agg_count_0')
 
 
 def remove_duplicate_qa_pairs(data_sample):

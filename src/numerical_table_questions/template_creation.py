@@ -236,26 +236,25 @@ def create_add_one_question_dataset(tables,
     return dataset
 
 
-def create_difference_question_dataset(tables,
-                                       name='wikitables_test',
+def create_diff_table_question_dataset(tables,
+                                       name='wikitablequestions_test_diff',
                                        use_cache: bool = True,
                                        cache_path: str = './data/NumTabQA/.cache',
                                        save=True,
                                        ) -> TableQuestionDataSet:
-    cache_file_name = f"{name}_diff_dataset"
     if use_cache:
-        dataset = caching(cache_file_name, cache_path=cache_path)
+        dataset = caching(name, cache_path=cache_path)
     else:
         base_description = \
             """
-            Basic SQL operators min, max, avg or sum over the difference of two numerical columns.
+            Basic SQL operators min, max, avg or sum of the difference between two numeric columns combined with a simple value lookup condition.
             Using WikiTables test set.
 
             """
-        nl = "What is the {op} of the difference between column {col1} and column {col2}?"
-        main_expr = SQLColumnExpression(("{col1} - {col2}",))
-        conditions = tuple()
-        allowed_operators = tuple([MIN, MAX, AVG, SUM])
+        nl = "What is the {op} of the difference between column {col1} and {col2} given that {col3} has value {val1}?"
+        main_expr = SQLColumnExpression(("{col1}", "{col2}"), operand='-')
+        conditions = (SQLConditionTemplate('{col3}', '=', '{val1}'),)
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, COUNT, NOOP])
         schema = {
             'variables': {
                 'col1': {'type': 'column',
@@ -264,19 +263,26 @@ def create_difference_question_dataset(tables,
                 'col2': {'type': 'column',
                          'allowed_dtypes': ['numeric']
                          },
+                'col3': {'type': 'column',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         },
+                'val1': {'type': 'value',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         }
             },
             'sample_strategy': 'random',
             'value_pool': 'distinct_values',
             'interpolation_args': dict()
         }
-        diff_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+        basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
         dataset = TableQuestionDataSet(name + '_diff',
                                        description=base_description,
-                                       question_templates=[diff_template],
-                                       tables=tables
+                                       question_templates=[basic_template],
+                                       tables=tables,
+                                       compute_coordinates=False,
                                        )
         if save:
-            save_version(dataset, cache_path, cache_file_name)
+            save_version(dataset, cache_path, name)
     return dataset
 
 
@@ -372,25 +378,24 @@ def create_ratio_question_dataset(tables,
 
 
 def create_expression_dataset(tables,
-                              name='wikitables_test',
+                              name='wikitablequestions_test_expression',
                               use_cache: bool = True,
                               cache_path: str = './data/NumTabQA/.cache',
                               save=True,
                               ) -> TableQuestionDataSet:
-    cache_file_name = f"{name}_expression_dataset"
     if use_cache:
-        dataset = caching(cache_file_name, cache_path=cache_path)
+        dataset = caching(name, cache_path=cache_path)
     else:
         base_description = \
             """
-            Basic SQL operators min, max, avg or sum over a complex arithmetic expression of two numerical columns.
-            Using WikiTables test set.
+            Basic SQL operators min, max, avg or sum over a complex arithmetic expression of two numerical columns combined with a simple value lookup condition.
+            Using WikiTableQuestions.
 
             """
         nl = "What is the {op} of the expression  between column {col1} and column {col2}?"
         main_expr = SQLColumnExpression(("(({col1} * {col2}) - ({col1} + {col2})) / ({col1} * {col1}) + (({col2} * {col2}) - {col2})",))
-        conditions = tuple()
-        allowed_operators = tuple([MIN, MAX, AVG, SUM])
+        conditions = (SQLConditionTemplate('{col3}', '=', '{val1}'),)
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])  # no count as same as in other datasets
         schema = {
             'variables': {
                 'col1': {'type': 'column',
@@ -399,6 +404,12 @@ def create_expression_dataset(tables,
                 'col2': {'type': 'column',
                          'allowed_dtypes': ['numeric']
                          },
+                'col3': {'type': 'column',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         },
+                'val1': {'type': 'value',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         }
             },
             'sample_strategy': 'random',
             'value_pool': 'distinct_values',
@@ -408,10 +419,11 @@ def create_expression_dataset(tables,
         dataset = TableQuestionDataSet(name + '_expression',
                                        description=base_description,
                                        question_templates=[ratio_template],
-                                       tables=tables
+                                       tables=tables,
+                                       compute_coordinates=False,
                                        )
         if save:
-            save_version(dataset, cache_path, cache_file_name)
+            save_version(dataset, cache_path, name)
     return dataset
 
 
