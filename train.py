@@ -33,7 +33,8 @@ from numerical_table_questions.system_helpers import (
     handle_batch_size_logic_,
     log_slurm_info,
 )
-from numerical_table_questions.model import LightningWrapper, get_model_module
+from numerical_table_questions.model import LightningWrapper
+from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
 
 
 @logger.catch(reraise=True)
@@ -47,7 +48,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         set_torch_file_sharing_strategy_to_system()
 
     ############# Seed ##############
-    misc_args.seed = seed_everything(workers=True, seed=misc_args.seed)
+    misc_args.seed = seed_everything(seed=misc_args.seed, workers=True)
 
     ############# Construct W&B Logger ##############
     if misc_args.offline or misc_args.fast_dev_run or args.data_preprocessing_only:
@@ -174,7 +175,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
 
     if args.from_scratch_embeddings:
         torch.nn.init.xavier_uniform_(model.model.get_input_embeddings().weight)
-        # torch.nn.init.normal_(self.model.get_input_embeddings().weight) # alternative
+        # torch.nn.init.normal_(model.model.get_input_embeddings().weight) # alternative
 
     if current_process_rank == 0:
         model.on_train_start = lambda: logger.info(

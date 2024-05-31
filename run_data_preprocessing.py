@@ -2,7 +2,7 @@ from dargparser import dargparse
 
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from numerical_table_questions.data_loading import TableQADataModule
-from numerical_table_questions.model import get_model_type_info
+from numerical_table_questions.model_utils import get_model_type_info
 
 
 def main(parsed_arg_groups):
