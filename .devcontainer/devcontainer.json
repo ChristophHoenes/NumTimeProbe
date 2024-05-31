@@ -19,7 +19,8 @@
 	],
 	// Optionally mount cache files like HuggingFace datasets cache. The user directory inside the container is /home/mamba/
 	"mounts": [
-		"source=/home/choenes/.cache,target=/home/mamba/.cache,type=bind"
+		"source=/home/choenes/.cache,target=/home/mamba/.cache,type=bind",
+		"source=/scratch/choenes/.cache,target=/home/mamba/.cache,type=bind"
 	],
 	"remoteEnv": {
 		"WANDB_API_KEY": "${localEnv:WANDB_API_KEY}"
