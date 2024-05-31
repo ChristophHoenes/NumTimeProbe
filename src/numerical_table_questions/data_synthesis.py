@@ -557,16 +557,19 @@ class QuestionTemplate:
         # then combine with structure hash
         self._template_schema_hash=...
 
-    def _extract_explicit_count_operator_definition(self, operators: SQLOperator):
+    def _extract_explicit_count_operator_definition(self, operators: Iterable[SQLOperator]) -> Tuple[List[SQLOperator], Optional[SQLOperator]]:
         count_definition = tuple([op for op in operators if op.sql == 'count'])
 
         if len(count_definition) == 0:
             count_definition = None
         elif len(count_definition) > 1:
             warnings.warn("Encountered multiple different definitions of the COUNT operator! Selecting only the first one.")
+            count_definition = count_definition[0]  # return the first count definition occurance
+        else:
+            count_definition = count_definition[0]  # unwrap single element from tuple
 
         non_count_operators = tuple([op for op in operators if op.sql != 'count'])
-        return non_count_operators, count_definition[0]  # always return the first count definition
+        return non_count_operators, count_definition
 
     def extract_aggregation_column(self, assignment: dict):
         if self.main_expression.operand is None:
