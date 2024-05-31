@@ -5,9 +5,9 @@ from numerical_table_questions.metrics import str_match_accuracy
 
 def tapex_model_type_info() -> dict:
     return dict(
-        model_name_or_path='tapas',
-        pad_token_id=1,  # ?
-        mask_token_id=-100,  # ?
+        model_name_or_path='tapex',
+        pad_token_id=1,
+        mask_token_id=-100,
         input_targets=True,
         loss_out_id='loss',
         filter_data_attributes=['input_ids', 'attention_mask'],
