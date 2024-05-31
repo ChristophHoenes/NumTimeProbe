@@ -1,10 +1,11 @@
 import copy
 import warnings
+from collections.abc import Callable
 
 from typing import Optional, Tuple, List
 
 from numerical_table_questions.data_caching import save_version, caching
-from numerical_table_questions.data_synthesis import QuestionTemplate, Table, TableQuestionDataSet, load_table_dataset
+from numerical_table_questions.data_synthesis import QuestionTemplate, Table, TableQuestionDataSet, create_table_dataset, load_table_dataset
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
@@ -186,6 +187,102 @@ def create_dataset(template_list,
         )
     if save:
         save_version(dataset, cache_path, save_name)
+    return dataset
+
+
+def create_basic_table_question_dataset(tables,
+                                        name='wikitables_test',
+                                        use_cache: bool = True,
+                                        cache_path: str = './data/NumTabQA/.cache',
+                                        save=True,
+                                        ) -> TableQuestionDataSet:
+    cache_file_name = f"{name}_basic_dataset"
+    if use_cache:
+        dataset = caching(cache_file_name, cache_path=cache_path)
+    else:
+        base_description = \
+            """
+            Basic SQL operators min, max, avg or sum combined with a simple value lookup condition of a different column.
+            Using WikiTables test set.
+
+            """
+        nl = "What is the {op} of column {col1} given that {col2} has value {val1}?"
+        main_expr = SQLColumnExpression(("{col1}",))
+        conditions = (SQLConditionTemplate('{col2}', '=', '{val1}'),)
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, COUNT])  # not NOOP because it would be simple lookup without numerical skill
+        schema = {
+            'variables': {
+                'col1': {'type': 'column',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'col2': {'type': 'column',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         },
+                'val1': {'type': 'value',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         }
+            },
+            'sample_strategy': 'random',
+            'value_pool': 'distinct_values',
+            'interpolation_args': dict()
+        }
+        basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+        dataset = TableQuestionDataSet(name + '_basic',
+                                       description=base_description,
+                                       question_templates=[basic_template],
+                                       tables=tables
+                                       )
+        if save:
+            save_version(dataset, cache_path, cache_file_name)
+    return dataset
+
+
+def create_range_table_question_dataset(tables,
+                                        name='wikitables_test',
+                                        use_cache: bool = True,
+                                        cache_path: str = './data/NumTabQA/.cache',
+                                        save=True,
+                                        ) -> TableQuestionDataSet:
+    cache_file_name = f"{name}_range_dataset"
+    if use_cache:
+        dataset = caching(cache_file_name, cache_path=cache_path)
+    else:
+        base_description = \
+            """
+            Basic SQL operators min, max, avg or sum combined within a range of the same column (subset).
+            Using WikiTables test set.
+
+            """
+        nl = "What is the {op} of column {col1} given that {col1} is at least {val1} and {col1} is at most {val2}?"
+        main_expr = SQLColumnExpression(("{col1}",))
+        conditions = (SQLConditionTemplate('{col1}', '>=', '{val1}'),
+                      SQLConditionTemplate('{col1}', '<=', '{val2}'),
+                      )
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, COUNT])
+        schema = {
+            'variables': {
+                'col1': {'type': 'column',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'val1': {'type': 'value',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'val2': {'type': 'value',
+                         'allowed_dtypes': ['numeric']
+                         },
+            },
+            'sample_strategy': 'random',
+            'value_pool': 'distinct_values',
+            'interpolation_args': dict()
+        }
+        range_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+        dataset = TableQuestionDataSet(name + '_range',
+                                       description=base_description,
+                                       question_templates=[range_template],
+                                       tables=tables
+                                       )
+        if save:
+            save_version(dataset, cache_path, cache_file_name)
     return dataset
 
 
@@ -427,7 +524,52 @@ def create_expression_dataset(tables,
     return dataset
 
 
-def main(table_corpus: str = 'wikitablequestions', split: Optional[str] = None, _skip_first: Optional[int] = None):
+def create_postprocessed_versions(data_version_function: Callable[..., TableQuestionDataSet] = create_basic_table_question_dataset,
+                                  name: str = 'basic',
+                                  table_corpus='wikitablequestions',
+                                  splits=('test', 'train', 'validation'),
+                                  remove_multi_answer: bool = True,
+                                  single_row_agg_tolerances: Tuple[float] = (0.2, 0.0),
+                                  cache_path: str = './data/NumTabQA/.cache',
+                                  ):
+    for split in splits:
+        table_dataset = create_table_dataset(base_dataset_name=table_corpus, base_dataset_split=split, use_cache=True)
+        base_name = f"{table_corpus}_{split}_{name}"
+        dataset = data_version_function(table_dataset, name=base_name, use_cache=False)
+        apply_quality_filters(dataset,
+                              remove_multi_answer=remove_multi_answer,
+                              single_row_agg_tolerances=single_row_agg_tolerances,
+                              dataset_name=base_name,
+                              cache_path=cache_path
+                              )
+
+
+def apply_quality_filters(dataset,
+                          remove_multi_answer: bool = True,
+                          single_row_agg_tolerances: Tuple[float] = (0.2, 0.0),
+                          save: bool = True,
+                          dataset_name: Optional[str] = None,
+                          cache_path: str = './data/NumTabQA/.cache',
+                          ):
+    if save and dataset_name is None:
+        raise ValueError("Need to provide dataset name if you want to save it!")
+    if remove_multi_answer:
+        dataset.remove_multi_answer_questions()
+        if save:
+            save_version(dataset, cache_path, dataset_name + '_filtered_multi_answer')
+    for tolerance in sorted(single_row_agg_tolerances, reverse=True):  # filter higher tolerances first subsequent removal
+        dataset.remove_questions_with_lower_aggregation_count(tolerance=tolerance)
+        if save:
+            save_version(dataset, cache_path, dataset_name + f"{'_filtered_multi_answer' if remove_multi_answer else ''}_filter_agg_count_{int(tolerance*100)}")
+    return dataset
+
+
+def main(single_version: bool = True, table_corpus: str = 'wikitablequestions', split: Optional[str] = None, _skip_first: Optional[int] = None):
+    # use pre-configured functiun for dataset (single dataset)
+    if single_version:
+        create_postprocessed_versions(data_version_function=create_diff_table_question_dataset, name='diff')  # TODO compare diff with interactive version
+        return
+    # interactive (API) version for on-the-fly creation
     main_expressions = []
     dataset_names = []
     descriptions = []
@@ -487,8 +629,12 @@ def main(table_corpus: str = 'wikitablequestions', split: Optional[str] = None, 
                                      table_corpus=table_corpus,
                                      split=split_name,
                                      )
+            apply_quality_filters(dataset)
             print(f'done with {dataset_name} split {split}')  # TODO proper logging instead
 
 
 if __name__ == "__main__":
     main()
+    # gittables example
+    # table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
+    # create_basic_table_question_dataset(table_dataset, name='gittables_subset_10_train', use_cache=False, cache_path='/home/mamba/.cache')
