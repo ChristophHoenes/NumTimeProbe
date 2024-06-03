@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 import datasets
+import torch
 import numpy as np
 import pandas as pd
 
@@ -24,6 +25,30 @@ DUMMY_DATA = datasets.Dataset.from_dict({
     'table': [dict(), dict(), dict()],
     'answer': ['13.67', '15$', '3']
 })
+
+
+def cast_to_reduced_int(ints: torch.Tensor, num_values: Optional[int] = None):
+    """
+        Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.
+        If num_values is None the amount of values (e.g. vocab size) is estimated by the maximum of the
+        values in the tensor plus one (for id zero).
+    """
+    # if num_values is None infer the coding size
+    if num_values is None:
+        num_values = ints.max() + 1
+    if num_values <= 2:
+        cast_to = torch.bool
+    elif num_values <= 128:
+        cast_to = torch.int8
+    elif num_values <= 256 and ints.min() >= 0:
+        cast_to = torch.uint8
+    elif num_values <= 32768:
+        cast_to = torch.int16
+    elif num_values <= 2_147_483_648:
+        cast_to = torch.int32
+    else:
+        cast_to = torch.int64
+    return ints.to(cast_to)
 
 
 def find_enclosed_substring(search_string: str, prefix: str, postfix: str, normalize: bool = False):
