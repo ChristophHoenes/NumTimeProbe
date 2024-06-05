@@ -329,7 +329,7 @@ class LightningWrapper(L.LightningModule):
             answer_ids = self.model.generate(input_ids,
                                              num_beams=2,
                                              min_length=0,
-                                             max_length=max(1, max_target_len),
+                                             max_length=max(2, max_target_len),  # if this is 1 it can lead to errors during generation -> set to at least 2
                                              no_repeat_ngram_size=0,
                                              early_stopping=False,
                                              )
