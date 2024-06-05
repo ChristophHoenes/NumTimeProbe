@@ -2,7 +2,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Union, List
 
-from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config
+from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config, tapas_generation
 from numerical_table_questions.tapex_model import tapex_model_type_info, tapex_model, tapex_config
 
 
@@ -65,10 +66,22 @@ def get_model_specific_config(model_name: str) -> dict:
     return {'model_type_info': model_type_info, **other_kwargs}
 
 
-def model_specific_generation(model_name, model, tokenizer, input_ids, **kwargs):
-    match model_name:
+def model_specific_generation(model_name, model, tokenizer, inputs, **kwargs):
+    match model_name.lower():
+        case 'tapas':
+            # get required input arguments for tapas generation:
+            # extract model input_ids from inputs depending on the batch type (although currently must be dict)
+            input_ids = inputs['input_ids'] if isinstance(inputs, dict) else inputs[0]
+            # get model outputs
+            model_outputs = model(inputs)
+            # get table as dataframe from dataset table indices
+            table_dataset = kwargs['test_dataset'].table_dataset  # assumes Dataset in test DataLoader to be of type QuestionTableIndexDataset
+            table_data = [table_dataset.select([table_idx])['table'] for table_idx in inputs['table_idx']]
+            table = Table.from_state_dict(table_data)
+            table_df = table.pandas_dataframe
+            return tapas_generation(tokenizer, input_ids, model_outputs, table_df)
         case _:  # default generation via beam search (e.g. for tapex)
-            answer_ids = model.generate(input_ids,
+            answer_ids = model.generate(inputs['input_ids'] if isinstance(inputs, dict) else inputs[0],  # get input_ids from inputs depending on inputs type
                                         num_beams=kwargs.get('num_beams', 2),
                                         min_length=kwargs.get('min_length', 0),
                                         max_length=kwargs.get('max_length',

@@ -1,5 +1,8 @@
 import transformers
 from tqdm import tqdm
+from typing import List
+
+import pandas as pd
 
 from numerical_table_questions.answer_coordinates import AnswerCoordinates
 from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet
@@ -71,3 +74,65 @@ def tapas_tokenizer_format(data, lazy: bool = False, is_eval: bool = False, **kw
             return processed_samples
         else:
             raise NotImplementedError("No Tapas tokenizer preparation implemented for non-lazy option!")
+
+
+# from examples on https://huggingface.co/docs/transformers/v4.41.3/en/model_doc/tapas#usage-inference
+def get_aggregator_string(predicted_aggregation_indices) -> List[str]:
+    id2aggregation = {0: "NONE", 1: "SUM", 2: "AVERAGE", 3: "COUNT"}
+    return [id2aggregation[x] for x in predicted_aggregation_indices]
+
+
+# from examples on https://huggingface.co/docs/transformers/v4.41.3/en/model_doc/tapas#usage-inference
+def get_answer_cell_values(table: pd.DataFrame, predicted_answer_coordinates) -> List[str]:
+    answers = []
+    for coordinates in predicted_answer_coordinates:
+        if len(coordinates) == 1:
+            # only a single cell:
+            answers.append(table.iat[coordinates[0]])
+        else:
+            # multiple cells
+            cell_values = []
+            for coordinate in coordinates:
+                cell_values.append(table.iat[coordinate])
+            answers.append(", ".join(cell_values))
+    return answers
+
+
+def compute_aggregation(aggregators, answer_cells):
+    results = []
+    for agg, cells in zip(aggregators, answer_cells):
+        parsed_cells = [float(cell) for cell in cells.split(', ')]
+        match agg:
+            case 'NONE':
+                if len(parsed_cells) > 1:
+                    raise ValueError("Encountered multi-row answer with aggregator NONE (NOOP)! Make sure the answer is a single value.")
+                results.append(parsed_cells[0])
+            case 'SUM':
+                results.append(sum(parsed_cells))
+            case 'AVERAGE':
+                results.append(sum(parsed_cells)/len(parsed_cells))
+            case 'COUNT':
+                results.append(len(parsed_cells))
+            case _:
+                raise ValueError(f"Encountered unknown aggregator {agg}! Make sure the mapping defined in get_aggregator_string is correct.")
+    # answers should be strings -> convert to correct number format as string
+    postprocessed_number_format = [str(int(number))  # integer if no decimal part
+                                   if int(number) == float(number)
+                                   else str(float(number))  # if answer is not true int keep float format
+                                   for number in results
+                                   ]
+    return postprocessed_number_format
+
+
+def tapas_generation(tokenizer, model_inputs, model_outputs, table) -> List[str]:
+    answer_coordinates, aggregation_indices = (
+        tokenizer.convert_logits_to_predictions(model_inputs,
+                                                model_outputs.logits.detach(),
+                                                model_outputs.logits_aggregation.detach()
+                                                )
+        )
+    aggregators = get_aggregator_string(aggregation_indices)
+    answer_cells = get_answer_cell_values(table, answer_coordinates)
+
+    predictions = compute_aggregation(aggregators, answer_cells)
+    return predictions

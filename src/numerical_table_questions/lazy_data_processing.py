@@ -84,6 +84,7 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args, pa
     # for simplifying debugging include table / question id
     tokenized_batch['question_id'] = torch.LongTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
     tokenized_batch['table_id'] = [sample['table_data'][0]['table']['table_id'] for sample in batch_of_index_ids]
+    tokenized_batch['table_idx'] = torch.LongTensor([sample['table_idx'] for sample in batch_of_index_ids])  # for index based access directly in QuestionTableIndexDataset
     tokenized_batch['question_number'] = torch.LongTensor([sample['question_number'] for sample in batch_of_index_ids])  # local id within table batch
 
     # ensure all int type tensors have dtype long
