@@ -245,7 +245,7 @@ class TableQADataModule(L.LightningDataModule):
                                         }
                                        )
                 # transform input to format expected by tokenizer (only considering input and target fields)
-                tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, **tokenizing_args)
+                tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, is_eval=(split == 'test'), **tokenizing_args)
                 logger.info("Tokenize examples...")
                 # run tokenization and return tokenized fields
                 # from list of tokenizer input fields (list of dicts) to dict of tokenizer output fields (dict with lists of question samples as values)
@@ -323,6 +323,7 @@ class TableQADataModule(L.LightningDataModule):
                 mask_token_id=self.model_specs.mask_token_id,
                 truncation=self.tokenizing_args['truncation'],
                 padding=self.tokenizing_args['padding'],
+                is_eval=(split_name == 'test'),  # for testing no answer coordinates are needed (tapas)
                 )
         else:
             collate_fn = None
