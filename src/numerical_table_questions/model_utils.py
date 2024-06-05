@@ -63,3 +63,22 @@ def get_model_specific_config(model_name: str) -> dict:
         case _:
             other_kwargs = {}  # use default values of kwargs
     return {'model_type_info': model_type_info, **other_kwargs}
+
+
+def model_specific_generation(model_name, model, tokenizer, input_ids, **kwargs):
+    match model_name:
+        case _:  # default generation via beam search (e.g. for tapex)
+            answer_ids = model.generate(input_ids,
+                                        num_beams=kwargs.get('num_beams', 2),
+                                        min_length=kwargs.get('min_length', 0),
+                                        max_length=kwargs.get('max_length',
+                                                              # if this is 1 it can lead to errors during generation -> set to at least 2
+                                                              max(2, kwargs.get('max_target_len', 20))
+                                                              ),
+                                        no_repeat_ngram_size=kwargs.get('no_repeat_ngram_size', 0),
+                                        early_stopping=kwargs.get('early_stopping', False),
+                                        )
+            return tokenizer.batch_decode(answer_ids,
+                                          skip_special_tokens=kwargs.get('skip_special_tokens', True),
+                                          clean_up_tokenization_spaces=kwargs.get('clean_up_tokenization_spaces', True),
+                                          )

@@ -10,7 +10,7 @@ from torchmetrics import MetricCollection
 from transformers.optimization import get_scheduler
 from warmup_scheduler import GradualWarmupScheduler
 
-from numerical_table_questions.model_utils import ModelTypeInfo
+from numerical_table_questions.model_utils import ModelTypeInfo, model_specific_generation
 from numerical_table_questions.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
 
 if TYPE_CHECKING:
@@ -326,14 +326,7 @@ class LightningWrapper(L.LightningModule):
                                      ) from e
             # TODO test if this leaks to much information (e.g are results worse if this is hard coded to 20)
             max_target_len = max([len(sample) for sample in text_targets])
-            answer_ids = self.model.generate(input_ids,
-                                             num_beams=2,
-                                             min_length=0,
-                                             max_length=max(2, max_target_len),  # if this is 1 it can lead to errors during generation -> set to at least 2
-                                             no_repeat_ngram_size=0,
-                                             early_stopping=False,
-                                             )
-            string_predictions = self.tokenizer.batch_decode(answer_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+            string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, input_ids, max_target_len=max_target_len)
             self.predictions.extend(string_predictions)
 
             # apply post processing specified for metric to both, generated prediction and text targets
