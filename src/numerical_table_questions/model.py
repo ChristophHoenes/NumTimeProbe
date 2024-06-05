@@ -316,7 +316,7 @@ class LightningWrapper(L.LightningModule):
                 try:
                     # if targets are not provided as text, create text_targets by decoding the ids
                     if not isinstance(target, tuple):
-                        safe_target = torch.where(target != -100, target, self.model_specs.pad_token_id)
+                        safe_target = torch.where(target != self.model_specs.mask_token_id, target, self.model_specs.pad_token_id)
                         text_targets = self.tokenizer.batch_decode(safe_target, skip_special_tokens=True, clean_up_tokenization_spaces=True)
                     else:
                         text_targets = target[1]  # if tuple assume second position is text targets
