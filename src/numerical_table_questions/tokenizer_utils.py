@@ -81,6 +81,7 @@ def default_tokenize(tokenizer, tokenizer_inputs, model_name, verbose, **kwargs)
                 }
             for sample in tokenized
             ]
+    return tokenized
 
 
 def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict],
