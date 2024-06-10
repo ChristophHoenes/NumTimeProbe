@@ -69,13 +69,13 @@ class AnswerCoordinates:
         return norm_output_format
 
 
-def compute_answer_coordinates(column_name: str, dataframe: pd.DataFrame, query: str) -> AnswerCoordinates:
+def compute_answer_coordinates(column_name: str, dataframe: pd.DataFrame, sql_query: str) -> AnswerCoordinates:
     if column_name in dataframe.columns:
         column_id = dataframe.columns.get_loc(column_name)
     else:
         raise KeyError(f"Column name {column_name} was not found in table columns {list(dataframe.columns)}!")
-    where_start = re.search(r'from df\s+where', query.lower()).start()  # assumes 'from df where' does not occur in aggregator or column name
+    where_start = re.search(r'from df\s+where', sql_query.lower()).start()  # assumes 'from df where' does not occur in aggregator or column name
     df_copy_with_row_idxs = dataframe.assign(__row_idx__=pd.Series(range(dataframe.shape[0])))
-    answer_set_query = 'SELECT "__row_idx__" ' + query[where_start:]
+    answer_set_query = 'SELECT "__row_idx__" ' + sql_query[where_start:]
     answer_row_idxs = execute_sql(answer_set_query, df_copy_with_row_idxs)
     return AnswerCoordinates(column_id, list(answer_row_idxs), dataframe.shape[0], dataframe.shape[1])
