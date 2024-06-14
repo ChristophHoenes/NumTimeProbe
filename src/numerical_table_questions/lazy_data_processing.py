@@ -5,7 +5,7 @@ import datasets
 import torch
 
 from numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_inspection import cutoff_num_questions
+from numerical_table_questions.data_utils import cutoff_num_questions
 from numerical_table_questions.data_synthesis import Table
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
