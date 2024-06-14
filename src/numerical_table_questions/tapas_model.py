@@ -98,7 +98,17 @@ def get_answer_cell_values(table: pd.DataFrame, predicted_answer_coordinates) ->
     return answers
 
 
-def compute_aggregation(aggregators, answer_cells):
+def string_to_num(number_string: str) -> Union[int, float]:
+    try:
+        return int(number_string)
+    except ValueError:
+        try:
+            return float(number_string)
+        except ValueError:
+            return float('nan')
+
+
+def compute_aggregation(aggregators, answer_cells) -> List[str]:
     results = []
     for agg, cells in zip(aggregators, answer_cells):
         parsed_cells = [float(cell or 'nan') for cell in cells.split(', ')]
@@ -117,9 +127,8 @@ def compute_aggregation(aggregators, answer_cells):
                 raise ValueError(f"Encountered unknown aggregator {agg}! Make sure the mapping defined in get_aggregator_string is correct.")
     # answers should be strings -> convert to correct number format as string
     postprocessed_number_format = ['nan'
-                                   if math.isnan(number)  # special case for invalid numbers
-                                   else str(int(number)) if int(number) == float(number)  # format integer if no decimal part
-                                   else str(float(number))  # if answer is not true int keep float format
+                                   if math.isnan(string_to_num(number))  # special case for invalid numbers
+                                   else string_to_num(number)
                                    for number in results
                                    ]
     return postprocessed_number_format
