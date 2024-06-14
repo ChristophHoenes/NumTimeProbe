@@ -136,9 +136,9 @@ def compute_aggregation(aggregators, answer_cells) -> List[str]:
 
 def tapas_generation(tokenizer, model_inputs, model_outputs, table) -> List[str]:
     answer_coordinates, aggregation_indices = (
-        tokenizer.convert_logits_to_predictions(model_inputs,
-                                                model_outputs.logits.detach(),
-                                                model_outputs.logits_aggregation.detach()
+        tokenizer.convert_logits_to_predictions({key: value.detach().cpu()for key, value in model_inputs.items()},  # assumes dict input
+                                                model_outputs['logits'].detach().cpu(),  # assumes dict type for model_outputs not BatchEncoding
+                                                model_outputs['logits_aggregation'].detach().cpu()  # assumes dict type for model_outputs not BatchEncoding
                                                 )
         )
     aggregators = get_aggregator_string(aggregation_indices)
