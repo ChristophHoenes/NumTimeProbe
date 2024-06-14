@@ -1,5 +1,6 @@
 import math
 import transformers
+import warnings
 from tqdm import tqdm
 from typing import List, Union
 
@@ -121,7 +122,9 @@ def compute_aggregation(aggregators, answer_cells) -> List[str]:
         match agg:
             case 'NONE':
                 if len(parsed_cells) > 1:
-                    raise ValueError("Encountered multi-row answer with aggregator NONE (NOOP)! Make sure the answer is a single value.")
+                    warnings.warn("Encountered multi-row answer with aggregator NONE (NOOP)! Make sure the answer is a single value. "
+                                  "Only the first value will be returned."
+                                  )
                 results.append(parsed_cells[0])
             case 'SUM':
                 results.append(sum(parsed_cells))
