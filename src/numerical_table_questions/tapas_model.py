@@ -49,8 +49,7 @@ def tapas_tokenizer_format(data, lazy: bool = False, is_eval: bool = False, **kw
     else:
         if lazy:
             processed_samples = []
-            for sample in (progress_bar := tqdm(data)):
-                progress_bar.set_description("transfer to TAPAS tokenizer format...")
+            for sample in data:
                 table = Table.from_state_dict(sample['table'])
                 table_df = table.pandas_dataframe
                 # retrieve question
