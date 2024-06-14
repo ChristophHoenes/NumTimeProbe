@@ -1,10 +1,11 @@
+import math
 import transformers
 from tqdm import tqdm
-from typing import List
+from typing import List, Union
 
 import pandas as pd
 
-from numerical_table_questions.answer_coordinates import AnswerCoordinates
+from numerical_table_questions.answer_coordinates import AnswerCoordinates, compute_answer_coordinates
 from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet
 from numerical_table_questions.metrics import str_match_accuracy
 
@@ -15,20 +16,18 @@ def tapas_model_type_info() -> dict:
         model_name_or_path='tapas',
         pad_token_id=1,  # ?
         mask_token_id=-100,  # ?
-        input_targets=True,
+        input_targets=False,
         loss_out_id='loss',
-        filter_data_attributes=['input_ids', 'attention_mask'],
-        input_mapping={
-            '*': None,
-            'labels': lambda x, y: y,
-            }
+        filter_data_attributes=None,  # only needed for TensorDataset serialization
+        tensor_input_mapping={},  # only needed for TensorDataset serialization and positional arguments
+        dict_input_mapping ={},  # by default use all tokenizer keys as input
         )
 
 
 def tapas_model():
     model = transformers.TapasForQuestionAnswering.from_pretrained("google/tapas-base-finetuned-wtq")
-    # potentially change model config
-    # model.config.xxx = 'xxx'
+    # change model config
+    model.config.return_dict = True
     return model
 
 
@@ -57,8 +56,16 @@ def tapas_tokenizer_format(data, lazy: bool = False, is_eval: bool = False, **kw
                 # retrieve question
                 question = sample['questions'][kwargs['question_number']]
                 if not is_eval:  # for training Answer coordinates are required
-                    answer_text = [sample['answers'][kwargs['question_number']]]
-                    answer_coordinates = AnswerCoordinates(**sample['answer_coordinates'][kwargs['question_number']]).generate()
+                    answer_text = [sample['answers'][kwargs['question_number']]]  # should only be provided for evaluation
+                    # if answer coordinates are not pre-computed do it here
+                    if sample.get('answer_coordinates') is None:
+                        answer_coordinates = compute_answer_coordinates(
+                            column_name=sample['aggregation_column'],
+                            dataframe=table_df,
+                            sql_query=sample['sql'],
+                            ).generate()
+                    else:
+                        answer_coordinates = AnswerCoordinates(**sample['answer_coordinates'][kwargs['question_number']]).generate()
                 else:
                     answer_text = None
                     answer_coordinates = None

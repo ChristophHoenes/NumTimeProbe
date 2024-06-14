@@ -1125,6 +1125,7 @@ class TableQuestionDataSet:
                                                                  'answers': [str(question._answer)],
                                                                  'answer_lengths': [len(str(question._answer))],
                                                                  'is_multy_row_answer': [question._multi_row_answer],
+                                                                 'sql': [question._sql_query],
                                                                  'aggregators': [question._operator],
                                                                  'aggregation_columns': [question.aggregation_column],
                                                                  'aggregation_column_types': [question.aggregation_column_type],
@@ -1138,6 +1139,7 @@ class TableQuestionDataSet:
                 questions_by_table[question._table._table_id]['answers'].append(str(question._answer))
                 questions_by_table[question._table._table_id]['answer_lengths'].append(len(str(question._answer)))
                 questions_by_table[question._table._table_id]['is_multy_row_answer'].append(question._multi_row_answer)
+                questions_by_table[question._table._table_id]['sql'].append(question._sql_query)
                 questions_by_table[question._table._table_id]['aggregators'].append(question._operator)
                 questions_by_table[question._table._table_id]['aggregation_columns'].append(question.aggregation_column)
                 questions_by_table[question._table._table_id]['aggregation_column_types'].append(question.aggregation_column_type)
@@ -1149,6 +1151,7 @@ class TableQuestionDataSet:
         answers = []
         answer_lengths = []
         is_multy_row_answer = []
+        sql = []
         aggregators = []
         aggregation_columns = []
         aggregation_column_types = []
@@ -1163,6 +1166,7 @@ class TableQuestionDataSet:
             answers.append(content_dict['answers'])
             answer_lengths.append(content_dict['answer_lengths'])
             is_multy_row_answer.append(content_dict['is_multy_row_answer'])
+            sql.append(content_dict['sql'])
             aggregators.append(content_dict['aggregators'])
             aggregation_columns.append(content_dict['aggregation_columns'])
             aggregation_column_types.append(content_dict['aggregation_column_types'])
@@ -1176,6 +1180,7 @@ class TableQuestionDataSet:
             # TODO alternative answers
             'answer_lengths': answer_lengths,
             'is_multy_row_answer': is_multy_row_answer,
+            'sql': sql,  # needed in lazy processing if answer coordinates should be computed on the fly
             'aggregators': aggregators,
             'aggregation_columns': aggregation_columns,
             'aggregation_column_types': aggregation_column_types,
