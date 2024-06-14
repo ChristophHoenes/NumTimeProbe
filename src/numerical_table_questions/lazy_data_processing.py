@@ -70,12 +70,18 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
         tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, pad_token_id=pad_token_id, mask_token_id=mask_token_id, verbose=False, **tokenizing_args)
         restore_metadata(table_data, tokenized_dict)
         tokenized_batch.append(tokenized_dict)
-    # concat tensors at batch dimension (from list of single-tensor-item-lists to tensor batch)
+
     tokenizer_output_names = tokenized_batch[0].keys()  # all samples should have the same tokenizer outputs
+    # check for each keys/fields the value is of tensor type (for all samples in the batch)
     is_all_tensors = {key: all([isinstance(sample[key][0], torch.Tensor) for sample in tokenized_batch]) for key in tokenizer_output_names}
+    # concat tensors at batch dimension (from list of single-sample-tensor-lists to tensor batch; list of values for non-tensor fields)
     tokenized_batch = {key: (torch.cat([sample[key][0] for sample in tokenized_batch])  # concat tensors of samples if possible
                              if is_all_tensors[key]
-                             else [sample[key][0] for sample in tokenized_batch]  # if field is not tensor type return a list of samples
+                             else [sample[key][0][0]  # if sample's field is list with single item, unwrap it from the list
+                                   if isinstance(sample[key][0], list) and len(sample[key][0]) == 1
+                                   else sample[key][0]  # unwrap table batch dimension
+                                   for sample in tokenized_batch
+                                   ]  # if field is not tensor type (int, str, list of multiple items) return a list of samples' values
                              )
                        for key in tokenizer_output_names
                        }
