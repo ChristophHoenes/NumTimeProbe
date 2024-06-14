@@ -176,11 +176,11 @@ class LightningWrapper(L.LightningModule):
             elif not isinstance(inputs, tuple):
                 inputs = (inputs,)
             # use input order specified in model_specs
-            if len(self.model_specs.input_mapping) > 0:
+            if len(self.model_specs.tensor_input_mapping) > 0:
                 # compute input format specified via self.model_specs.input_mapping
-                forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.input_mapping)
+                forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.tensor_input_mapping)
                 forward_kwargs = {model_input_id: data_function(inputs, target)
-                                  for model_input_id, data_function in self.model_specs.input_mapping.items()
+                                  for model_input_id, data_function in self.model_specs.tensor_input_mapping.items()
                                   if isinstance(model_input_id, str)
                                   }
                 # make sure all int tensors to have dtype long; non-int-tensors stay unchanged

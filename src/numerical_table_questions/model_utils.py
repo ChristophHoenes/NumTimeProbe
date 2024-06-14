@@ -24,8 +24,8 @@ class ModelTypeInfo:
     filter_data_attributes: Optional[List[str]] = None
     # any additional model specific arguments
     # (if key is of type int it is interpreted as positional or otherwise as keyword argument)
-    input_mapping: dict = field(default_factory=dict)
-    dict_input_mapping: dict = field(default_factory=dict)
+    tensor_input_mapping: dict = field(default_factory=dict)  # TensorDataset serialization
+    dict_input_mapping: dict = field(default_factory=dict)  # Dict-style (huggingface datasets) serialization
 
     def __post_init__(self):
         # TODO value checks

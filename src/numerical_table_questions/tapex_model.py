@@ -21,7 +21,7 @@ def tapex_model_type_info() -> dict:
         input_targets=True,
         loss_out_id='loss',
         filter_data_attributes=['input_ids', 'attention_mask'],
-        input_mapping={
+        tensor_input_mapping={
             '*': None,
             'labels': lambda x, y: y,
             },
