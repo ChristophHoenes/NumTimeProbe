@@ -68,7 +68,12 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
             prepare_for_tokenizer(table_data, model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding, is_eval=is_eval)
             )
         tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, pad_token_id=pad_token_id, mask_token_id=mask_token_id, verbose=False, **tokenizing_args)
+        # save tokenizer keys for default filter of keys in dict style batch
+        tokenizer_keys = list(tokenized_dict.keys())
+        # add all keys that were present in the original dataset (excluding the table to conserve memory)
         restore_metadata(table_data, tokenized_dict)
+        # add tokenizer key names as field to be able to only select those in model forward pass
+        tokenized_dict.update({'tokenizer_keys': [tokenizer_keys]})  # by convention each field is two-level iterable (list of lists or list of tensor with one batch dimension at 0)
         tokenized_batch.append(tokenized_dict)
 
     tokenizer_output_names = tokenized_batch[0].keys()  # all samples should have the same tokenizer outputs
@@ -85,6 +90,11 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
                              )
                        for key in tokenizer_output_names
                        }
+    # test consistency of non-metadata keys within batch and reduce tokenizer_keys to list of strings (instead of list of lits of strings)
+    if any([sample != tokenized_batch['tokenizer_keys'][0] for sample in tokenized_batch['tokenizer_keys']]):
+        raise ValueError("All samples of a batch must have the same keys/fields!")
+    else:
+        tokenized_batch['tokenizer_keys'] = tokenized_batch['tokenizer_keys'][0]  # same keys in all samples -> only one list for entire batch
 
     # add additional fields as meta info
     # if no padding idx is present -> add ooc (out of context) label for test set performance insights
