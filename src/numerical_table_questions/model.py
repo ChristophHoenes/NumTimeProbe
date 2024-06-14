@@ -10,7 +10,7 @@ from torchmetrics import MetricCollection
 from transformers.optimization import get_scheduler
 from warmup_scheduler import GradualWarmupScheduler
 
-from numerical_table_questions.model_utils import ModelTypeInfo, model_specific_generation
+from numerical_table_questions.model_utils import ModelTypeInfo, model_specific_generation, map_batch_keys_to_model_kwarg
 from numerical_table_questions.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
 
 if TYPE_CHECKING:
@@ -160,10 +160,8 @@ class LightningWrapper(L.LightningModule):
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
         if isinstance(inputs, dict):
-            forward_kwargs = {model_input_id: inputs[data_input_id] if data_input_id != 'targets' else target
-                              for model_input_id, data_input_id in self.model_specs.dict_input_mapping.items()
-                              if isinstance(model_input_id, str)
-                              }
+            # translate and filter to batch fields to model (named) inputs
+            forward_kwargs = map_batch_keys_to_model_kwarg(inputs, self.model_specs.dict_input_mapping, target)
             # make sure all int tensors to have dtype long; non-int-tensors stay unchanged
             forward_kwargs = {key: convert_to_long_tensor_if_int_tensor(value)
                               for key, value in forward_kwargs.items()
