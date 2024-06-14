@@ -1,6 +1,8 @@
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict
+
+import torch
 
 from numerical_table_questions.data_synthesis import Table
 from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config, tapas_generation
@@ -66,20 +68,62 @@ def get_model_specific_config(model_name: str) -> dict:
     return {'model_type_info': model_type_info, **other_kwargs}
 
 
-def model_specific_generation(model_name, model, tokenizer, inputs, **kwargs):
+def map_batch_keys_to_model_kwarg(input_dict: dict, mapping: Dict[str, str] = {}, target=None) -> dict:
+    #print("in key filter/mapping")
+    if len(mapping) == 0:
+        #print("provided mapping empty")
+        # if no explicit mapping is provided by default pass all keys that were returned from the tokenizer
+        if input_dict.get('tokenizer_keys') is not None:
+            #print('selected tokenizer_keys:', input_dict['tokenizer_keys'])
+            return {tokenizer_key: input_dict[tokenizer_key] for tokenizer_key in input_dict['tokenizer_keys']}
+        return input_dict  # if no mapping and no explicit tokenizer_keys are provided return input_dict unchanged
+
+    # route the correct data to the correct model input name (according to mapping from batch keys to model kwarg keys)
+    #print("return filtered according to mapping: ", list(mapping.keys))
+    return {model_input_name: input_dict[data_field_name]
+            # 'targets' is a special keyword and will fetch the variable/argument target rather than a key from the original batch input
+            if data_field_name != 'targets' else target
+            for model_input_name, data_field_name in mapping.items()
+            # only pass targets when explicitly defined; otherwise skip
+            if not (data_field_name == 'targets' and target is None)
+            # ignore/skip positional args (= int key)
+            if isinstance(model_input_name, str)
+            }
+
+
+def get_sample_from_batch_dict(batch_dict: dict, idx: int, keep_dim: bool = True) -> dict:
+    """ For every key in the dict style batch select the sample at position idx.
+        If keep_dim=True fill restore the batch_size dimension (length 1).
+    """
+    return {key: batch_dict[key][idx].unsqueeze(dim=0)
+            if keep_dim and isinstance(batch_dict[key], torch.Tensor)
+            else batch_dict[key][idx]
+            for key in batch_dict.keys()
+            }
+
+
+def model_specific_generation(model_name, model, tokenizer, inputs, outputs=None, **kwargs) -> List[str]:
+    """
+        outputs are the outputs of a regular forward pass (some models e.g. tapas need it for generation).
+    """
     match model_name.lower():
         case 'tapas':
-            # get required input arguments for tapas generation:
-            # extract model input_ids from inputs depending on the batch type (although currently must be dict)
-            input_ids = inputs['input_ids'] if isinstance(inputs, dict) else inputs[0]
-            # get model outputs
-            model_outputs = model(inputs)
+            # current implementation only works with dict style batch
+            if not isinstance(inputs, dict):
+                raise TypeError(f"Expected inputs to be dict type but found {type(inputs)}!")
+            # filter batch input fields to only contain inputs required by TAPAS
+            model_specific_inputs = map_batch_keys_to_model_kwarg(inputs, get_model_type_info('tapas').dict_input_mapping)
             # get table as dataframe from dataset table indices
             table_dataset = kwargs['test_dataset'].table_dataset  # assumes Dataset in test DataLoader to be of type QuestionTableIndexDataset
-            table_data = [table_dataset.select([table_idx])['table'] for table_idx in inputs['table_idx']]
-            table = Table.from_state_dict(table_data)
-            table_df = table.pandas_dataframe
-            return tapas_generation(tokenizer, input_ids, model_outputs, table_df)
+            table_data = [table_dataset.select([table_idx])[0]['table'] for table_idx in inputs['table_idx']]
+            tables = [Table.from_state_dict(sample) for sample in table_data]
+            return [tapas_generation(tokenizer,
+                                     get_sample_from_batch_dict(model_specific_inputs, t),  # select only one sample for current table (for all keys)
+                                     get_sample_from_batch_dict(outputs, t),  # select only one sample for current table (for all keys)
+                                     table.pandas_dataframe
+                                     )[0]  # as only one sample at a time is processed the returned list only contains one answer
+                    for t, table in enumerate(tables)
+                    ]
         case _:  # default generation via beam search (e.g. for tapex)
             answer_ids = model.generate(inputs['input_ids'] if isinstance(inputs, dict) else inputs[0],  # get input_ids from inputs depending on inputs type
                                         num_beams=kwargs.get('num_beams', 2),

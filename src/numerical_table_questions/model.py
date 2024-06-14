@@ -306,6 +306,41 @@ class LightningWrapper(L.LightningModule):
             else:
                 inputs[0][:, self.args.only_first_x_tokens:] = self.model_specs.pad_token_id
                 inputs[1][:, self.args.only_first_x_tokens:] = 0
+
+        # only compute normal forward step if test_loss is explicitly required or at least one torchmetric uses its outputs
+        if self.args.do_forward_in_test_step or self.args.force_test_loss_computation or len(self.test_metrics) > 0:
+            outputs = self(inputs, target)
+
+            if len(self.test_metrics) > 0:
+                # update state of torchmetrics
+                self.test_metrics.update(outputs, target)
+
+            if self.args.force_test_loss_computation:
+                if self.model_specs.loss_out_id is None:
+                    # compute loss
+                    loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
+                else:
+                    # retrieve loss
+                    loss = outputs[self.model_specs.loss_out_id]
+
+                # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+                self.log_dict(
+                    {
+                        "test/loss": loss.item(),
+                        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+                        # this should not be necessary because buffers should automatically be on the same device...
+                        # "progress/samples": self.samples_processed.to(self.device),
+                        # "progress/tokens": self.tokens_processed.to(self.device),
+                        "progress/samples": self.samples_processed.item(),
+                        "progress/tokens": self.tokens_processed.item(),
+                    },
+                    on_step=False,
+                    on_epoch=True,
+                    sync_dist=True,
+                )
+        else:
+            outputs = None
+
         # if at least one metric that evaluates generation results exists execute generation (can be more expensive than a simple forward pass)
         if len(self.generation_metrics) > 0:
             if isinstance(batch, dict):
@@ -326,7 +361,8 @@ class LightningWrapper(L.LightningModule):
                                      ) from e
             # TODO test if this leaks to much information (e.g are results worse if this is hard coded to 20)
             max_target_len = max([len(sample) for sample in text_targets])
-            string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, input_ids, max_target_len=max_target_len)
+            test_dataset = self.trainer.test_dataloaders.dataset
+            string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, inputs, outputs, max_target_len=max_target_len, test_dataset=test_dataset)
             self.predictions.extend(string_predictions)
 
             # apply post processing specified for metric to both, generated prediction and text targets
@@ -360,31 +396,6 @@ class LightningWrapper(L.LightningModule):
                 on_epoch=True,
                 sync_dist=True,
                 )
-
-        # only compute normal forward step if test_loss is explicitly required or at least one torchmetric uses its outputs
-        if self.args.force_test_loss_computation or len(self.test_metrics) > 0:
-            outputs = self(inputs, target)
-            if self.model_specs.loss_out_id is None:
-                # compute loss
-                loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
-            else:
-                # retrieve loss
-                loss = outputs[self.model_specs.loss_out_id]
-
-            # update state of torchmetrics
-            self.test_metrics.update(outputs, target)
-
-            # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
-            self.log_dict(
-                {
-                    "test/loss": loss.item(),
-                    "progress/samples": self.samples_processed.to(self.device),
-                    "progress/tokens": self.tokens_processed.to(self.device),
-                },
-                on_step=False,
-                on_epoch=True,
-                sync_dist=True,
-            )
 
     def on_test_epoch_end(self):
         # compute and log torchmetrics final epoch results

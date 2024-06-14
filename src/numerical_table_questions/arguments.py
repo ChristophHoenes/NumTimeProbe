@@ -158,6 +158,10 @@ class TrainingArgs:
         default=True,
         help=("If True (default) will data loader will return batch as dict. Else will return tuple of tensors."),
     )
+    do_forward_in_test_step: bool = dArg(
+        default=False,
+        help=("If False (default) will not execute a forward pass but only inference (model_specific_generation), otherwise additionally execute a forward pass."),
+    )
     learning_rate: float = dArg(default=5e-5, aliases="--lr")
     lr_warmup: float = dArg(
         default=0.1,
@@ -217,6 +221,9 @@ class TrainingArgs:
             self.preprocessing_workers = int(
                 os.environ.get("SLURM_JOB_CPUS_PER_NODE", multiprocessing.cpu_count())
             )
+        # test loss computation has test forward pass as prerequisite, hence adapt argument to be consistent
+        if self.force_test_loss_computation:
+            self.do_forward_in_test_step = True  # currently no effect on the program's logic if force_test_loss_computation = True
 
 
 @dataclass
