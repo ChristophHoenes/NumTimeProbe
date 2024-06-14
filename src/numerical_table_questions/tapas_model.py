@@ -111,7 +111,7 @@ def string_to_num(number_string: str) -> Union[int, float]:
 def compute_aggregation(aggregators, answer_cells) -> List[str]:
     results = []
     for agg, cells in zip(aggregators, answer_cells):
-        parsed_cells = [float(cell or 'nan') for cell in cells.split(', ')]
+        parsed_cells = [string_to_num(cell) for cell in cells.split(', ')]
         match agg:
             case 'NONE':
                 if len(parsed_cells) > 1:
@@ -127,8 +127,8 @@ def compute_aggregation(aggregators, answer_cells) -> List[str]:
                 raise ValueError(f"Encountered unknown aggregator {agg}! Make sure the mapping defined in get_aggregator_string is correct.")
     # answers should be strings -> convert to correct number format as string
     postprocessed_number_format = ['nan'
-                                   if math.isnan(string_to_num(number))  # special case for invalid numbers
-                                   else string_to_num(number)
+                                   if math.isnan(number)  # special case for invalid numbers
+                                   else str(number)
                                    for number in results
                                    ]
     return postprocessed_number_format
