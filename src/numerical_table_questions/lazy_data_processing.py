@@ -71,7 +71,7 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
         # save tokenizer keys for default filter of keys in dict style batch
         tokenizer_keys = list(tokenized_dict.keys())
         # add all keys that were present in the original dataset (excluding the table to conserve memory)
-        restore_metadata(table_data, tokenized_dict)
+        restore_metadata(table_data, tokenized_dict, question_number)
         # add tokenizer key names as field to be able to only select those in model forward pass
         tokenized_dict.update({'tokenizer_keys': [tokenizer_keys]})  # by convention each field is two-level iterable (list of lists or list of tensor with one batch dimension at 0)
         tokenized_batch.append(tokenized_dict)

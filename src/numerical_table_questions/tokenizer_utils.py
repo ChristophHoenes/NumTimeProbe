@@ -381,14 +381,31 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
     return tokenized
 
 
-def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict):
+def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict, question_number: Optional[int] = None):
+    # check assumptions on inputs
+    if not isinstance(tokenized_data['input_ids'], list):
+        raise TypeError(f"Expected tokenized_data's values to be (nested) lists (table_batch and samples per table) "
+                        "but found {type(tokenized_data['input_ids'])} for tokenized_data['input_ids']!"
+                        )
+    if len(original_data) != len(tokenized_data['input_ids']):  # assumes that all possible tokenizers used have at least input_ids as output key
+        raise ValueError(f"The number of samples in the original_data ({len(original_data)}) and tokenized_data ({len(tokenized_data['input_ids'])}) "
+                         "must match in order to restore the metadata from original_data correctly!"
+                         )
+
     # add other fields of data split that did not go through the tokenizer
     missing_fields = list(set(original_data.column_names)
                           # TODO remove obsolete fields ('column_name', 'aggregator', 'condition_value') from data and this code
                           - set(['table', 'column_name', 'aggregator', 'condition_value'])  # do not copy table for each question
                           - set(tokenized_data.keys())
                           )
-    additional_fields_dict = {field: original_data[field] for field in missing_fields}
+
+    additional_fields_dict = {field: [[table_batch[field][question_number]]  # if idx is specified only select value for a single sample
+                                      if question_number is not None
+                                      else table_batch[field]  # otherwise select the entire table batch
+                                      for table_batch in original_data
+                                      ]
+                              for field in missing_fields
+                              }
     # since table was removed from keys for efficiency, add column with table_id for reference (repeat id for each question to the table)
     additional_fields_dict['table_id'] = [[table_batch['table']['table_id']] * len(table_batch['questions'])
                                           for table_batch in original_data
