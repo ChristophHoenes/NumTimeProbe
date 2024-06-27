@@ -5,7 +5,9 @@ from collections.abc import Callable
 from typing import Optional, Tuple, List
 
 from numerical_table_questions.data_caching import save_version, caching
-from numerical_table_questions.data_synthesis import QuestionTemplate, Table, TableQuestionDataSet, create_table_dataset, load_table_dataset
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet#, create_table_dataset, load_table_dataset
+from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
+from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
@@ -479,6 +481,7 @@ def create_expression_dataset(tables,
                               use_cache: bool = True,
                               cache_path: str = './data/NumTabQA/.cache',
                               save=True,
+                              memory_mapped=True,
                               ) -> TableQuestionDataSet:
     if use_cache:
         dataset = caching(name, cache_path=cache_path)
@@ -518,6 +521,7 @@ def create_expression_dataset(tables,
                                        question_templates=[ratio_template],
                                        tables=tables,
                                        compute_coordinates=False,
+                                       memory_mapped=memory_mapped,
                                        )
         if save:
             save_version(dataset, cache_path, name)
@@ -567,7 +571,8 @@ def apply_quality_filters(dataset,
 def main(single_version: bool = True, table_corpus: str = 'wikitablequestions', split: Optional[str] = None, _skip_first: Optional[int] = None):
     # use pre-configured functiun for dataset (single dataset)
     if single_version:
-        create_postprocessed_versions(data_version_function=create_diff_table_question_dataset, name='diff')  # TODO compare diff with interactive version
+        #create_postprocessed_versions()#data_version_function=create_diff_table_question_dataset, name='diff')  # TODO compare diff with interactive version
+        create_postprocessed_versions(data_version_function=create_expression_dataset, name='expression')
         return
     # interactive (API) version for on-the-fly creation
     main_expressions = []
@@ -634,6 +639,7 @@ def main(single_version: bool = True, table_corpus: str = 'wikitablequestions', 
 
 
 if __name__ == "__main__":
+    # TODO refactor functions should do one thing (e.g apply quality filter should not save dataset version) -> have script instead that only executes all required functions
     main()
     # gittables example
     # table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
