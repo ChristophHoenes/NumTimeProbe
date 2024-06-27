@@ -9,6 +9,7 @@ import logging.config
 import math
 import re
 import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 import weakref
 from collections.abc import Iterable
 from pathlib import PurePath
@@ -20,7 +21,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from numerical_table_questions.answer_coordinates import compute_answer_coordinates
-from numerical_table_questions.data_caching import save_version, caching
+from numerical_table_questions.data_caching import save_version, caching, delete_dataset
+from numerical_table_questions.memmep_data_synth import create_table_batch_questions, flatten_hierarchical_fields, deduplicate_field, flatten_table_batches, add_from_cache
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLOperator, SQLOperatorTemplate,
     SQLConditionTemplate, SQLOverClauseTemplate, SQLTemplate,
@@ -1089,18 +1091,25 @@ class TableQuestionDataSet:
                  question_templates: Optional[List[QuestionTemplate]] = None,
                  tables: Optional[List[Table]] = None,
                  compute_answers=True,
-                 compute_coordinates=True,
+                 compute_alternatives=False,
+                 compute_coordinates=False,
                  allow_multiple_answers=True,
+                 memeory_mapped=True,
                  ) -> None:
         self.name = name
         self.description = description
         self._question_templates = question_templates
-        self._tables = {table._table_id: table for table in (tables or [])}
+        if isinstance(tables, datasets.Dataset):
+            self._tables = tables
+        else:
+            self._tables = {table._table_id: table for table in (tables or [])}
         self._unanswerable_questions = []
         self._compute_coordinates = compute_coordinates
         self._questions = self._initialize_questions(question_templates,
                                                      tables,
-                                                     compute_answers=compute_answers
+                                                     compute_answers=compute_answers,
+                                                     compute_alternatives=compute_alternatives,
+                                                     memory_mapped=memeory_mapped,
                                                      )
         self._questions_by_table_id = lambda: None  # callable since weakref is also callable
 
@@ -1119,8 +1128,10 @@ class TableQuestionDataSet:
         self._is_answers_computed = compute_answers
 
     @property
-    def tables(self) -> List[Table]:
+    def tables(self) -> Union[List[Table]]:
         """Property containing a shallow copy of the list of lables in the dataset."""
+        if isinstance(self._tables, datasets.Dataset):
+            return self._tables
         return list(self._tables.values())
 
     @property
@@ -1167,6 +1178,7 @@ class TableQuestionDataSet:
                 - Add support of lists
                   (entails checking that lists contain same object type)
         """
+        # TODO update for datasets.Dataset serialization of tables and questions
         if isinstance(artifact, Table):
             self._tables.append(artifact)
             new_questions = self._initialize_questions(
@@ -1194,8 +1206,59 @@ class TableQuestionDataSet:
         self._is_answers_computed = compute_answers
 
     def to_huggingface(self) -> datasets.Dataset:
-        """Creates a huggingface datasets.Dataset from the questions in this dataset."""
+        """Creates a huggingface datasets.Dataset from the (in memory) questions in this dataset."""
         logger.info('Grouping questions by table...')
+        if isinstance(self._questions, datasets.Dataset):
+            # join table and question datasets
+            if not isinstance(self._tables, datasets.Dataset):
+                table_dataset = datasets.Dataset.from_list([table.to_state_dict() for table in self._tables.values()])
+            else:
+                table_dataset = self._tables
+            table_batches = []
+            for table in table_dataset:
+                questions = []
+                question_lengths = []
+                answers = []
+                answer_lengths = []
+                is_multy_row_answer = []
+                sql = []
+                aggregators = []
+                aggregation_columns = []
+                #aggregation_column_types = []  # missing for datasets.Dataset serialization
+                num_conditions = []
+                aggregation_num_rows = []
+                for question in self._questions:
+                    if question['table_id'] == table['table_id']:
+                        questions.append(question['nl_question'])
+                        question_lengths.append(len(question['nl_question']))
+                        answers.append(question['answer'])
+                        answer_lengths.append(len(question['answer']))
+                        is_multy_row_answer.append(question['multi_row_answer'])
+                        sql.append(question['sql_query'])
+                        aggregators.append(question['operator'])
+                        aggregation_columns.append(question['aggregation_column'])
+                        # aggregation_column_types.append(question[''])  # TODO make consistent somehow with non-memmapped version (e.g. add here or remove there)
+                        num_conditions.append(len(question['condition_assignments']))
+                        aggregation_num_rows.append(str(question['num_rows_aggregated_in_answer']))
+                table_batch_dataset = datasets.Dataset.from_list(
+                    [{'table': table,
+                      'questions': questions,
+                      'question_lengths': question_lengths,
+                      'answers': answers,
+                      'answer_lengths': answer_lengths,
+                      'is_multy_row_answer': is_multy_row_answer,
+                      'sql': sql,  # needed in lazy processing if answer coordinates should be computed on the fly
+                      'aggregators': aggregators,
+                      'aggregation_columns': aggregation_columns,
+                      'aggregation_column_types': aggregation_column_types,
+                      'num_conditions': num_conditions,
+                      'aggregation_num_rows': aggregation_num_rows,
+                      }
+                     ]
+                    )
+                table_batches.append(table_batch_dataset)
+            return datasets.concatenate_datasets(table_batches)
+
         # TODO refactor: use self.questions_by_table
         # TODO add column_value_densitiy feature per question
         # and maybe aggregation_value_density/diversity (count distinct/count -> additional query)
@@ -1276,11 +1339,13 @@ class TableQuestionDataSet:
         return json.dumps(self, default=lambda x: x.__dict__, sort_keys=True, indent=4)
 
     def _initialize_questions(self,
-                              question_templates: List[QuestionTemplate],
-                              tables: List[Table],
+                              question_templates: List[QuestionTemplate],  # TODO option for datasets.Dataset of QuestionTemplate state dicts or str path
+                              tables: List[Table],  # TODO option for datasets.Dataset of Table state dicts or str path
                               compute_answers=True,
+                              compute_alternatives=False,
                               do_count_augmentation=True,
-                              ) -> List[TableQuestion]:
+                              memory_mapped=True,
+                              ) -> Union[List[TableQuestion], datasets.Dataset]:
         """Creates the quelstions from the datasets' question templates and tables.
 
             The TableQuestionDataSet can also be created incrementally. If either
@@ -1297,31 +1362,114 @@ class TableQuestionDataSet:
         """
         if self._question_templates is None or self._tables is None:
             return []
-        # generate questions from templates and keep count operator and other operators seperate for now (more flexibility of when to
-        # explicitly use count as questions vs. when to only infer pre-aggregation row count as statistical property of the question)
-        question_batches, count_question_batches = zip(
-            *[question_template.create_questions(tables,
-                                                 do_count_augmentation=do_count_augmentation,
-                                                 )
-              for question_template in question_templates]
-            )
+        
+        if memory_mapped:
+            # start a huggingface datasets.Dataset with only the template hash and the
+            if isinstance(tables, list):
+                """ use create_table_batch_questions without map but it's not really mempry mapped without datasets -> just make a Dataset from_list
+                for question_template in question_templates:
+                    for table in tables:
+                        question_dict = create_table_batch_questions(
+                            None,  # positional argument sample is only used when function is passed to datasets .map()
+                            template_obj=question_template,
+                            table=table,
+                            create_alternatives=compute_alternatives,
+                            do_count_augmentation=do_count_augmentation,
+                            memory_mapped=memory_mapped,
+                            )
+                """
+                table_dataset = datasets.Dataset.from_list([{'table': table.to_state_dict()} for table in tables])
+            #else:  # uncomment and indent if multi-row-commented block above is used
+            elif isinstance(tables, str):
+                table_dataset = caching(tables)
+            elif isinstance(tables, datasets.Dataset):
+                table_dataset = tables
+            else:
+                raise TypeError(f"Argument tables is expected to be of type List[Table], str (path to dataset) or datasets.Dataset, but found {type(tables)}!")
+            for question_template in question_templates:
+                hierarcical_question_dataset = table_dataset.map(
+                    create_table_batch_questions,
+                    fn_kwargs=dict(
+                        template_obj=question_template,
+                        create_alternatives=compute_alternatives,
+                        do_count_augmentation=do_count_augmentation,
+                        memory_mapped=memory_mapped,
+                        )
+                    )
+                """ need question dataset instead (not all questions in memory)
+                flattened_question_dataset, _ = hierarcical_question_dataset.map(
+                    flatten_hierarchical_fields,
+                    fn_kwargs=dict(
+                        old_field_names=['questions', 'count_questions'],
+                        reduce_field='table',
+                        remove_columns=['table', 'questions', 'count_questions'],
+                        )
+                    ), delete_dataset(hierarcical_question_dataset)
+                """
+                deduplicated_question_dataset, _ = hierarcical_question_dataset.map(
+                    deduplicate_field,
+                    fn_kwargs=dict(
+                        field_names=['questions', 'count_questions'],
+                        object_class=TableQuestion,
+                        )
+                    ), delete_dataset(hierarcical_question_dataset)
+                flattened_count_questions = flatten_table_batches(deduplicated_question_dataset, field_name='count_questions')
+                flattened_questions = flatten_table_batches(deduplicated_question_dataset, field_name='questions')
+                """ not possible to pass growing cache as kwarg as they are individual copies per process
+                count_result_cache = {}
+                count_answer_dataset, _ = deduplicated_question_dataset.map(
+                    cached_answer_computation,
+                    fn_kwargs=dict(
+                        answer_cache=count_result_cache,
+                        )
+                    ), delete_dataset(deduplicated_question_dataset)
+                del count_result_cache  # release memory for answer cache
+                """
+        else:
+            # generate questions from templates and keep count operator and other operators seperate for now (more flexibility of when to
+            # explicitly use count as questions vs. when to only infer pre-aggregation row count as statistical property of the question)
+            question_batches, count_question_batches = zip(
+                *[question_template.create_questions(tables,
+                                                     do_count_augmentation=do_count_augmentation,
+                                                     )
+                for question_template in question_templates]
+                )
 
-        flattened_question_list = [question
+            flattened_questions = [question
                                    for question_template_batch in question_batches
-                                   for question in question_template_batch]
-        flattened_count_question_list = [question
+                                   for question in question_template_batch
+                                   ]
+            flattened_count_questions = [question
                                          for question_template_batch in count_question_batches
-                                         for question in question_template_batch]
-        # remove duplicates
-        flattened_question_list = list(set(flattened_question_list))
-        flattened_count_question_list = list(set(flattened_count_question_list))
+                                         for question in question_template_batch
+                                         ]
+            # remove duplicates
+            flattened_questions = list(set(flattened_questions))
+            flattened_count_questions = list(set(flattened_count_questions))
+
+        def _to_question(question: Union[TableQuestion, dict]) -> TableQuestion:
+            # if memory mapped the dataset contains the state dicts rather than the TableQuestion objects -> convert
+            if not isinstance(question, TableQuestion):
+                question = TableQuestion.from_state_dict(question)
+            return question
+
+        def _add_cached_field_to_dataset(dataset: datasets.Dataset, field_name: str, cache: dict, key: str):
+            return dataset.map(
+                add_from_cache,
+                fn_kwargs=dict(
+                    field_name=field_name,
+                    cache=cache,  # will be copied num_proc times
+                    key_field=key,
+                    )
+                )
 
         # compute and cache the results of counting rows per condition assignment
         count_result_cache = {}
         if do_count_augmentation:
             logger.info('Computing pre-aggregation row counts of table questions...')
-            for question in (progress_bar := tqdm(flattened_count_question_list)):
+            for question in (progress_bar := tqdm(flattened_count_questions)):
                 progress_bar.set_description("Computing pre-aggregation row counts")
+                question = _to_question(question)  # ensure TableQuestion object
                 question.compute_answer(compute_coordinates=self._compute_coordinates)
                 # store count answer to be reused for similar questions (same condition)
                 # although question is hashable create new hash such that all questions
@@ -1334,13 +1482,16 @@ class TableQuestionDataSet:
                 # condition_hash = question._count_hash or hashlib.sha256(''.join(question._sql_query.split('\n')[1:])).hexdigest()
                 condition_hash = question._count_hash
                 count_result_cache[condition_hash] = question._answer
+            if isinstance(flattened_count_questions, datasets.Dataset):
+                flattened_count_questions = _add_cached_field_to_dataset(flattened_count_questions, 'answer', count_result_cache, 'count_hash')
 
         # compute answers to the questions (use cached answers for questions with equivalent SQL)
         answer_result_cache = {}
         if compute_answers:
             logger.info('Computing answers to table questions...')
-            for question in (progress_bar := tqdm(flattened_question_list)):
+            for question in (progress_bar := tqdm(flattened_questions)):
                 progress_bar.set_description("Computing answers to table questions")
+                question = _to_question(question)  # ensure TableQuestion object
                 if (cached_answer := answer_result_cache.get(question._sql_query)) is None:
                     question.compute_answer(compute_coordinates=self._compute_coordinates)
                     # cache answers for questions with same sql
@@ -1348,29 +1499,44 @@ class TableQuestionDataSet:
                 else:
                     # do not compute same sql query twice, but use cached answer
                     question._answer = cached_answer
-                self._is_answers_computed = compute_answers
+            if isinstance(flattened_questions, datasets.Dataset):
+                flattened_questions = _add_cached_field_to_dataset(flattened_questions, 'answer', answer_result_cache, 'sql_query')
+            self._is_answers_computed = compute_answers
 
             # determine which questions with count aggregator should be explicit questions in the dataset
             # rather than just used for meta data and add them
             explicit_count_questions = []
             has_template_explicit_count_question = {template.template_hash: template._explicit_count_definition is not None
                                                     for template in question_templates}
-            for question in flattened_count_question_list:
+            for question in flattened_count_questions:
+                question = _to_question(question)  # ensure TableQuestion object
                 if has_template_explicit_count_question[question.template_hash]:
                     explicit_count_questions.append(question)
                     if question._answer is None:
+                        logger.debug("Did not find any pre-computed answer for count question. Computing it now...")
                         question.compute_answer(compute_coordinates=self._compute_coordinates)
-            flattened_question_list.extend(explicit_count_questions)
+            if isinstance(flattened_questions, datasets.Dataset):
+                explicit_count_question_dataset = datasets.Dataset.from_list([question.to_state_dict()
+                                                                              for question in explicit_count_questions
+                                                                              ]
+                                                                             )
+                flattened_questions = datasets.concatenate_datasets([flattened_questions, explicit_count_question_dataset])
+            else:  # list of TableQuestions
+                flattened_questions.extend(explicit_count_questions)
 
         # add row counts before aggregation as statistical property (meta data) of the TableQuestion
         if do_count_augmentation:
-            for question in flattened_question_list:
-                # condition_hash = hashlib.sha256(str(tuple(question.condition_assignments)).encode()).hexdigest()
-                condition_hash = question._count_hash
-                if count_result_cache.get(condition_hash) is None:
-                    print(condition_hash)
-                question._num_rows_aggregated_in_answer = count_result_cache.get(condition_hash, 'No count result')
-        return flattened_question_list
+            if isinstance(flattened_questions, datasets.Dataset):
+                flattened_questions = _add_cached_field_to_dataset(flattened_questions, 'num_rows_aggregated_in_answer', count_result_cache, 'count_hash')
+            else:
+                for question in flattened_questions:
+                    question = _to_question(question)  # ensure TableQuestion object
+                    # condition_hash = hashlib.sha256(str(tuple(question.condition_assignments)).encode()).hexdigest()
+                    condition_hash = question._count_hash
+                    if count_result_cache.get(condition_hash) is None:
+                        print(condition_hash)
+                    question._num_rows_aggregated_in_answer = count_result_cache.get(condition_hash, 'No count result')
+        return flattened_questions
 
     def _remove_unanswered_questions(self) -> None:
         self._unanswerable_questions.extend([question
@@ -1414,6 +1580,9 @@ class TableQuestionDataSet:
             self._questions = filtered_questions
 
     def prepare_for_pickle(self):
+        if isinstance(self._tables, datasets.Dataset):
+            warnings.warn("self._tables is already serialized as huggingface datasets.Dataset, no need to pickle.")
+            return
         # removes weakrefs
         self._questions_by_table_id = lambda: None
         for table in self._tables.values():
