@@ -5,9 +5,10 @@ from collections.abc import Callable
 from typing import Optional, Tuple, List
 
 from numerical_table_questions.data_caching import save_version, caching
-from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet#, create_table_dataset, load_table_dataset
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
+from numerical_table_questions.data_synthesis.table_creation import create_table_dataset, load_table_dataset
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
