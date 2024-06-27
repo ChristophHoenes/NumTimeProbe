@@ -1063,6 +1063,24 @@ class QuestionTemplate:
         return generated_questions, generated_count_questions
 
 
+def restore_table_from_id(table_id: str, table: Optional[Union[Table, List[Table], TableQuestionDataSet]] = None) -> Optional[Table]:
+        def _search_id_in_table_list(tab_id: str, table_list: List[Table]) -> Optional[Table]:
+            for tab in table_list:
+                if tab._table_id == tab_id:
+                    return tab
+
+        if table is None:
+            warnings.warn("No table data was provided to restore Table object! Returning None. This might cause problems depending on the use-case.")
+        elif isinstance(table, Table):
+            if table_id != table._table_id:
+                raise ValueError("Mismatch between provided Table and the table id! This would likely lead to incorrect values.")
+            return table
+        elif isinstance(table, TableQuestionDataSet):
+            return _search_id_in_table_list(table_id, table.tables)
+        elif isinstance(table, list):
+            return _search_id_in_table_list(table_id, table)
+
+
 class TableQuestionDataSet:
 
     def __init__(self,
