@@ -146,27 +146,28 @@ def scan_dump(example, save_directory: str, file_endings: str = '.py'):
 
 def main(save_directory='dump_scan'):
     search_files = [
-        SearchFile(file_name='dataset', header='class TableQuestionDataSet:', footer='def remove_questions_with_lower_aggregation_count(', dump_files=['dump_files/source_code_dump.txt'], max_length=1000, footer_slack=100),
-        SearchFile(file_name='memmep_data_synth', header='def create_all_question_fields(', footer='def add_from_cache(', dump_files=['dump_files/source_code_dump.txt'], max_length=1000, footer_slack=100),
-        SearchFile(file_name='question', header='from numerical_table_questions.answer_coordinates import compute_answer_coordinates', footer='def restore_table_from_id(', dump_files=['dump_files/source_code_dump.txt'], max_length=500, footer_slack=50),
-        SearchFile(file_name='question_template', header='from numerical_table_questions.data_synthesis.question import TableQuestion, compute_arithmetic_expression_str', footer='return random_samples[0] if len(column_names) == 1 else random_samples', dump_files=['dump_files/source_code_dump.txt'], max_length=1000, footer_slack=100),
-        SearchFile(file_name='table', header='from collections.abc import Iterable', footer='def alpha_numeric_sort(', dump_files=['dump_files/table_recovery_2.txt'], max_length=700, footer_slack=100),
-        SearchFile(file_name='table_creation', header='from numerical_table_questions.data_synthesis.table import Table, name_id_mapping', footer='if __name__ == "__main__":', dump_files=['dump_files/source_code_dump.txt'], max_length=200, footer_slack=20),
-        SearchFile(file_name='answer_coordinates', header='class AnswerCoordinates:', footer='def compute_answer_coordinates(', dump_files=['dump_files/source_code_dump.txt'], max_length=200, footer_slack=100),
-        SearchFile(file_name='arguments', header='from dargparser import dArg', footer='class DataProcessingArgs:', dump_files=['dump_files/arguments_recovery.txt'], max_length=500, footer_slack=50),
-        SearchFile(file_name='data_caching', header='CLEANUP_PATIENCE = 1.0', footer='def timed_cleanup(', dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=30),
-        SearchFile(file_name='data_loading', header='class WrapCustomTupleDataLoader(DataLoader):', footer='return WrapCustomTupleDataLoader(self.splits[split_name]', dump_files=['dump_files/source_code_dump.txt'], max_length=750, footer_slack=150),
-        SearchFile(file_name='data_utils', header='from numerical_table_questions.arguments import DataProcessingArgs', footer='# extract_properties_posthoc(args)', dump_files=['dump_files/source_code_dump.txt'], max_length=550, footer_slack=50),
-        SearchFile(file_name='evaluation', header='from numerical_table_questions.model import LightningWrapper', footer='artifact = wandb.Artifact("run.log", type="logfile")', dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=20),
-        SearchFile(file_name='gittables_processing', header='def infer_table_name_from_path(', footer='if __name__ == "__main__":', dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=20),
-        SearchFile(file_name='lazy_data_processing', header='def generate_question_index(', footer='data_by_table_id = QuestionTableIndexDataset(table_question_dataset)', dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=50),
-        SearchFile(file_name='model', header='from warmup_scheduler import GradualWarmupScheduler', footer='"lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},', dump_files=['dump_files/source_code_dump.txt'], max_length=700, footer_slack=50),
-        SearchFile(file_name='model_utils', header='class ModelTypeInfo:', footer="clean_up_tokenization_spaces=kwargs.get('clean_up_tokenization_spaces', True),", dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=20),
-        SearchFile(file_name='sql_templates', header='class SQLOperator:', footer='def find_template_variables(', dump_files=['dump_files/sql_templates_recovery.txt'], max_length=400, footer_slack=20),
-        SearchFile(file_name='sql_utils', header='def execute_sql(', footer='return query_result', dump_files=['dump_files/sql_util_recovery_2.txt'], max_length=100, footer_slack=20),
-        SearchFile(file_name='tapas_model', header='def tapas_model_type_info()', footer='def tapas_generation(', dump_files=['dump_files/source_code_dump.txt'], max_length=250, footer_slack=20),
-        SearchFile(file_name='tapex_model', header='def tapex_model_type_info()', footer="if kwargs.get('optimize_int_type')", dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=50),
-        SearchFile(file_name='tokenizer_utils', header='def get_tokenizer(', footer='tokenized_data.update(additional_fields_dict)', dump_files=['dump_files/source_code_dump.txt'], max_length=700, footer_slack=70),
+        SearchFile(file_name='dataset', header=None, footer='warnings.warn("self._tables is already serialized as huggingface datasets.Dataset, no need to pickle.")', dump_files=['dump_files/source_code_dump.txt'], max_length=900, footer_slack=50),
+        SearchFile(file_name='memmep_data_synth', header=None, footer='max_questions_per_table: Optional[int] = None,', dump_files=['dump_files/source_code_dump.txt'], max_length=650, footer_slack=600),
+        SearchFile(file_name='question', header=None, footer='return isinstance(other, TableQuestion) and self.__members() == other.__members()', dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=100),
+        SearchFile(file_name='question_template', header=None, footer='return random_samples[0] if len(column_names) == 1 else random_samples', dump_files=['dump_files/source_code_dump.txt'], max_length=850, footer_slack=50),
+        SearchFile(file_name='table', header=None, footer='# only approximate identity for efficiency (not all values are checked)', dump_files=['dump_files/table_recovery_2.txt'], max_length=500, footer_slack=400),
+        SearchFile(file_name='table_creation', header=None, footer='# restore original format in-memory by loading from state dict', dump_files=['dump_files/source_code_dump.txt'], max_length=200, footer_slack=150),
+        SearchFile(file_name='template_creation', header=None, footer='Creates Question templates with all basic condition presets given only the main expression', dump_files=['dump_files/source_code_dump.txt'], max_length=1500, footer_slack=1000),
+        SearchFile(file_name='answer_coordinates', header=None, footer='class AnswerCoordinates', dump_files=['dump_files/source_code_dump.txt'], max_length=200, footer_slack=150),
+        SearchFile(file_name='arguments', header=None, footer='Maximum number of questions that are generated based on the same underlying table', dump_files=['dump_files/arguments_recovery.txt'], max_length=450, footer_slack=50),
+        SearchFile(file_name='data_caching', header=None, footer='Checks for pickle or arrow file(s) and loads if exist, otherwise return None', dump_files=['dump_files/data_caching_recovery.txt'], max_length=300, footer_slack=230),
+        SearchFile(file_name='data_loading', header=None, footer='class WrapCustomTupleDataLoader(DataLoader):', dump_files=['dump_files/source_code_dump.txt'], max_length=750, footer_slack=670),
+        SearchFile(file_name='data_utils', header=None, footer='Selects the smallest possible torch dtype for ints representing an id mapping of size num_value.', dump_files=['dump_files/source_code_dump.txt'], max_length=500, footer_slack=420),
+        SearchFile(file_name='evaluation', header=None, footer='def evaluate_trained(', dump_files=['dump_files/source_code_dump.txt'], max_length=400, footer_slack=200),
+        SearchFile(file_name='gittables_processing', header=None, footer="case r'^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$': return 'float'", dump_files=['dump_files/source_code_dump.txt'], max_length=420, footer_slack=350),
+        SearchFile(file_name='lazy_data_processing', header=None, footer='Given a TableQuestionDataset compute a mapping from question index to table id and question index within the table', dump_files=['dump_files/source_code_dump.txt'], max_length=320, footer_slack=270),
+        SearchFile(file_name='model', header=None, footer='No effective batch size was set! Using negative batch_size_per_device as proxy', dump_files=['dump_files/source_code_dump.txt'], max_length=700, footer_slack=500),
+        SearchFile(file_name='model_utils', header=None, footer="case _:  # default generation via beam search (e.g. for tapex)", dump_files=['dump_files/source_code_dump.txt'], max_length=320, footer_slack=100),
+        SearchFile(file_name='sql_templates', header=None, footer="'argument0_recursion':", dump_files=['dump_files/sql_templates_recovery.txt'], max_length=420, footer_slack=270),
+        SearchFile(file_name='sql_utils', header=None, footer='def execute_sql(', dump_files=['dump_files/sql_util_recovery_2.txt'], max_length=150, footer_slack=100),
+        SearchFile(file_name='tapas_model', header=None, footer='def tapas_tokenizer_format(', dump_files=['dump_files/source_code_dump.txt'], max_length=285, footer_slack=200),
+        SearchFile(file_name='tapex_model', header=None, footer="def tapex_model_type_info(", dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=250),
+        SearchFile(file_name='tokenizer_utils', header=None, footer='def get_tokenizer(', dump_files=['dump_files/source_code_dump.txt'], max_length=600, footer_slack=520),
     ]
 
     search_file_dataset = datasets.Dataset.from_list([asdict(search_file) for search_file in search_files])
@@ -184,4 +185,4 @@ def main(save_directory='dump_scan'):
 
 
 if __name__ == "__main__":
-    main(save_directory='dump_scan_1')
+    main(save_directory='dump_scan_2')
