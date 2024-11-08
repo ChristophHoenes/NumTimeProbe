@@ -1,5 +1,6 @@
 import random
 import re
+import tracemalloc
 import wandb
 from dargparser import dargparse
 from pathlib import Path
@@ -14,7 +15,8 @@ from numerical_table_questions.arguments import DataProcessingArgs
 from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 #from src.numerical_table_questions.data_caching import caching
 from numerical_table_questions.data_caching import caching, delete_dataset
-from numerical_table_questions.data_synthesis import Table, remove_duplicate_qa_pairs
+from numerical_table_questions.data_synthesis.table import Table
+from numerical_table_questions.data_synthesis.table_creation import remove_duplicate_qa_pairs
 
 
 DUMMY_DATA = datasets.Dataset.from_dict({
@@ -235,6 +237,17 @@ def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None
                        )
 
 
+def dump_mem_alloc(stop=True):
+    snapshot = tracemalloc.take_snapshot()
+    top_stats = snapshot.statistics('lineno')
+
+    for stat in top_stats[:10]:
+        print(stat)
+    print()
+    if stop:
+        tracemalloc.stop()
+
+
 def main(args):
     # TODO if else for deciding whether to postproces or not (properties already created during synthesis?)
     # extract_properties_posthoc(args)
@@ -264,7 +277,7 @@ def main(args):
         'freqency_aggregators': cnt_by_agg,
         'freqency_table': cnt_by_tab,  # TODO reduce number of tables (e.g. 10-percentiles, min max mean)
         'frequency_answer': cnt_by_answer,
-        
+
         #num_row_agg_freq, num_row_agg_val
     }
     print(acc_by_agg, cnt_by_agg)

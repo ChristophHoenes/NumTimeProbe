@@ -15,7 +15,7 @@ from numerical_table_questions.data_synthesis.question import TableQuestion, com
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator, SQLOperatorTemplate, SQLOverClauseTemplate, SQLTemplate,
-    find_template_variables,
+    find_template_variables, get_operator_by_name
 )
 
 
@@ -31,8 +31,8 @@ class QuestionTemplate:
                  sql_main_expression: SQLColumnExpression,
                  sql_allowed_operators: Tuple[SQLOperator, ...],
                  sql_conditions: Tuple[SQLConditionTemplate, ...],
-                 schema,
-                 template_alternatives=None
+                 schema: dict,
+                 template_alternatives: Optional[List[str]] = None
                  ):
         self._nl_template = nl_template_string
         self.template_alternatives = template_alternatives
@@ -56,9 +56,14 @@ class QuestionTemplate:
         return {
             'nl_template_string': self._nl_template,
             'template_alternatives': self.template_alternatives,
-            'sql_main_expression': self.main_expression,
-            'sql_allowed_operators': self._operators,
-            'sql_conditions': self.conditions,
+            'sql_main_expression': self.main_expression.to_state_dict(),
+            'sql_allowed_operators': [operator.sql for operator in self._operators],
+            'sql_conditions': [{'condition': condition.condition_column,
+                                'comparator': condition.comparator,
+                                'value': condition.value
+                                }
+                               for condition in self.conditions
+                               ],
             'schema': self._schema,
             'template_hash': self._template_hash,
         }
@@ -71,10 +76,28 @@ class QuestionTemplate:
         instance = cls.__new__(cls)
         instance._nl_template = state_dict['nl_template_string']
         instance.template_alternatives = state_dict['template_alternatives']
-        instance.main_expression = state_dict['sql_main_expression']
-        instance._operators = state_dict['sql_allowed_operators']
-        instance.conditions = state_dict['sql_conditions']
+        instance.main_expression = SQLColumnExpression.from_state_dict(state_dict['sql_main_expression'])
+        # analogously to __init__ separate count operator and other operators
+        sql_allowed_operators = tuple([get_operator_by_name(op) for op in state_dict['sql_allowed_operators']])
+        instance._operators, instance._explicit_count_definition = instance._extract_explicit_count_operator_definition(sql_allowed_operators)
+        instance.conditions = tuple([SQLConditionTemplate(condition=condition['condition'],
+                                                          comparator=condition['comparator'],
+                                                          value=condition['value'],
+                                                          )
+                                     for condition in state_dict['sql_conditions']
+                                     ]
+                                    )
         instance._schema = state_dict['schema']
+        # postprocess schema variables
+        if instance._schema is not None and (schema_variables := instance._schema.get('variables')) is not None:
+            marked_for_deletion = []
+            for var_name, val in schema_variables.items():
+                # delete empty variable keys that were added by datasets.Dataset in order to have consistent nested features
+                # otherwise can lead to problems in question generation (filling non existent variables with values)
+                if val is None:
+                    marked_for_deletion.append(var_name)
+            for var_name in marked_for_deletion:
+                del schema_variables[var_name]
         instance._template_hash = state_dict['template_hash']
         return instance
 
@@ -144,9 +167,30 @@ class QuestionTemplate:
     def template_hash(self):
         return self._template_hash
 
+    def get_sql_template(self,
+                         operator: SQLOperatorTemplate = None,
+                         brackets: Optional[str] = None,
+                         ) -> SQLTemplate:
+        SQLTemplate(
+            SQLOperatorTemplate(
+                operator.sql if operator else '{op}',
+                self.main_expression,
+                brackets=brackets,
+                over_clause=SQLOverClauseTemplate(
+                    operator.sql_partition_cols,
+                    operator.sql_order_cols,
+                    operator.sql_frame_size
+                ) if operator and operator.sql_over_clause else None
+            ),
+            conditions=self.conditions
+        )
+
     def find_all_possible_assignments(self,
                                       sql_template: str,
-                                      table: Table
+                                      table: Table,
+                                      max_num_value_samples: int = 10,
+                                      max_value_length: Optional[int] = None,
+                                      max_num_questions: Optional[int] = None,  # limit questions on same table if many columns
                                       ) -> List[Dict[str, str]]:
         variables = find_template_variables(sql_template)
         # filter only type 'column' variables, that get assigned a column name instead of a value
@@ -157,13 +201,14 @@ class QuestionTemplate:
         # mapping of column name to inferred data type
         infered_types = {name: typ for name, typ in zip(table.column_names, table._inferred_column_types)}
         # all permutations of a table's column_names for the assignment length (determind by the number of column variables to fill)
+        # TODO make sure that the permutations do not become to big e.g compute n! / (n-r)! (n=column_names, r=len(col_vars))
+        # ...and if higher than threshold reduce n until threshold is met (sample (preferably numerical?) columns for subset of n)
         column_assignments = list(itertools.permutations(table.column_names,
                                                          len(column_variables),
                                                          )
                                   )
         # match the names of the column variables with the assignments/bindings of the actual column names of the specific table
         column_variable_bindings = [dict(zip(column_variables, assignment)) for assignment in column_assignments]
-
         # check for unmet dtype constraints and filter invalid variable-column bindings
         column_variable_bindings = [
             binding
@@ -174,7 +219,6 @@ class QuestionTemplate:
                  ]
                 )
             ]
-
         # short circuit if no valid variable assignment was found -> no questions for this TableQuestionTemplate are generated
         if len(column_variable_bindings) == 0:
             return []
@@ -235,7 +279,11 @@ class QuestionTemplate:
                         col_sampling_factors[col_name] = factor
         # how many values to sample per value variable -> TODO make configurable
         # (increases number of questions that only differ in the condition value)
-        num_value_samples = 10
+        estimated_question_number = len(column_variable_bindings) * max_num_value_samples
+        if max_num_questions is not None and estimated_question_number > max_num_questions:
+            num_value_samples = max(1, math.floor(max_num_value_samples * (max_num_questions/estimated_question_number)))
+        else:
+            num_value_samples = max_num_value_samples
         # sample values for each column that can ever be assigned to a
         # condition column variable which is involved in a value computation
         samples = {
@@ -334,17 +382,32 @@ class QuestionTemplate:
         # -> every column assignment needs to occur num_value_samples times in a row
         column_variable_bindings = [binding for binding in column_variable_bindings for i in range(num_value_samples)]
         # join column variable assignments with value variable assignments
+        #print('pre-filter', len(column_variable_bindings))
+        #print('max_value_length', max_value_length)
+        #print('value_lengths', [len(str(val)) for val_assignment in value_variable_assignments for val in val_assignment.values()])
         variable_assignments = [
             col_binding | val_assignment
             for col_binding, val_assignment in
             zip(column_variable_bindings, value_variable_assignments)
+            # filter assignments with values that exceed max_value_length characters (if max_value_length is None the filter is inactive)
+            if max_value_length is None or all([len(str(val)) <= max_value_length for val in val_assignment.values()])
             ]
+        #print('post-filter', len(variable_assignments))
+        # reduce number of assignments to max_num_questions
+        question_number = len(variable_assignments)
+        if max_num_questions is not None and question_number > max_num_questions:
+            # randomly sample max_num_questions assignments
+            variable_assignments = random.sample(variable_assignments, max_num_questions)
+        #print('post-trunc', len(variable_assignments))
         return variable_assignments
 
     def create_questions(self,
                          tables: List[Table],
                          create_alternatives=False,
                          do_count_augmentation=False,
+                         max_num_value_samples: int = 10,
+                         max_value_length: Optional[int] = None,
+                         max_questions_per_table: Optional[int] = None,
                          ) -> Tuple[List[TableQuestion], Union[List[TableQuestion], None]]:
         generated_questions = []
         generated_count_questions = [] if do_count_augmentation or self._explicit_count_definition is not None else None
@@ -371,6 +434,7 @@ class QuestionTemplate:
             all_question_count_hashes = None
             for op_idx, operator in enumerate(self._operators):
                 # create Template object and generate template string for current operator (aggregator)
+                # TODO use self.get_sql_template()
                 sql_template_obj = SQLTemplate(
                     SQLOperatorTemplate(
                         operator.sql,
@@ -392,7 +456,12 @@ class QuestionTemplate:
                 aggregator_hash = hashlib.sha256(str.encode(str(operator.sql_allowed_types))).hexdigest()
                 # use cached samples for variable assignments if possible for efficiency and performance comparability between operators
                 if (cached_assignments := var_assignment_cache.get(aggregator_hash)) is None:
-                    var_assignments = self.find_all_possible_assignments(sql_template, table)
+                    var_assignments = self.find_all_possible_assignments(sql_template,
+                                                                         table,
+                                                                         max_num_value_samples=max_num_value_samples,
+                                                                         max_value_length=max_value_length,
+                                                                         max_num_questions=max_questions_per_table,
+                                                                         )
                     var_assignment_cache[aggregator_hash] = var_assignments
                 else:
                     var_assignments = cached_assignments
@@ -672,11 +741,7 @@ def sample_values(table: Table,
                 else:
                     single_quote = "'"
                     sql_escaped_single_quote = "''"
-                    random_samples[i] = [f"""
-                                         '{sample.replace(single_quote,
-                                                          sql_escaped_single_quote
-                                                          )
-                                           }'
-                                         """
-                                         for sample in random_samples[i]]
+                    random_samples[i] = [f"'{sample.replace(single_quote, sql_escaped_single_quote)}'"
+                                         for sample in random_samples[i]
+                                         ]
             return random_samples[0] if len(column_names) == 1 else random_samples

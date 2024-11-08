@@ -61,7 +61,7 @@ class AnswerCoordinates:
             temporary_invert = True
             self._invert_row_ids()
 
-        norm_output_format = [(self.column_id, row_id) for row_id in self.row_ids]
+        norm_output_format = [(row_id, self.column_id) for row_id in self.row_ids]
 
         # invert the internal representation back to the original format
         if temporary_invert:
@@ -79,3 +79,8 @@ def compute_answer_coordinates(column_name: str, dataframe: pd.DataFrame, sql_qu
     answer_set_query = 'SELECT "__row_idx__" ' + sql_query[where_start:]
     answer_row_idxs = execute_sql(answer_set_query, df_copy_with_row_idxs)
     return AnswerCoordinates(column_id, list(answer_row_idxs), dataframe.shape[0], dataframe.shape[1])
+
+# for datasets map function
+def posthoc_answer_coordinates(datasets_example):
+    answer_coordinates = compute_answer_coordinates(datasets_example['aggregation_column'], table_df, datasets_example['sql'])
+    answer_coordinates.generate()

@@ -108,8 +108,10 @@ def model_specific_generation(model_name, model, tokenizer, inputs, outputs=None
     """
     match model_name.lower():
         case 'tapas':
-            # current implementation only works with dict style batch
+            # get required input arguments for tapas generation:
+            # extract model input_ids from inputs depending on the batch type (although currently must be dict)
             if not isinstance(inputs, dict):
+                # alternatively use Lighningmodule forward which handles input ordering already
                 raise TypeError(f"Expected inputs to be dict type but found {type(inputs)}!")
             # filter batch input fields to only contain inputs required by TAPAS
             model_specific_inputs = map_batch_keys_to_model_kwarg(inputs, get_model_type_info('tapas').dict_input_mapping)

@@ -5,15 +5,15 @@ import logging.config
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 from pathlib import PurePath
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 
 import datasets
 
 from numerical_table_questions.data_caching import save_version, caching
-from numerical_table_questions.data_synthesis.table import Table, name_id_mapping
+from numerical_table_questions.data_synthesis.table import Table, deduplicate_column_names, name_id_mapping
 
 
-log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
+log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 def load_table_dataset(table_corpus: str = 'wikitables',
                        split: Optional[str] = None,
                        cache_path: str = './data/NumTabQA/.cache',
-                       ) -> Optional[List[Table]]:
+                       memory_mapped: bool = True,
+                       ) -> Optional[Union[List[Table], datasets.Dataset]]:
     cache_file_name = f"{table_corpus}_{split or 'all'}_tables"
     tables = caching(cache_file_name, cache_path=cache_path)
-    if tables is not None:
-        # restore original format by loading from state dict
+    if tables is not None and not memory_mapped:
+        # restore original format in-memory by loading from state dict
         tables = [Table.from_state_dict(table_data) for table_data in tables]
     return tables
 
@@ -86,7 +87,7 @@ def main():
     table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
     # run column_name deduplication (since code changed since table dataset creation)
     for table in table_dataset:
-        table.column_names = tuple(table.deduplicate_column_names(table.column_names))
+        table.column_names = tuple(deduplicate_column_names(table.column_names))
         table._col2idx, table._idx2col = name_id_mapping(table.column_names, both_ways=True)
     return table_dataset
 

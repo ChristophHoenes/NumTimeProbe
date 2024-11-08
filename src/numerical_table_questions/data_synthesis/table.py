@@ -5,14 +5,10 @@ import hashlib
 import re
 import weakref
 from collections.abc import Iterable
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Self, Tuple, Union
 
 import numpy as np
 import pandas as pd
-
-
-# NUMBER_REGEX = re.compile(r'(\d(,\d{3})*|\d+)?(\.\d+)?')  # old expression with no negative
-NUMBER_REGEX = re.compile(r'-?(?:(?:\.\d+)|(?:(?:\d+|(?:\d{1,3}(?:,\d{3})+))(?:\.\d+)?))')
 
 
 class Table:
@@ -66,7 +62,7 @@ class Table:
         self._table_id = hashlib.sha256(str.encode(self._table_schema_id + self._num_sum_id + str(self.size))).hexdigest()
 
     @classmethod
-    def from_state_dict(cls, state_dict) -> Table:
+    def from_state_dict(cls, state_dict) -> Self:
         """ Creates empty instance and loads the serialized values from the state_dict
             instead of recomputing them.
         """

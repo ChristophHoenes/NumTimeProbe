@@ -32,6 +32,7 @@ class TableQuestion:
         self._num_rows_aggregated_in_answer = None
         self._multi_row_answer = None
         self._table = table
+        self._table_id = table._table_id
         self._template_hash = _template_hash
         self._count_hash = _count_hash
 
@@ -40,21 +41,21 @@ class TableQuestion:
             'nl_question': self._nl_question,
             'alternative_phrasings': self.alternative_phrasings,
             'sql_query': self._sql_query,
-            'answer': self._answer,
-            'alternative_answers': self._alternative_answers,
+            'answer': str(self._answer or ''),
+            'alternative_answers': str(self._alternative_answers),
             'answer_coordinates': self._answer_coordinates,
             'operator': self._operator,
             'aggregation_column': self._agg_col,
-            'condition_assignments': self._condition_assignments,
-            'num_rows_aggregated_in_answer': self._num_rows_aggregated_in_answer,
-            'multi_row_answer': self._multi_row_answer,
-            'table_id': self._table._table_id,
+            'condition_assignments': str(self._condition_assignments),  # tuple of var_name + var_value can be mix of int and str -> cast str
+            'num_rows_aggregated_in_answer': str(self._num_rows_aggregated_in_answer or ''),
+            'multi_row_answer': str(self._multi_row_answer or ''),
+            'table_id': self._table_id,
             'template_hash': self._template_hash,
             'count_hash': self._count_hash,
         }
 
     @classmethod
-    def from_state_dict(cls, state_dict, table: Optional[Union[Table, List[Table]]] = None) -> TableQuestion:
+    def from_state_dict(cls, state_dict, table: Optional[Union[Table, List[Table], datasets.Dataset]] = None) -> TableQuestion:
         """ Creates empty instance and loads the serialized values from the state_dict
             instead of recomputing them.
         """
@@ -68,9 +69,19 @@ class TableQuestion:
         instance._operator = state_dict['operator']
         instance._agg_col = state_dict['aggregation_column']
         instance._condition_assignments = state_dict['condition_assignments']
-        instance._num_rows_aggregated_in_answer = state_dict['num_rows_aggregated_in_answer']
+        if state_dict['num_rows_aggregated_in_answer'] == '':
+            instance._num_rows_aggregated_in_answer = None
+        else:
+            instance._num_rows_aggregated_in_answer = int(state_dict['num_rows_aggregated_in_answer'])
+        if state_dict['multi_row_answer'] == '':
+            instance._multi_row_answer = None
+        elif state_dict['multi_row_answer'] == 'False':
+            instance._multi_row_answer = False
+        else:
+            instance._multi_row_answer = bool(state_dict['multi_row_answer'])
         instance._multi_row_answer = state_dict['multi_row_answer']
         instance._table = restore_table_from_id(state_dict['table_id'], table)
+        instance._table_id = state_dict['table_id']
         instance._template_hash = state_dict['template_hash']
         instance._count_hash = state_dict['count_hash']
         return instance
@@ -134,7 +145,7 @@ class TableQuestion:
 
     # overwrite __eq__ and __hash__ to make set operation work as expected
     def __members(self):
-        return (self._nl_question, self._sql_query, self._table._table_id)
+        return (self._nl_question, self._sql_query, self._table_id)
 
     def __hash__(self):
         return hash(self.__members())
@@ -142,41 +153,49 @@ class TableQuestion:
     def __eq__(self, other):
         return isinstance(other, TableQuestion) and self.__members() == other.__members()
 
-    def compute_answer(self, compute_coordinates=True) -> None:
+    def compute_answer(self, compute_coordinates=True) -> Optional[str]:
         # TODO check if cache for same condition type and condition columns exists otherwise replace operator with count and determine _num_rows_aggregated_in_answer
         # TODO add Count question to table dataset explicitly for every condition type and condition columns hash
         query_result = execute_sql(self._sql_query, self._table.pandas_dataframe)
         if compute_coordinates:
             self._answer_coordinates = compute_answer_coordinates(self.aggregation_column, self._table.pandas_dataframe, self._sql_query)
-        if len(query_result) > 1:
-            self._multi_row_answer = True
-            # do not warn because it spams the console during dataset creation;
-            # maybe warn once if dataset contains at least one _multi_row_answer
-            #warnings.warn("Query result of dataframe returned multiple rows."
-            #              "Queries that result in a unique answer should be "
-            #              "preferred."
-            #              )
-            self._alternative_answers = [query_result.iloc[row, 0]
-                                         for row in range(1, len(query_result))]
+        if query_result is not None and len(query_result) > 0:  # at least one row
+            self._answer = str(query_result.iloc[0, 0])
+            self._multi_row_answer = False
+            # more than one row returned
+            if len(query_result) > 1:
+                self._multi_row_answer = True
+                # do not warn because it spams the console during dataset creation;
+                # maybe warn once if dataset contains at least one _multi_row_answer
+                #warnings.warn("Query result of dataframe returned multiple rows."
+                #              "Queries that result in a unique answer should be "
+                #              "preferred."
+                #              )
+                self._alternative_answers = [query_result.iloc[row, 0]
+                                             for row in range(1, len(query_result))
+                                             ]
         else:
             self._multi_row_answer = False
-        self._answer = query_result.iloc[0, 0] if len(query_result) > 0 else None
+            self._answer = None
+        return self._answer
 
     def prepare_for_pickle(self):
         # remove weak reference
         self._table.prepare_for_pickle()
 
 
-def compute_arithmetic_expression_str(expression: str):
+def compute_arithmetic_expression_str(expression: str, allowed_expression_length: int = 256):
     """ Computes the value of a valid arithmetic expression which is formatted as string.
         The numbers occuring in the expression must be enclosed in doubble quotes.
         Empty strings as numbers are interpreted as 0.
     """
     if not isinstance(expression, str):
         raise TypeError(f"Expression must be string type but is {type(expression)}!")
-    if len(expression) >= 256:
-        raise ValueError(f"Detected overly long expression with {len(expression)} characters! "
-                         "Check data or increase allowed expression length.")
+    if len(expression) >= allowed_expression_length:
+        warnings.warn(f"Detected overly long expression {expression[:10]}...{expression[-10:]} with {len(expression)} characters! "
+                      "Expression and is not executed. "
+                      "Check data or increase allowed expression length."
+                      )
     # test expression format to avoid execution of malicious code,
     # hence do NOT use NUMBER_REGEX constant for security reasons but rather keep it hard-coded
     number_regex = r'-?(?:(?:\.\d+)|(?:(?:\d+|(?:\d{1,3}(?:,\d{3})+))(?:\.\d+)?))'
@@ -199,11 +218,16 @@ def compute_arithmetic_expression_str(expression: str):
                       " is not a valid arithmetic expression and is not executed!")
 
 
-def restore_table_from_id(table_id: str, table: Optional[Union[Table, List[Table]]] = None) -> Optional[Table]:
-        def _search_id_in_table_list(tab_id: str, table_list: List[Table]) -> Optional[Table]:
+def restore_table_from_id(table_id: str, table: Optional[Union[Table, List[Table], datasets.Dataset]] = None) -> Optional[Table]:
+        def _search_id_in_table_list(tab_id: str, table_list: Union[List[Table], datasets.Dataset]) -> Optional[Table]:
+            is_serialized = isinstance(table_list, datasets.Dataset)
             for tab in table_list:
-                if tab._table_id == tab_id:
-                    return tab
+                if is_serialized:
+                    if tab['table_id'] == tab_id:
+                        return Table.from_state_dict(tab)
+                else:
+                    if tab._table_id == tab_id:
+                        return tab
 
         if table is None:
             warnings.warn("No table data was provided to restore Table object! Returning None. This might cause problems depending on the use-case.")
@@ -211,5 +235,5 @@ def restore_table_from_id(table_id: str, table: Optional[Union[Table, List[Table
             if table_id != table._table_id:
                 raise ValueError("Mismatch between provided Table and the table id! This would likely lead to incorrect values.")
             return table
-        elif isinstance(table, list):
+        elif isinstance(table, (list, datasets.Dataset)):
             return _search_id_in_table_list(table_id, table)

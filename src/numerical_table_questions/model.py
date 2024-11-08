@@ -79,6 +79,25 @@ def order_positional_arguments(inputs, target, input_map: dict) -> tuple:
     return [tup[1] for tup in forward_args]
 
 
+def convert_type_and_device_for_lightning_module_log(metric_collection_output, device):
+    """ There are some issues with Pytorch Lightnings built-in self.log/self.log_dict methods that this function tries to circumvent.
+        1. Issue: all items to be logged need to be on GPU (when sync_dist=True ?) (see https://github.com/Lightning-AI/pytorch-lightning/issues/18803)
+        2. Issue: Try to avoid memory leak by prefering scalar over tensor format if possible (scalar tensor)
+    """
+    log_safe_metric_output = dict()
+    for metric_name in metric_collection_output.keys():
+        if isinstance(metric_collection_output[metric_name], torch.Tensor):
+            if metric_collection_output[metric_name].shape == torch.tensor([0]).shape:
+                log_safe_metric_output[metric_name] = metric_collection_output[metric_name].item()  # scalar on CPU
+            else:
+                # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+                # TODO make sure this is not a small  memory leak
+                log_safe_metric_output[metric_name] = metric_collection_output[metric_name].to(device)  # non-scalar tensor on GPU
+        else:
+            log_safe_metric_output[metric_name] = metric_collection_output[metric_name]  # Any datatype as is
+    return log_safe_metric_output
+
+
 class LightningWrapper(L.LightningModule):
     def __init__(self,
                  model,
@@ -133,7 +152,7 @@ class LightningWrapper(L.LightningModule):
         self.args = training_args
         if effective_batch_size_per_step is None:
             warnings.warn("No effective batch size was set! Using negative batch_size_per_device as proxy."
-                          "This will lead to inacurate values for 'samples_processed' and 'tokens_processed'.")
+                          "This will lead to inacurate values for 'samples_processed' and 'tokens_processed' when training.")
             self.effective_batch_size_per_step = -training_args.batch_size_per_device
         else:
             self.effective_batch_size_per_step = effective_batch_size_per_step
@@ -155,8 +174,9 @@ class LightningWrapper(L.LightningModule):
             case _:
                 warnings.warn(f"Unknown generation_metric {metric_name}! No specific preparation is executed.")
 
-    def forward(self, inputs, target=None):
-        if self.model_specs.input_targets and target is None:
+    def forward(self, inputs, target=None, is_eval=False):
+        print('in_forward', 'input_type: ', type(inputs), 'len_inputs: ', len(inputs))
+        if not is_eval and self.model_specs.input_targets and target is None:
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
         if isinstance(inputs, dict):
@@ -166,6 +186,7 @@ class LightningWrapper(L.LightningModule):
             forward_kwargs = {key: convert_to_long_tensor_if_int_tensor(value)
                               for key, value in forward_kwargs.items()
                               }
+            print(forward_kwargs['input_ids'].shape, forward_kwargs['input_ids'].device)
             outputs = self.model(**forward_kwargs)
         else:
             # always wrap inputs in tuple
@@ -174,11 +195,11 @@ class LightningWrapper(L.LightningModule):
             elif not isinstance(inputs, tuple):
                 inputs = (inputs,)
             # use input order specified in model_specs
-            if len(self.model_specs.tensor_input_mapping) > 0:
+            if len(self.model_specs.input_mapping) > 0:
                 # compute input format specified via self.model_specs.input_mapping
-                forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.tensor_input_mapping)
+                forward_args = order_positional_arguments(inputs, target, input_map=self.model_specs.input_mapping)
                 forward_kwargs = {model_input_id: data_function(inputs, target)
-                                  for model_input_id, data_function in self.model_specs.tensor_input_mapping.items()
+                                  for model_input_id, data_function in self.model_specs.input_mapping.items()
                                   if isinstance(model_input_id, str)
                                   }
                 # make sure all int tensors to have dtype long; non-int-tensors stay unchanged
@@ -187,7 +208,7 @@ class LightningWrapper(L.LightningModule):
                                   for key, value in forward_kwargs.items()
                                   }
                 outputs = self.model(*forward_args, **forward_kwargs)
-            elif self.model_specs.input_targets:
+            elif not is_eval and self.model_specs.input_targets:
                 outputs = self.model(*inputs, target)
             else:
                 outputs = self.model(*inputs)
@@ -223,25 +244,36 @@ class LightningWrapper(L.LightningModule):
         else:
             # retrieve loss
             loss = outputs[self.model_specs.loss_out_id]
-        self.log("train/loss", loss.item(), on_step=True, on_epoch=False)
 
+        self.log("train/loss", loss.item(), on_step=True, on_epoch=True)
         # compute and log torchmetrics at every step
-        torchmetrics_out = self.train_metrics(outputs, target)
-        self.log_dict(torchmetrics_out)
+        self.train_metrics(outputs, target)
+        self.log_dict(self.train_metrics)
         return loss
 
-    def on_train_batch_end(self, outputs, batch, batch_idx, unused=0) -> None:
-        self.samples_processed += self.effective_batch_size_per_step
-        self.tokens_processed += self.effective_batch_size_per_step * self.args.max_sequence_length
-        self.log_dict(
-            {
-                "progress/samples": self.samples_processed,
-                "progress/tokens": self.tokens_processed,
-            },
-            rank_zero_only=True,
-            on_step=True,
-            on_epoch=False,
-        )
+    # use on_before_optimizer_step instead of on_train_batch_end for incrementing number of processed data due to
+    # special case for gradient accumulation steps (not one update per batch but after x batches)
+    # more accurate would be after optimizer step but no lightning callback exists
+    # -> assumes optimizer.step() executes successfully (close enough)
+    def on_before_optimizer_step(self, optimizer) -> None:
+        if not self.trainer.sanity_checking:  # skip incrementing sample count and logging for sanity checking
+            # increment processed data counters by effective_batch_size_per_step (considers num devices, etc.)
+            # do this on all GPU devices
+            self.samples_processed += self.effective_batch_size_per_step
+            self.tokens_processed += self.effective_batch_size_per_step * self.args.max_sequence_length
+            # only log once from rank zero device
+            # TODO check difference to self.global_rank == 0
+            if self.trainer.is_global_zero:
+
+                self.log_dict(
+                    {
+                        "progress/samples": self.samples_processed.item(),
+                        "progress/tokens": self.tokens_processed.item(),
+                    },
+                    rank_zero_only=True,
+                    on_step=True,
+                    on_epoch=False,
+                )
 
     def validation_step(self, batch, batch_idx):
         if isinstance(batch, dict):
@@ -266,29 +298,38 @@ class LightningWrapper(L.LightningModule):
             # retrieve loss
             loss = outputs[self.model_specs.loss_out_id]
 
-        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
         self.log_dict(
             {
                 "val/loss": loss.item(),
-                "progress/samples": self.samples_processed.to(self.device),
-                "progress/tokens": self.tokens_processed.to(self.device),
+                # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+                # this should not be necessary because buffers should automatically be on the same device...
+                # TODO test by printing devices before and after .to
+                # "progress/samples": self.samples_processed.to(self.device),
+                # "progress/tokens": self.tokens_processed.to(self.device),
+                "progress/samples": self.samples_processed.item(),
+                "progress/tokens": self.tokens_processed.item(),
             },
             on_step=False,
             on_epoch=True,
             sync_dist=True,
         )
-
         # update state of torchmetrics
+        # TODO try automatic metric object logging; does result in this issue ? https://github.com/Lightning-AI/pytorch-lightning/issues/18803
         self.valid_metrics.update(outputs, target)
+        # compute and log torchmetrics at every step
+        #self.valid_metrics(outputs, target)
+        #self.log_dict(self.valid_metrics)
 
     def on_validation_epoch_end(self):
         # compute and log torchmetrics final epoch results
-        output = self.valid_metrics.compute()
-        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
-        self.log_dict({k: v.to(self.device) for k, v in output})
+        metric_output = self.valid_metrics.compute()
+        # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
+        metric_output = convert_type_and_device_for_lightning_module_log(metric_output, self.device)
+        self.log_dict(metric_output)
         self.valid_metrics.reset()
 
     def test_step(self, batch, batch_idx):
+        print('in_test_step', 'batch_size: ', len(batch['input_ids']), 'type: ', type(batch))
         # TODO log model predictions token and text
         if isinstance(batch, dict):
             target = batch.get('targets')
@@ -306,36 +347,33 @@ class LightningWrapper(L.LightningModule):
                 inputs[1][:, self.args.only_first_x_tokens:] = 0
 
         # only compute normal forward step if test_loss is explicitly required or at least one torchmetric uses its outputs
-        if self.args.do_forward_in_test_step or self.args.force_test_loss_computation or len(self.test_metrics) > 0:
-            outputs = self(inputs, target)
+        if self.args.force_test_loss_computation or len(self.test_metrics) > 0:
+            outputs = self(inputs, target, is_eval=True)
+            if self.model_specs.loss_out_id is None:
+                # compute loss
+                loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
+            else:
+                # retrieve loss
+                loss = outputs[self.model_specs.loss_out_id]
 
-            if len(self.test_metrics) > 0:
-                # update state of torchmetrics
-                self.test_metrics.update(outputs, target)
+            # update state of torchmetrics
+            self.test_metrics.update(outputs, target)
 
-            if self.args.force_test_loss_computation:
-                if self.model_specs.loss_out_id is None:
-                    # compute loss
-                    loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
-                else:
-                    # retrieve loss
-                    loss = outputs[self.model_specs.loss_out_id]
-
-                # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
-                self.log_dict(
-                    {
-                        "test/loss": loss.item(),
-                        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
-                        # this should not be necessary because buffers should automatically be on the same device...
-                        # "progress/samples": self.samples_processed.to(self.device),
-                        # "progress/tokens": self.tokens_processed.to(self.device),
-                        "progress/samples": self.samples_processed.item(),
-                        "progress/tokens": self.tokens_processed.item(),
-                    },
-                    on_step=False,
-                    on_epoch=True,
-                    sync_dist=True,
-                )
+            # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+            self.log_dict(
+                {
+                    "test/loss": loss.item(),
+                    # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
+                    # this should not be necessary because buffers should automatically be on the same device...
+                    # "progress/samples": self.samples_processed.to(self.device),
+                    # "progress/tokens": self.tokens_processed.to(self.device),
+                    "progress/samples": self.samples_processed.item(),
+                    "progress/tokens": self.tokens_processed.item(),
+                },
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+            )
         else:
             outputs = None
 
@@ -360,6 +398,8 @@ class LightningWrapper(L.LightningModule):
             # TODO test if this leaks to much information (e.g are results worse if this is hard coded to 20)
             max_target_len = max([len(sample) for sample in text_targets])
             test_dataset = self.trainer.test_dataloaders.dataset
+            print('model_device:', self.model.device, 'input_device: ', input_ids.device)
+            print('max_target_len', max_target_len)
             string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, inputs, outputs, max_target_len=max_target_len, test_dataset=test_dataset)
             self.predictions.extend(string_predictions)
 
@@ -388,6 +428,8 @@ class LightningWrapper(L.LightningModule):
                 batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
                 # TODO handling of logging additional outputs, if neccesary for some metric
 
+            # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
+            batch_metric_results = convert_type_and_device_for_lightning_module_log(batch_metric_results, self.device)
             self.log_dict(
                 batch_metric_results,
                 on_step=False,
@@ -397,15 +439,17 @@ class LightningWrapper(L.LightningModule):
 
     def on_test_epoch_end(self):
         # compute and log torchmetrics final epoch results
-        output = self.test_metrics.compute()
-        # moving everything that is logged to GPU to workaround this issue https://github.com/Lightning-AI/pytorch-lightning/issues/18803
-        self.log_dict({k: v.to(self.device) for k, v in output})
+        metric_output = self.test_metrics.compute()
+        # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
+        metric_output = convert_type_and_device_for_lightning_module_log(metric_output, self.device)
+        self.log_dict(metric_output)
         self.test_metrics.reset()
         # log and clear predictions
+        # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
         text_predictions = [[pred] for pred in self.predictions]
         # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
         self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
-        self.predictions = []
+        self.predictions.clear()
 
     def configure_optimizers(self):
         if self.global_rank == 0:

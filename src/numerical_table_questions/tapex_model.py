@@ -142,7 +142,7 @@ def tapex_tokenizer_format(data, lazy: bool = False, **kwargs):
             ]
 
 
-def tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, verbose, **kwargs):
+def tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, verbose, **kwargs) -> List[dict]:
     if verbose:
         progress_bar = tqdm(tokenizer_inputs)
         progress_bar.set_description("Tapex Tokenizing (inputs and targets separately)...")
@@ -193,3 +193,4 @@ def tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, ver
                 }
             for sample in tokenized
             ]
+    return tokenized
