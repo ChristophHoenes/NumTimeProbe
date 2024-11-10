@@ -146,7 +146,21 @@ def scan_dump(example, save_directory: str, file_endings: str = '.py'):
 
 def main(save_directory='dump_scan'):
     search_files = [
-        SearchFile(file_name='dataset', header=None, footer='if hierarchy_dict_implementation:', dump_files=['dump_files/source_code_dump.txt'], max_length=850, footer_slack=650),
+        SearchFile(file_name='evaluation', header=None, footer="evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/9n4lmvw1/checkpoints/last_model_ckpt.ckpt')", dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=15),
+        SearchFile(file_name='gittables_processing', header=None, footer="# load filepaths datasets and execute table processing", dump_files=['dump_files/source_code_dump.txt'], max_length=400, footer_slack=20),
+        SearchFile(file_name='lazy_data_processing', header=None, footer="if isinstance(sample['table_data'][0]['table'], str)  # in case not the full table but only the ID is serialized", dump_files=['dump_files/source_code_dump.txt'], max_length=300, footer_slack=50),
+        SearchFile(file_name='model', header=None, footer='# TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)', dump_files=['dump_files/source_code_dump.txt'], max_length=575, footer_slack=85),
+        SearchFile(file_name='model_utils', header=None, footer="# extract model input_ids from inputs depending on the batch type (although currently must be dict)", dump_files=['dump_files/source_code_dump.txt'], max_length=180, footer_slack=40),
+        SearchFile(file_name='memmep_data_synth', header=None, footer='# wrapper for add_from_cache map function for easier use', dump_files=['dump_files/source_code_dump.txt'], max_length=630, footer_slack=60),
+        SearchFile(file_name='question', header=None, footer='is_serialized = isinstance(table_list, datasets.Dataset)', dump_files=['dump_files/source_code_dump.txt'], max_length=270, footer_slack=30),
+        SearchFile(file_name='question_template', header=None, footer='# delete empty variable keys that were added by datasets.Dataset in order to have consistent nested features', dump_files=['dump_files/source_code_dump.txt'], max_length=800, footer_slack=700),
+        SearchFile(file_name='table_creation', header=None, footer='table.column_names = tuple(deduplicate_column_names(table.column_names))', dump_files=['dump_files/source_code_dump.txt'], max_length=150, footer_slack=15),
+        SearchFile(file_name='template_creation', header=None, footer='DIFF =', dump_files=['dump_files/source_code_dump.txt'], max_length=1500, footer_slack=1000),
+        SearchFile(file_name='sql_templates', header=None, footer="# search for template variables and return unique variable names found while preserving order -> use dict instead of set", dump_files=['dump_files/sql_templates_recovery.txt'], max_length=400, footer_slack=10),
+        SearchFile(file_name='sql_utils', header=None, footer='from pandasql import sqldf  # TODO try duckdb', dump_files=['dump_files/sql_util_recovery_2.txt'], max_length=110, footer_slack=100),
+        SearchFile(file_name='tapas_model', header=None, footer='Only the first value will be returned.', dump_files=['dump_files/source_code_dump.txt'], max_length=200, footer_slack=50),
+        SearchFile(file_name='tapex_model', header=None, footer="def tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, verbose, **kwargs) -> List[dict]:", dump_files=['dump_files/source_code_dump.txt'], max_length=220, footer_slack=60),
+        SearchFile(file_name='tokenizer_utils', header=None, footer='if question_number is not None and isinstance(table_batch[field], list)', dump_files=['dump_files/source_code_dump.txt'], max_length=500, footer_slack=20),
     ]
 
     search_file_dataset = datasets.Dataset.from_list([asdict(search_file) for search_file in search_files])
@@ -164,4 +178,4 @@ def main(save_directory='dump_scan'):
 
 
 if __name__ == "__main__":
-    main(save_directory='dump_scan_2')
+    main(save_directory='dump_scan_3')
