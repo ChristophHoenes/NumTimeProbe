@@ -26,7 +26,7 @@ def create_templates(main_expr: SQLColumnExpression,
     """ Creates Question templates with all basic condition presets given only the main expression.
         If custom condition_expressions are provided a single QuestionTemplate will be created from
         the main expression and all those conditions holding at once If for the custom conditions only
-        a limited set of operators schould be applied they need to be stated explicitly, 
+        a limited set of operators schould be applied they need to be stated explicitly,
         otherwise min, max, sum, avg, count and noop will be applied.
     """
     # different cofigurations of allowed operators depending on condition type
@@ -494,7 +494,103 @@ def create_expression_dataset(tables,
 
             """
         nl = "What is the {op} of the expression  between column {col1} and column {col2}?"
-        main_expr = SQLColumnExpression(("(({col1} * {col2}) - ({col1} + {col2})) / ({col1} * {col1}) + (({col2} * {col2}) - {col2})",))
+        main_expr = SQLColumnExpression(
+            (SQLColumnExpression(
+                (SQLColumnExpression(("{col1}", "{col2}"), operand='*'),
+                 SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
+                 ),
+                operand='-',
+                ),
+             SQLColumnExpression(
+                 (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+                  SQLColumnExpression(
+                      (SQLColumnExpression(("{col2}", "{col2}"), operand='*'),
+                       "{col2}"
+                       ),
+                      operand='-',
+                      ),
+                  ),
+                 operand='+',
+                 )
+             ),
+            operand='/',
+            )
+        # string representation TODO funtion for automated parsing from string
+        #'(("{col1}" * "{col2}") - ("{col1}" + "{col2}")) / ("{col1}" * "{col1}") + (("{col2}" * "{col2}") - "{col2}")'
+        conditions = (SQLConditionTemplate('{col3}', '=', '{val1}'),)
+        allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])  # no count as same as in other datasets
+        schema = {
+            'variables': {
+                'col1': {'type': 'column',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'col2': {'type': 'column',
+                         'allowed_dtypes': ['numeric']
+                         },
+                'col3': {'type': 'column',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         },
+                'val1': {'type': 'value',
+                         'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                         }
+            },
+            'sample_strategy': 'random',
+            'value_pool': 'distinct_values',
+            'interpolation_args': dict()
+        }
+        ratio_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
+        dataset = TableQuestionDataSet(name + '_expression',
+                                       description=base_description,
+                                       question_templates=[ratio_template],
+                                       tables=tables,
+                                       compute_coordinates=False,
+                                       memory_mapped=memory_mapped,
+                                       )
+        if save:
+            save_version(dataset, cache_path, name)
+    return dataset
+
+
+def create_expression_dataset2(tables,
+                               name='wikitablequestions_test_expression',
+                               use_cache: bool = True,
+                               cache_path: str = './data/NumTabQA/.cache',
+                               save=True,
+                               memory_mapped=True,
+                               ) -> TableQuestionDataSet:
+    if use_cache:
+        dataset = caching(name, cache_path=cache_path)
+    else:
+        base_description = \
+            """
+            Basic SQL operators min, max, avg or sum over a complex arithmetic expression of two numerical columns combined with a simple value lookup condition.
+            Using WikiTableQuestions.
+
+            """
+        nl = "What is the {op} of the expression  between column {col1} and column {col2}?"
+        main_expr = SQLColumnExpression(
+            (SQLColumnExpression(
+                (SQLColumnExpression(("2 * {col1}", "{col2}"), operand='*'),
+                 SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
+                 ),
+                operand='-',
+                ),
+             SQLColumnExpression(
+                 (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+                  SQLColumnExpression(
+                      (SQLColumnExpression(("{col2}", "{col2}"), operand='*'),
+                       "{col2}"
+                       ),
+                      operand='-',
+                      ),
+                  ),
+                 operand='+',
+                 )
+             ),
+            operand='/',
+            )
+        # string representation TODO funtion for automated parsing from string
+        #'(("{col1}" * "{col2}") - ("{col1}" + "{col2}")) / ("{col1}" * "{col1}") + (("{col2}" * "{col2}") - "{col2}")'
         conditions = (SQLConditionTemplate('{col3}', '=', '{val1}'),)
         allowed_operators = tuple([MIN, MAX, AVG, SUM, NOOP])  # no count as same as in other datasets
         schema = {
