@@ -2,7 +2,7 @@ import math
 import transformers
 import warnings
 from tqdm import tqdm
-from typing import List, Union
+from typing import List, Union, Tuple
 
 import pandas as pd
 
@@ -12,11 +12,11 @@ from numerical_table_questions.metrics import str_match_accuracy
 
 
 def tapas_model_type_info() -> dict:
-    # TODO check correct values
     return dict(
         model_name_or_path='tapas',
-        pad_token_id=1,  # ?
-        mask_token_id=-100,  # ?
+        pad_token_id=0,
+        # TODO change variable name because in TAPEX and current code it does not mean the [MASK] token but rather a special id for attention mask in targets
+        mask_token_id=None,
         input_targets=False,
         loss_out_id='loss',
         filter_data_attributes=None,  # only needed for TensorDataset serialization
@@ -51,6 +51,7 @@ def tapas_tokenizer_format(data, lazy: bool = False, is_eval: bool = False, **kw
         if lazy:
             processed_samples = []
             for sample in data:
+                #print(list(sample.keys()))
                 table = Table.from_state_dict(sample['table'])
                 table_df = table.pandas_dataframe
                 # retrieve question
@@ -59,10 +60,12 @@ def tapas_tokenizer_format(data, lazy: bool = False, is_eval: bool = False, **kw
                     answer_text = [sample['answers'][kwargs['question_number']]]  # should only be provided for evaluation
                     # if answer coordinates are not pre-computed do it here
                     if sample.get('answer_coordinates') is None:
+                        # TODO compate to TAPAS utils scripts/notebook (https://github.com/NielsRogge/tapas_utils?tab=readme-ov-file)
+                        # see also table normalization https://github.com/ppasupat/WikiTableQuestions/blob/master/evaluator.py
                         answer_coordinates = compute_answer_coordinates(
-                            column_name=sample['aggregation_column'],
+                            column_name=sample['aggregation_columns'][kwargs['question_number']],
                             dataframe=table_df,
-                            sql_query=sample['sql'],
+                            sql_query=sample['sql'][kwargs['question_number']],
                             ).generate()
                     else:
                         answer_coordinates = AnswerCoordinates(**sample['answer_coordinates'][kwargs['question_number']]).generate()
@@ -72,7 +75,7 @@ def tapas_tokenizer_format(data, lazy: bool = False, is_eval: bool = False, **kw
                 processed_samples.append({
                     'table': table_df,
                     'queries': [question],
-                    'answer_coordinates': answer_coordinates,
+                    'answer_coordinates': [answer_coordinates],
                     'answer_text': answer_text,
                     'padding': kwargs.get('padding', 'max_length'),
                     'truncation': kwargs.get('truncation', 'drop_rows_to_fit'),
@@ -155,3 +158,27 @@ def tapas_generation(tokenizer, model_inputs, model_outputs, table) -> List[str]
 
     predictions = compute_aggregation(aggregators, answer_cells)
     return predictions
+
+
+def reduce_answer_coordinates(tok_input: dict, iteration: int = 0, max_length=512):
+    if iteration > max_length + 1:
+        raise StopIteration("Iteration exceeded max_length of model. Aborting due to risk of infinity loop.")
+
+    def _max_row_id(answer_coordinates: List[Tuple[int, int]]) -> int:
+        return max([coordinate[0] for coordinate in answer_coordinates])
+
+    max_row_id = _max_row_id(tok_input['answer_coordinates'][0])
+
+    # in first iteration remove all cells that exceed the max_length of the model
+    if iteration == 0:
+        reduced_coordinates = [coordinate for coordinate in tok_input['answer_coordinates'][0]
+                               if coordinate[0] * coordinate[1] <= max_length
+                               ]
+        # if the previous step did reduce the answer coordinates return result else proceed with removing last row
+        if max_row_id != _max_row_id(reduced_coordinates):
+            tok_input['answer_coordinates'][0] = reduced_coordinates
+
+    # remove the row with highest index (max_row_id)
+    tok_input['answer_coordinates'][0] = [coordinate for coordinate in tok_input['answer_coordinates'][0]
+                                          if coordinate[0] < max_row_id
+                                          ]

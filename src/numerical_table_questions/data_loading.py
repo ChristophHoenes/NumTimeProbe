@@ -22,6 +22,7 @@ from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_caching import caching
+from numerical_table_questions.data_utils import create_table_index
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset, table_collate
 from numerical_table_questions.model_utils import get_model_type_info
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, post_tokenizing, restore_metadata
@@ -341,7 +342,7 @@ class TableQADataModule(L.LightningDataModule):
                 truncation=self.tokenizing_args['truncation'],
                 padding=self.tokenizing_args['padding'],
                 is_eval=(split_name == 'test'),  # for testing no answer coordinates are needed (tapas)
-                table_index=table_index,
+                #table_index=table_index,
                 )
         else:
             collate_fn = None

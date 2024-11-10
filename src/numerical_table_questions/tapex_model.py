@@ -2,8 +2,10 @@ import logging
 import transformers
 from pathlib import PurePath
 from tqdm import tqdm
+from typing import List
 
-from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet
+from numerical_table_questions.data_synthesis.table import Table
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_utils import cast_to_reduced_int
 from numerical_table_questions.metrics import str_match_accuracy
 
