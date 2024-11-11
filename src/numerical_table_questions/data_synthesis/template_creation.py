@@ -1,18 +1,210 @@
 import copy
 import warnings
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import PurePath
 
-from typing import Optional, Tuple, List
+import datasets
+from dargparser import dargparse
+from typing import Optional, Tuple, List, Union
 
+from numerical_table_questions.arguments import DataProcessingArgs
 from numerical_table_questions.data_caching import save_version, caching
-from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet, ensure_table_dataset_on_disk
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import create_table_dataset, load_table_dataset
+from numerical_table_questions.data_utils import get_cache_path
 from numerical_table_questions.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
 )
+
+
+BASIC_TEMPLATE = QuestionTemplate(
+    nl_template_string="What is the {op} of column {col1} given that {col2} has value {val1}?",
+    sql_main_expression=SQLColumnExpression(("{col1}",)),
+    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT]),  # not NOOP because it would be simple lookup without numerical skill
+    sql_conditions=(SQLConditionTemplate('{col2}', '=', '{val1}'),),
+    schema={
+        'variables': {
+            'col1': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col2': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                },
+            'val1': {
+                'type': 'value',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                }
+            },
+        'sample_strategy': 'random',
+        'value_pool': 'distinct_values',
+        'interpolation_args': dict(),
+        },
+    template_alternatives=None
+)
+
+BASIC_TEMPLATE = QuestionTemplate(
+    nl_template_string="What is the {op} of column {col1} given that {col2} has value {val1}?",
+    sql_main_expression=SQLColumnExpression(("{col1}",)),
+    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT]),  # not NOOP because it would be simple lookup without numerical skill
+    sql_conditions=(SQLConditionTemplate('{col2}', '=', '{val1}'),),
+    schema={
+        'variables': {
+            'col1': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col2': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                },
+            'val1': {
+                'type': 'value',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                }
+            },
+        'sample_strategy': 'random',
+        'value_pool': 'distinct_values',
+        'interpolation_args': dict(),
+        },
+    template_alternatives=None
+)
+
+# TODO post-hoc add-one/distractor dataset from basic Template by sampling random distractor and updating answer according to operator (and pre-aggregation count)
+
+DIFF_TEMPLATE = QuestionTemplate(
+    nl_template_string="What is the {op} of the difference between column {col1} and {col2} given that {col3} has value {val1}?",
+    sql_main_expression=SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
+    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT, NOOP]),
+    sql_conditions=(SQLConditionTemplate('{col3}', '=', '{val1}'),),
+    schema={
+        'variables': {
+            'col1': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col2': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col3': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                },
+            'val1': {
+                'type': 'value',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                }
+            },
+        'sample_strategy': 'random',
+        'value_pool': 'distinct_values',
+        'interpolation_args': dict()
+        },
+    template_alternatives=None
+)
+
+
+RATIO_NO_FILTER_TEMPLATE = QuestionTemplate(
+    nl_template_string="What is the {op} of the ratio between column {col1} and column {col2}?",
+    sql_main_expression=SQLColumnExpression(("{col1}", "{col2}"), operand='/'),
+    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT, NOOP]),
+    sql_conditions=tuple(),
+    schema={
+        'variables': {
+            'col1': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col2': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            },
+        'sample_strategy': 'random',
+        'value_pool': 'distinct_values',
+        'interpolation_args': dict()
+        },
+    template_alternatives=None
+)
+
+EXPRESSION_TEMPLATE = QuestionTemplate(
+    nl_template_string="What is the {op} of the expression  between column {col1} and column {col2}?",
+    sql_main_expression=SQLColumnExpression(
+        (SQLColumnExpression(
+            (SQLColumnExpression(("{col1}", "{col2}"), operand='*'),
+             SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
+             ),
+            operand='-',
+            ),
+         SQLColumnExpression(
+             (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+              SQLColumnExpression(
+                  (SQLColumnExpression(("{col2}", "{col2}"), operand='*'),
+                   "{col2}"
+                   ),
+                  operand='-',
+                  ),
+              ),
+             operand='+',
+             )
+         ),
+        operand='/',
+        ),
+    # string representation TODO funtion for automated parsing from string
+    #'(("{col1}" * "{col2}") - ("{col1}" + "{col2}")) / ("{col1}" * "{col1}") + (("{col2}" * "{col2}") - "{col2}")'
+    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT, NOOP]),  # TODO maybe not COUNT because to boring? Same as in other datasets
+    sql_conditions=(SQLConditionTemplate('{col3}', '=', '{val1}'),),
+    schema={
+        'variables': {
+            'col1': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col2': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric']
+                },
+            'col3': {
+                'type': 'column',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                },
+            'val1': {
+                'type': 'value',
+                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
+                }
+            },
+        'sample_strategy': 'random',
+        'value_pool': 'distinct_values',
+        'interpolation_args': dict()
+        },
+    template_alternatives=None
+)
+
+
+def get_template_by_name(template_name: Union[str, List[str]]) -> Optional[Union[QuestionTemplate, List[QuestionTemplate]]]:
+    is_single_template = False
+    if isinstance(template_name, str):
+        is_single_template = True
+        template_name = [template_name]
+    template_list = []
+    for name in template_name:
+        match name.lower():
+            case 'basic': template_list.append(BASIC_TEMPLATE)
+            case 'diff' | 'difference': template_list.append(DIFF_TEMPLATE)
+            case 'ratio_no_filter': template_list.append(RATIO_NO_FILTER_TEMPLATE)
+            case 'expression' | 'expr': template_list.append(EXPRESSION_TEMPLATE)
+            case _:
+                warnings.warn("No template could be found for the name {name}! Trying to find template dataset at this path.")
+                #raise ValueError("No template could be found for the name {name}! Please make sure you have crafted and registered the template correctly.")
+                template_list = None if not is_single_template else [None]
+    if is_single_template:
+        return template_list[0]
+    return template_list
 
 
 def create_templates(main_expr: SQLColumnExpression,
@@ -26,7 +218,7 @@ def create_templates(main_expr: SQLColumnExpression,
     """ Creates Question templates with all basic condition presets given only the main expression.
         If custom condition_expressions are provided a single QuestionTemplate will be created from
         the main expression and all those conditions holding at once If for the custom conditions only
-        a limited set of operators schould be applied they need to be stated explicitly,
+        a limited set of operators schould be applied they need to be stated explicitly, 
         otherwise min, max, sum, avg, count and noop will be applied.
     """
     # different cofigurations of allowed operators depending on condition type
@@ -56,12 +248,12 @@ def create_templates(main_expr: SQLColumnExpression,
     # TODO rethink if excluding operators is necessary (post-hoc filters take care of it?)
     # definition of different basic condition setups that can be used with nearly any main expression
     condition_setups = [
-        ('=', all_base_operators, flex_type_condition_variable_schema),
+        ('=', all_aggregators, flex_type_condition_variable_schema),
         ('!=', all_aggregators, flex_type_condition_variable_schema),
-        ('<', all_aggregators, numeric_condition_variable_schema),
-        ('<=', all_aggregators, numeric_condition_variable_schema),
-        ('>', all_aggregators, numeric_condition_variable_schema),
-        ('>=', all_aggregators, numeric_condition_variable_schema),
+        ('<', all_base_operators, numeric_condition_variable_schema),
+        ('<=', all_base_operators, numeric_condition_variable_schema),
+        ('>', all_base_operators, numeric_condition_variable_schema),
+        ('>=', all_base_operators, numeric_condition_variable_schema),
         (None, arithmetic_operators, {}),
     ]
     # ^ above stays same the following must be defined for every question type:
@@ -165,6 +357,78 @@ def create_templates(main_expr: SQLColumnExpression,
     return question_templates
 
 
+def get_standard_templates(save_path: Optional[str] = None) -> List[QuestionTemplate]:
+    basic_templates = create_templates(
+        SQLColumnExpression(("{col1}",)),
+        expression_description=" of column {col1}"
+        )
+    diff_templates = create_templates(
+        SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
+        expression_description=" of the difference between column {col1} and column {col2}"
+        )
+    ratio_templates = create_templates(
+        SQLColumnExpression(("{col1}", "{col2}"), operand='/'),
+        expression_description=" of the ratio of column {col1} to column {col2}"
+        )
+    """ nicer expression below
+    expression_templates = create_templates(
+        SQLColumnExpression(
+            (
+                SQLColumnExpression(
+                    (SQLColumnExpression(("{col1}", "{col2}"), operand='*'),
+                     SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
+                     ),
+                    operand='-',
+                    ),
+                SQLColumnExpression(
+                    (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+                     SQLColumnExpression(
+                         (SQLColumnExpression(("{col2}", "{col2}"), operand='*'),
+                          "{col2}"
+                          ),
+                         operand='-',
+                         ),
+                     ),
+                    operand='+',
+                    )
+                ),
+            operand='/',
+            ),
+        )
+        """
+    expression_templates = create_templates(
+        SQLColumnExpression(
+            ("{col1}",
+             SQLColumnExpression(
+                 (SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
+                  SQLColumnExpression(
+                      (SQLColumnExpression((2, SQLColumnExpression(("{col1}", "{col2}"), operand='*')), operand='*'),
+                       SQLColumnExpression(
+                           (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+                            SQLColumnExpression(("{col2}", "{col2}"), operand='*')
+                            ),
+                           operand='+'
+                           )
+                       ),
+                      operand='/'
+                      )
+                  ),
+                 operand='*'
+                 )
+             ),
+            operand='*'
+            )
+        )
+    templates = [template
+                 for spec in [basic_templates, diff_templates, ratio_templates, expression_templates]
+                 for template in spec
+                 ]
+    if save_path:
+        dataset = datasets.Dataset.from_list([template.to_state_dict() for template in templates])
+        dataset.save_to_disk(save_path)
+    return templates
+
+
 def create_dataset(template_list,
                    dataset_name: str,
                    description: Optional[str] = None,
@@ -194,6 +458,7 @@ def create_dataset(template_list,
 
 
 def create_basic_table_question_dataset(tables,
+                                        args: DataProcessingArgs,
                                         name='wikitables_test',
                                         use_cache: bool = True,
                                         cache_path: str = './data/NumTabQA/.cache',
@@ -231,12 +496,44 @@ def create_basic_table_question_dataset(tables,
         }
         basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
         dataset = TableQuestionDataSet(name + '_basic',
+                                       args,
                                        description=base_description,
                                        question_templates=[basic_template],
-                                       tables=tables
+                                       tables=tables,
                                        )
+        # get cache path of tables to not save tables multiple times (only trable_id will be saved); if tables are in-memory save as new table dataset
+        fallback_table_dataset_path = cache_path + '/' + cache_file_name + '_tables'
+        table_dataset_path = ensure_table_dataset_on_disk(tables, save_path=fallback_table_dataset_path)
         if save:
-            save_version(dataset, cache_path, cache_file_name)
+            save_version(dataset, cache_path, cache_file_name, questions_only=True, table_dataset_save_path=table_dataset_path)
+    return dataset
+
+
+def create_table_question_dataset(tables: Union[datasets.Dataset, List[Table]],
+                                  template: Union[QuestionTemplate, List[QuestionTemplate]],
+                                  args: DataProcessingArgs,
+                                  name: Optional[str] = None,
+                                  description: Optional[str] = None,
+                                  questions_only: bool = False,
+                                  save_path: Optional[str] = None,
+                                  ) -> TableQuestionDataSet:
+    if name is None:
+        num_templates = len(template) if isinstance(template, list) else 1
+        num_conditions = template.num_conditions if isinstance(template, QuestionTemplate) else '?'
+        main_expr = template.main_expression.generate() if isinstance(template, QuestionTemplate) else '?'
+        auto_name = f"{len(tables)}_tables_{num_templates}_templates_{main_expr}_{num_conditions}_conditions_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}"
+    dataset = TableQuestionDataSet(name or auto_name,
+                                   args,
+                                   description=description,
+                                   question_templates=[template] if isinstance(template, QuestionTemplate) else template,
+                                   tables=tables,
+                                   )
+    if questions_only:
+        # get cache path of tables to not save tables multiple times (only trable_id will be saved); if tables are in-memory save as new table dataset
+        fallback_table_dataset_path = save_path or ('./' + (name or auto_name)) + '_tables'
+        table_dataset_path = ensure_table_dataset_on_disk(tables, save_path=fallback_table_dataset_path)
+    if save_path:
+        save_version(dataset, save_path, questions_only=questions_only, table_dataset_save_path=table_dataset_path if questions_only else None)
     return dataset
 
 
@@ -570,7 +867,7 @@ def create_expression_dataset2(tables,
         nl = "What is the {op} of the expression  between column {col1} and column {col2}?"
         main_expr = SQLColumnExpression(
             (SQLColumnExpression(
-                (SQLColumnExpression(("2 * {col1}", "{col2}"), operand='*'),
+                (SQLColumnExpression(("{col1}", "{col2}"), operand='*'),
                  SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
                  ),
                 operand='-',

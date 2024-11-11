@@ -146,8 +146,7 @@ def scan_dump(example, save_directory: str, file_endings: str = '.py'):
 
 def main(save_directory='dump_scan'):
     search_files = [
-        SearchFile(file_name='template_creation', header=None, footer='def create_expression_dataset2(', dump_files=['dump_files/source_code_dump.txt'], max_length=800, footer_slack=200),
-
+        SearchFile(file_name='template_creation', header=None, footer='auto_name = f"{len(tables)}_tables_{num_templates}_templates_{main_expr}_{num_conditions}_conditions_{datetime.now().strftime(\'%y%m%d_%H%M_%S_%f\')}"', dump_files=['dump_files/source_code_dump.txt'], max_length=1100, footer_slack=550),
     ]
 
     search_file_dataset = datasets.Dataset.from_list([asdict(search_file) for search_file in search_files])
@@ -165,4 +164,4 @@ def main(save_directory='dump_scan'):
 
 
 if __name__ == "__main__":
-    main(save_directory='dump_scan_template_creation')
+    main(save_directory='dump_scan_template_creation_3')
