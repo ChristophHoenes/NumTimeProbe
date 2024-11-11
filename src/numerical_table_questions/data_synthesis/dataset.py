@@ -5,20 +5,21 @@ import math
 import warnings
 import weakref
 from pathlib import PurePath
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import datasets
 import numpy as np
 from tqdm import tqdm
 
-from numerical_table_questions.data_caching import caching, delete_dataset
+from numerical_table_questions.data_caching import caching, delete_dataset, save_version
 from numerical_table_questions.data_synthesis.memmep_data_synth import (
-    add_from_cache, create_table_batch_questions, deduplicate_field, flatten_table_batches
+    add_cached_field_to_dataset, create_table_batch_questions, deduplicate_field,
+    extract_field_datasets, join_batch_datasets, flatten_table_batches, table_batches_add_pre_aggregation_row_counts
     )
-from numerical_table_questions.data_synthesis.question import TableQuestion
+from numerical_table_questions.data_synthesis.question import TableQuestion, restore_table_from_id
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
-
+from numerical_table_questions.data_utils import get_cache_path, lazy_multi_processing_posthoc_order
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
@@ -27,6 +28,20 @@ logger = logging.getLogger(__name__)
 
 class WeakRefableDict(dict):
     pass
+
+
+def ensure_table_dataset_on_disk(table_dataset: Union[datasets.Dataset, List[Table]], save_path: str) -> str:
+    """ Makes sure that the table dataset is saved somewhere on disk and returns the save path as proof."""
+    table_dataset_path = None
+    if isinstance(table_dataset, datasets.Dataset):
+        table_dataset_path = get_cache_path(table_dataset)
+        if table_dataset_path is None:
+            logger.info("table_dataset has no cache file. Writing to disk...")
+            table_dataset.save_to_disk(save_path)
+    else:
+        logger.info("table_dataset is not saved as a dataset yet. Converting to datasets.Dataset and writing to disk...")
+        datasets.Dataset.from_list([table.to_state_dict() for table in table_dataset]).save_to_disk(save_path)
+    return table_dataset_path or save_path  # either the retrieved cache path or the new save_path (if not previously saved)
 
 
 class TableQuestionDataSet:
