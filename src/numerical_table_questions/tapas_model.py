@@ -1,11 +1,14 @@
-import logging
 import math
-import transformers
+import logging
+import logging.config
 import warnings
-from tqdm import tqdm
-from typing import List, Union, Tuple
+from pathlib import PurePath
+from typing import List, Optional, Union, Tuple
 
 import pandas as pd
+import torch
+import transformers
+from tqdm import tqdm
 
 from numerical_table_questions.answer_coordinates import AnswerCoordinates, compute_answer_coordinates
 from numerical_table_questions.data_synthesis.table import Table
@@ -28,7 +31,7 @@ def tapas_model_type_info() -> dict:
         loss_out_id='loss',
         filter_data_attributes=None,  # only needed for TensorDataset serialization
         tensor_input_mapping={},  # only needed for TensorDataset serialization and positional arguments
-        dict_input_mapping ={},  # by default use all tokenizer keys as input
+        dict_input_mapping={},  # by default use all tokenizer keys as input
         )
 
 
