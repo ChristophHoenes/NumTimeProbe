@@ -257,3 +257,25 @@ def reduce_answer_coordinates(tokenizer, tokenizer_inputs, max_iteration=10):
                         min_fail = new_row_cutoff  # if failed decrease min_fail to the cutoff that was tried but resulted in an exception just now (shift window upper bound to left)
                     """
                     min_fail = _max_row_id(tok_input['answer_coordinates'][0])
+                    if iteration == 0:
+                        min_fail = _max_row_id(tok_input['answer_coordinates'][0])
+                        max_sucess = None
+                        max_row_id = _max_row_id(tok_input['answer_coordinates'][0])
+                        all_answer_cells = [coordinate for coordinate in tok_input['answer_coordinates'][0]
+                                            if coordinate[0] <= max_row_id
+                                            ]
+                        try:
+                            tokenizer(**{key: value if key != 'answer_coordinates' else [all_answer_cells]
+                                         for key, value in tokenizer_inputs.items()
+                                         }
+                                      )
+                        except ValueError as e:
+                            logger.debug(f"Testing modified answer coordinates {e}.")
+                            all_answer_cells_fit = False
+                    """
+                new_answer_cells, new_row_cutoff = _compute_next_answer_coordinates(new_answer_cells, max_success, min_fail)  # update new answer cells and cutoff
+                # when window is completely collapsed overwrite the answer coordinates and leave the loop
+                if min_fail - max_success <= 1:
+                    tok_input['answer_coordinates'] = [new_answer_cells]
+                    break
+                iteration += 1

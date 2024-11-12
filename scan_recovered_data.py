@@ -146,10 +146,8 @@ def scan_dump(example, save_directory: str, file_endings: str = '.py'):
 
 def main(save_directory='dump_scan'):
     search_files = [
-        SearchFile(file_name='arguments', header=None, footer='/home/mamba/.cache/templates/standard_templates', dump_files=['dump_files/arguments_recovery.txt'], max_length=380, footer_slack=30),
-        SearchFile(file_name='data_caching', header=None, footer='# object with to_huggingface() (only TableQuestionDataset?)', dump_files=['dump_files/data_caching_recovery.txt'], max_length=170, footer_slack=70),
-        SearchFile(file_name='data_utils', header=None, footer='def plot_histogram(', dump_files=['dump_files/source_code_dump.txt'], max_length=400, footer_slack=80),
-        SearchFile(file_name='tapas_model', header=None, footer='def tapas_generation(tokenizer, model_inputs: dict, model_outputs: dict, table: pd.DataFrame) -> List[str]:', dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=200),
+        SearchFile(file_name='data_utils', header=None, footer='def plot_histogram(', dump_files=['dump_files/source_code_dump.txt'], max_length=460, footer_slack=120),
+        SearchFile(file_name='tapas_model', header=None, footer='# when window is completely collapsed overwrite the answer coordinates and leave the loop', dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=20),
     ]
 
     search_file_dataset = datasets.Dataset.from_list([asdict(search_file) for search_file in search_files])
@@ -167,4 +165,4 @@ def main(save_directory='dump_scan'):
 
 
 if __name__ == "__main__":
-    main(save_directory='dump_scan_final_check_3')
+    main(save_directory='dump_scan_final_check_4')
