@@ -146,15 +146,10 @@ def scan_dump(example, save_directory: str, file_endings: str = '.py'):
 
 def main(save_directory='dump_scan'):
     search_files = [
-        SearchFile(file_name='answer_coordinates', header=None, footer='def posthoc_answer_coordinates(', dump_files=['dump_files/source_code_dump.txt'], max_length=100, footer_slack=15),
-        SearchFile(file_name='arguments', header=None, footer='/home/mamba/.cache/templates/standard_templates', dump_files=['dump_files/source_code_dump.txt'], max_length=380, footer_slack=30),
-        SearchFile(file_name='data_caching', header=None, footer='# object with to_huggingface() (only TableQuestionDataset?)', dump_files=['dump_files/source_code_dump.txt'], max_length=170, footer_slack=70),
-        SearchFile(file_name='data_utils', header=None, footer='def cutoff_num_questions(dataset: datasets.Dataset,', dump_files=['dump_files/source_code_dump.txt'], max_length=325, footer_slack=120),
-        SearchFile(file_name='data_utils_2', header=None, footer='def create_table_index', dump_files=['dump_files/source_code_dump.txt'], max_length=400, footer_slack=50),
-        SearchFile(file_name='data_utils_3', header=None, footer='def post_hoc_delete_questions_from_hierarchical(', dump_files=['dump_files/source_code_dump.txt'], max_length=400, footer_slack=50),
-        SearchFile(file_name='evaluation', header=None, footer="evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/", dump_files=['dump_files/source_code_dump.txt'], max_length=270, footer_slack=25),
-        SearchFile(file_name='sql_templates', header=None, footer="def _generate_argument(self, argument: ExpressionArgument) -> str:", dump_files=['dump_files/sql_templates_recovery.txt'], max_length=375, footer_slack=282),
-        SearchFile(file_name='tapas_model', header=None, footer='def tapas_generation(tokenizer, model_inputs: dict, model_outputs: dict, table: pd.DataFrame) -> List[str]:', dump_files=['dump_files/source_code_dump.txt'], max_length=250, footer_slack=100),
+        SearchFile(file_name='arguments', header=None, footer='/home/mamba/.cache/templates/standard_templates', dump_files=['dump_files/arguments_recovery.txt'], max_length=380, footer_slack=30),
+        SearchFile(file_name='data_caching', header=None, footer='# object with to_huggingface() (only TableQuestionDataset?)', dump_files=['dump_files/data_caching_recovery.txt'], max_length=170, footer_slack=70),
+        SearchFile(file_name='data_utils', header=None, footer='def plot_histogram(', dump_files=['dump_files/source_code_dump.txt'], max_length=400, footer_slack=80),
+        SearchFile(file_name='tapas_model', header=None, footer='def tapas_generation(tokenizer, model_inputs: dict, model_outputs: dict, table: pd.DataFrame) -> List[str]:', dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=200),
     ]
 
     search_file_dataset = datasets.Dataset.from_list([asdict(search_file) for search_file in search_files])
@@ -172,4 +167,4 @@ def main(save_directory='dump_scan'):
 
 
 if __name__ == "__main__":
-    main(save_directory='dump_scan_final_check_2')
+    main(save_directory='dump_scan_final_check_3')

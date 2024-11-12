@@ -204,3 +204,56 @@ def reduce_answer_coordinates(tok_input: dict, last_cutoff: Optional[int] = None
         # remove the row with highest index (max_row_id)
         tok_input['answer_coordinates'][0] = [coordinate for coordinate in tok_input['answer_coordinates'][0]
                                               if coordinate[0] < max_row_id
+                                              ]
+"""
+
+
+def reduce_answer_coordinates(tokenizer, tokenizer_inputs, max_iteration=10):
+    def _max_row_id(answer_coordinates: List[Tuple[int, int]]) -> int:
+        return max([coordinate[0] for coordinate in answer_coordinates])
+
+    def _compute_next_answer_coordinates(answer_coordinates: List[Tuple[int, int]],
+                                         lower_bound: int,
+                                         upper_bound: int,
+                                         ) -> Tuple[List[Tuple[int, int]], int]:
+        new_row_cutoff = (lower_bound + upper_bound) // 2
+        new_answer_cells = [coordinate for coordinate in answer_coordinates
+                            if coordinate[0] <= new_row_cutoff
+                            ]
+        return new_answer_cells, new_row_cutoff
+
+    # for every sample narrow down the window of when tokenization fails/succeeds by trying to half the window size in every step
+    # until the window collapses to a single point (the maximum number of answer cells before tokenization fails)
+    for tok_input in tokenizer_inputs:
+        if tok_input.get('answer_coordinates') is not None and tok_input['answer_coordinates'][0] is not None:
+            iteration = 0
+            min_fail = None  # the lowest row_id for which the tokenization failed (window lower bound)
+            max_success = 0  # the highest row_id for which tokenizing completed sucessfully (window upper bound)
+            new_row_cutoff = None  # last row_id that is included in the answer coordinate version that is tried next
+            new_answer_cells = None  # reduced answer coordinates to try next
+            while True:
+                # prevent infinity loop
+                if iteration > max_iteration + 1:
+                    raise StopIteration("Iteration exceeded max_length of model. Aborting due to risk of infinity loop.")
+                # try if tokenizing the example is sucessful
+                try:
+                    if new_answer_cells is None:
+                        tokenizer(**tok_input)
+                        break  # if tokenization successful leave loop
+                    else:
+                        # try with modified answer coordinates
+                        tokenizer(**{key: value if key != 'answer_coordinates' else [new_answer_cells]
+                                     for key, value in tok_input.items()
+                                     }
+                                  )
+                        max_success = new_row_cutoff  # if success increase max_success to the cutoff that was successfully tried just now (shift window lower bound to right)
+                except ValueError as e:
+                    logger.info(f"Original Exception: {e}\nProbably table reduced to max answer coordinate row_id does not fit\n-> reducing answer coordinates iteration {iteration}...")
+                    # code goes here
+                    if iteration == 0:
+                        min_fail = _max_row_id(tok_input['answer_coordinates'][0])  # first iteration that failed is when trying the original answer coordinates (max_row_id)
+                        new_answer_cells = tok_input['answer_coordinates'][0]  # initialize variable with the last version tried (which are the original answer coordinates in iteration 0)
+                    else:
+                        min_fail = new_row_cutoff  # if failed decrease min_fail to the cutoff that was tried but resulted in an exception just now (shift window upper bound to left)
+                    """
+                    min_fail = _max_row_id(tok_input['answer_coordinates'][0])

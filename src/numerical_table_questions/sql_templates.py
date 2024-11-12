@@ -1,11 +1,13 @@
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Union, Optional, TypeVar, Type
+from typing import Tuple, List, Dict, Union, Optional, TypeVar, Type, TypeAlias
 
 
 OP = TypeVar('OP', bound='SQLOperatorTemplate')
+E = TypeVar('E', bound='SQLColumnExpression')
 T = TypeVar('T', bound='SQLTemplate')
+ExpressionArgument: TypeAlias = Union[str, int, E]
 
 @dataclass(frozen=True)
 class SQLOperator:
