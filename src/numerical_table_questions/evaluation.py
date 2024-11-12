@@ -13,11 +13,13 @@ from lightning import Trainer
 from lightning.pytorch.loggers import WandbLogger
 from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
 
-import numerical_table_questions.data_synthesis
 from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from numerical_table_questions.data_loading import TableQADataModule
-from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
+from numerical_table_questions.data_synthesis.question import TableQuestion
+from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
+from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.metrics import token_accuracy
 from numerical_table_questions.model import LightningWrapper
 from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
@@ -124,7 +126,7 @@ def evaluate(model: Type[TableQaModel],
                                 tables,
                                 output_tokens=metric == 'token_accuracy'
                                 )
-    # Semantic parsing models return the originally predicted SQL query 
+    # Semantic parsing models return the originally predicted SQL query
     # additionally to the answer via execution
     if isinstance(predictions, tuple):
         predictions, query_predictions = predictions

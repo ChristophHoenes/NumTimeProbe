@@ -1,5 +1,6 @@
 import warnings
 from collections.abc import Iterable, Callable
+from time import time
 from typing import Union, Optional, List, Dict, Tuple
 
 import datasets
@@ -9,10 +10,10 @@ from loguru import logger  # TODO check difference to custom python logger and m
 from transformers import TapexTokenizer, TapasTokenizer
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from numerical_table_questions.data_synthesis import TableQuestionDataSet
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_utils import cast_to_reduced_int
 from numerical_table_questions.tapex_model import tapex_tokenizer_format, tapex_tokenize
-from numerical_table_questions.tapas_model import tapas_tokenizer_format
+from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates
 
 
 def get_tokenizer(model_name, **kwargs):

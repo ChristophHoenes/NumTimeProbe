@@ -15,17 +15,17 @@ logger = logging.getLogger(__name__)
 def execute_sql(query: str, dataframe: pd.DataFrame, debug_empty_result=False,
                 ) -> Optional[Union[pd.Series, pd.DataFrame]]:
     if query is None:
-        raise ValueError("Can only compute the answer to a question if the \
-                            corresponding sql_query to answer is available!"
+        raise ValueError("Can only compute the answer to a question if the "
+                         "corresponding sql_query to answer is available!"
                          )
     else:
         df = dataframe  # renaming for sqldf to find table
         try:
             query_result = sqldf(query)
         except Exception as e:  # Log issue with query but do not interrupt program -> return None instead
-            logger.warn("Query execution failed with exception! "
-                        "See logging level debug for more info on query and table and level critical for the stack trace."
-                        )
+            logger.warning("Query execution failed with exception! "
+                           "See logging level debug for more info on query and table and level critical for the stack trace."
+                           )
             logger.critical(e, exc_info=True)
             logger.info('query:\n', query)
             logger.info('table:\n', dataframe.head(5))

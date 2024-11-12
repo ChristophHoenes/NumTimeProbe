@@ -1,20 +1,32 @@
 import logging
 import logging.config
 import math
+import random
+import re
 import warnings
 from pathlib import Path, PurePath
-from typing import Optional, Tuple, Dict
+from typing import Optional, List, Tuple, Dict
 
+import datasets
 import numpy as np
+import pandas as pd
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 from numerical_table_questions.data_caching import caching, save_version
-from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.data_synthesis.table import Table, deduplicate_column_names
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
+
+
+# from https://discuss.python.org/t/structural-pattern-matching-should-permit-regex-string-matches/22700/8 for easy match syntax
+class REqual(str):
+    "Override str.__eq__ to match a regex pattern."
+    def __eq__(self, pattern):
+        return re.fullmatch(pattern, self)
 
 
 def infer_table_name_from_path(filepath: str):

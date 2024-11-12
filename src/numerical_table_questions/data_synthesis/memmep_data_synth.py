@@ -4,7 +4,9 @@ from typing import Dict, List, Optional, Tuple, Type, Union
 import datasets
 
 from numerical_table_questions.data_caching import delete_dataset
-from numerical_table_questions.data_synthesis import Table, TableQuestion, QuestionTemplate
+from numerical_table_questions.data_synthesis.question import TableQuestion
+from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
+from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.sql_templates import SQLTemplate, SQLOperatorTemplate, SQLOverClauseTemplate
 
 

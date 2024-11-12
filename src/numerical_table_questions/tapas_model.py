@@ -7,7 +7,7 @@ from typing import List, Union, Tuple
 import pandas as pd
 
 from numerical_table_questions.answer_coordinates import AnswerCoordinates, compute_answer_coordinates
-from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet
+from numerical_table_questions.data_synthesis.table import Table, TableQuestionDataSet
 from numerical_table_questions.metrics import str_match_accuracy
 
 

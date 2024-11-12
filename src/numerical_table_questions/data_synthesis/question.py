@@ -4,6 +4,8 @@ import re
 import warnings
 from typing import List, Optional, Union
 
+import datasets
+
 from numerical_table_questions.answer_coordinates import compute_answer_coordinates
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.sql_utils import execute_sql

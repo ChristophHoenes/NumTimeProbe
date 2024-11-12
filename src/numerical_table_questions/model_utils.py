@@ -113,6 +113,8 @@ def model_specific_generation(model_name, model, tokenizer, inputs, outputs=None
             if not isinstance(inputs, dict):
                 # alternatively use Lighningmodule forward which handles input ordering already
                 raise TypeError(f"Expected inputs to be dict type but found {type(inputs)}!")
+            #input_ids = inputs['input_ids'] if isinstance(inputs, dict) else inputs[0]
+            #print(type(input_ids), input_ids.size(), 1 in input_ids[:, [-1,0]])
             # filter batch input fields to only contain inputs required by TAPAS
             model_specific_inputs = map_batch_keys_to_model_kwarg(inputs, get_model_type_info('tapas').dict_input_mapping)
             # get table as dataframe from dataset table indices
