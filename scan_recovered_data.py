@@ -146,7 +146,23 @@ def scan_dump(example, save_directory: str, file_endings: str = '.py'):
 
 def main(save_directory='dump_scan'):
     search_files = [
-        SearchFile(file_name='template_creation', header=None, footer='auto_name = f"{len(tables)}_tables_{num_templates}_templates_{main_expr}_{num_conditions}_conditions_{datetime.now().strftime(\'%y%m%d_%H%M_%S_%f\')}"', dump_files=['dump_files/source_code_dump.txt'], max_length=1100, footer_slack=550),
+        SearchFile(file_name='gittables_processing', header=None, footer="def group_name_neighbours(file_names", dump_files=['dump_files/source_code_dump.txt'], max_length=350, footer_slack=87),
+        SearchFile(file_name='lazy_data_processing', header=None, footer='data = data.map(lambda x: {\'table\': table_dict})', dump_files=['dump_files/source_code_dump.txt'], max_length=250, footer_slack=168),
+        SearchFile(file_name='model', header=None, footer='outputs = self(inputs, target, is_eval=True)', dump_files=['dump_files/source_code_dump.txt'], max_length=525, footer_slack=172),
+        SearchFile(file_name='model_utils', header=None, footer="def get_sample_from_batch_dict(batch_dict: dict, idx: int, keep_dim: bool = True) -> dict:", dump_files=['dump_files/source_code_dump.txt'], max_length=160, footer_slack=60),
+        SearchFile(file_name='memmep_data_synth', header=None, footer='max_questions_per_table: Optional[int] = None,', dump_files=['dump_files/source_code_dump.txt'], max_length=600, footer_slack=580),
+        SearchFile(file_name='question', header=None, footer='if query_result is not None and len(query_result) > 0:  # at least one row', dump_files=['dump_files/source_code_dump.txt'], max_length=250, footer_slack=87),
+        SearchFile(file_name='question_template', header=None, footer='variable_assignments = random.sample(variable_assignments, max_num_questions)', dump_files=['dump_files/source_code_dump.txt'], max_length=750, footer_slack=350),
+        SearchFile(file_name='table_creation', header=None, footer=') -> Optional[Union[List[Table], datasets.Dataset]]:', dump_files=['dump_files/source_code_dump.txt'], max_length=110, footer_slack=85),
+        SearchFile(file_name='answer_coordinates', header=None, footer='def posthoc_answer_coordinates(datasets_example):', dump_files=['dump_files/source_code_dump.txt'], max_length=100, footer_slack=15),
+        SearchFile(file_name='arguments', header=None, footer='max_questions_per_table: Optional[int] = dArg(', dump_files=['dump_files/source_code_dump.txt'], max_length=360, footer_slack=15),
+        SearchFile(file_name='data_caching', header=None, footer='# list of objects with to_state_dict()', dump_files=['dump_files/source_code_dump.txt'], max_length=170, footer_slack=60),
+        SearchFile(file_name='data_loading', header=None, footer='from numerical_table_questions.data_utils import create_table_index', dump_files=['dump_files/source_code_dump.txt'], max_length=650, footer_slack=625),
+        SearchFile(file_name='data_utils', header=None, footer='def dump_mem_alloc', dump_files=['dump_files/source_code_dump.txt'], max_length=320, footer_slack=80),
+        SearchFile(file_name='evaluation', header=None, footer='f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."', dump_files=['dump_files/source_code_dump.txt'], max_length=270, footer_slack=99),
+        SearchFile(file_name='sql_templates', header=None, footer="def _generate_argument(self, argument: ExpressionArgument) -> str:t", dump_files=['dump_files/sql_templates_recovery.txt'], max_length=375, footer_slack=282),
+        SearchFile(file_name='tapas_model', header='from numerical_table_questions.data_synthesis.table import Table', footer='def _max_row_id(answer_coordinates: List[Tuple[int, int]]) -> int:', dump_files=['dump_files/source_code_dump.txt'], max_length=200, footer_slack=25),
+        SearchFile(file_name='tokenizer_utils', header='from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates', footer='raise TypeError("Expected tokenized_data\'s values to be (nested) lists (table_batch and samples per table) "', dump_files=['dump_files/source_code_dump.txt'], max_length=450, footer_slack=30),
     ]
 
     search_file_dataset = datasets.Dataset.from_list([asdict(search_file) for search_file in search_files])
@@ -164,4 +180,4 @@ def main(save_directory='dump_scan'):
 
 
 if __name__ == "__main__":
-    main(save_directory='dump_scan_template_creation_3')
+    main(save_directory='dump_scan_final_check')
