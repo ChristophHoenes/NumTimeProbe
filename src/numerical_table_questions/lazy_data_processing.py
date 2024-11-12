@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Union, Dict, Tuple
+from time import time
+from typing import Optional, Union, Dict, Tuple
 
 import datasets
 import torch
 
 from numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_utils import cutoff_num_questions
-from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.data_utils import cutoff_num_questions, create_table_index
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
 
@@ -119,14 +119,14 @@ class QuestionTableConnectDataset(torch.utils.data.Dataset):
 def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
                   pad_token_id: int, mask_token_id: int, truncation='drop_rows_to_fit', padding='max_length',
                   is_eval: bool = False,
-                  table_index: Optional[dict] = None,
+                  #table_index: Optional[dict] = None,
                   ):
     tokenized_batch = []
     # get table and question from dataset
     for sample_idx in batch_of_index_ids:
         table_data = sample_idx['data']
         question_number = sample_idx['question_number']
-        """ collate version of retrieve_table_from_table_dataset"""
+        """ collate version of retrieve_table_from_table_dataset
         table_search_id = table_data[0]['table']
         # if only the table id was saved retrieve the table data from the table dataset
         if isinstance(table_search_id, str):
@@ -155,7 +155,7 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
                     raise table_not_found_exception
                 else:
                     table_data = table_data.map(lambda x: {'table': table_dataset[table_dataset_id]['table']})
-            datasets.enable_progress_bars()
+            datasets.enable_progress_bars()        """
         # table augmentation
         # apply informed column deletion (only unaffected columns are dropped)
         # apply informed row deletion (delete percentage of rows that are unaffected by condition, infer from answer_coordinates)
