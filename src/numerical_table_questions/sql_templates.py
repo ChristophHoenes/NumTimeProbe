@@ -9,6 +9,7 @@ E = TypeVar('E', bound='SQLColumnExpression')
 T = TypeVar('T', bound='SQLTemplate')
 ExpressionArgument: TypeAlias = Union[str, int, E]
 
+
 @dataclass(frozen=True)
 class SQLOperator:
     sql: str

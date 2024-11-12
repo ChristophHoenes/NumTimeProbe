@@ -102,8 +102,8 @@ def create_all_question_fields(sample,
                 count_configurations, count_var_assignments = zip(*unique_count_configurations.items())
 
             compiled_count_sql_statements = [count_template.format(**assignment)
-                                                for assignment in count_var_assignments
-                                                ]
+                                            for assignment in count_var_assignments
+                                            ]
 
             # consider natural language questions and alternatives thereof only if count operator is specified explicitly
             # (e.g. real questions should be genereted; count is not only used for statistical property determination)

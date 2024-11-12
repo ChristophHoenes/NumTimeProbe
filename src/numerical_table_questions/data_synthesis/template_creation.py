@@ -218,7 +218,7 @@ def create_templates(main_expr: SQLColumnExpression,
     """ Creates Question templates with all basic condition presets given only the main expression.
         If custom condition_expressions are provided a single QuestionTemplate will be created from
         the main expression and all those conditions holding at once If for the custom conditions only
-        a limited set of operators schould be applied they need to be stated explicitly, 
+        a limited set of operators schould be applied they need to be stated explicitly,
         otherwise min, max, sum, avg, count and noop will be applied.
     """
     # different cofigurations of allowed operators depending on condition type

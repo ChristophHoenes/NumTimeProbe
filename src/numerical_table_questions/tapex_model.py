@@ -70,8 +70,8 @@ def tapex_tokenizer_format(data, lazy: bool = False, **kwargs):
         for question in data._questions:
             if questions_by_table.get(question._table._table_id) is None:
                 questions_by_table[question._table._table_id] = {'questions': [question._nl_question],
-                                                                # TODO handle string conversion elsewhere
-                                                                'answers': [str(question._answer)]}
+                                                                 # TODO handle string conversion elsewhere
+                                                                 'answers': [str(question._answer)]}
             else:
                 questions_by_table[question._table._table_id]['questions'].append(question._nl_question)
                 # TODO handle string conversion elsewhere
