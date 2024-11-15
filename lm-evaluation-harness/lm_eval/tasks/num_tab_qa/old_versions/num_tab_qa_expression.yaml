@@ -1,0 +1,30 @@
+group:
+  - num_tab_qa
+task: num_tab_qa_expression
+# todo make local HF dataset with loading script from artifacts -> then only the folder needs to be provided
+dataset_path: arrow
+dataset_name: num_tab_qa_expression
+dataset_kwargs:
+  data_files:
+    #test: data/wikitablequestions_test_diff_filtered_multi_answer_filter_agg_count_0_questions_only_format/240527_1849_38_857294/data-00000-of-00001.arrow
+    # diff data
+    #test: data/wikitablequestions_test_diff_filtered_multi_answer_filter_agg_count_0/240527_1849_38_857294/cache-d060cae686f2945b.arrow
+    # basic data
+    test: data/wikitablequestions_test_basic_filtered_multi_answer_filter_agg_count_0/240618_1010_45_805591/cache-5836597aa5ad9919.arrow
+    few: data/wikitablequestions_validation_basic_filtered_multi_answer_filter_agg_count_0/240618_1056_33_614096/cache-c068ec5f03b75b44.arrow
+    #test_tables:
+#output_type: loglikelihood
+#training_split: train
+#validation_split: validation
+test_split: test
+fewshot_split: few
+process_docs: !function utils.process_docs  # TODO add python function that prepares the datasets.Dataset fields for lm_eval
+doc_to_text: !function utils.short_tabfact_sep_prompt_inference
+doc_to_target: !function utils.plain_single_answer  #"{{answers}}"
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    #regexes_to_ignore: TODO exclude solution in text form [a-zA-Z]* and symbolic form [*=<whitespace>+]
+    # for CoT and deepseek-ai/deepseek-math-7b-rl ignore everything that is not in \\boxed{} --> regexes_to_ignore: ['.*boxed', '{', '}\.', '}', '\s+']
+    regexes_to_ignore: ['.*boxed', '{', '}\.', '}', '\s+']
