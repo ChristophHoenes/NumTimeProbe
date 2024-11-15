@@ -10,7 +10,7 @@ from typing import List, Dict, Optional, Union
 import datasets
 
 from numerical_table_questions.data_caching import save_version, caching
-from numerical_table_questions.data_synthesis.table import Table, deduplicate_column_names, name_id_mapping
+from numerical_table_questions.data_synthesis.table import Table, name_id_mapping
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
@@ -87,7 +87,7 @@ def main():
     table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
     # run column_name deduplication (since code changed since table dataset creation)
     for table in table_dataset:
-        table.column_names = tuple(deduplicate_column_names(table.column_names))
+        table.column_names = tuple(table.deduplicate_column_names(table.column_names))
         table._col2idx, table._idx2col = name_id_mapping(table.column_names, both_ways=True)
     return table_dataset
 
