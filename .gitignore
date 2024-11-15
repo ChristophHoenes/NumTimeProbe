@@ -160,3 +160,6 @@ temp
 lm_cache
 .idea
 output/
+
+# explicitly hidden .git folders of submodules
+..git
