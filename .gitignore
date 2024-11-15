@@ -148,3 +148,15 @@ dmypy.json
 
 # everything that has to do with run-results 
 /template
+
+# don't track (the default location of) the cached requests
+lm_eval/caching/.cache
+
+# other stuff from lm_eval .gitignore
+examples/wandb
+temp
+.vscode/
+*.pyc
+lm_cache
+.idea
+output/
