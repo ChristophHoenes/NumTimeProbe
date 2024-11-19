@@ -5,6 +5,7 @@ from pathlib import PurePath
 import datasets
 from typing import Optional
 
+from numerical_table_questions.data_utils import create_table_index
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 
 
@@ -13,16 +14,6 @@ def process_docs(dataset: datasets.Dataset, table_index_path='tmp_table_index.pi
     if table_dataset_path_field in dataset.column_names:
         print("Loading table dataset...")
         table_dataset = get_table_dataset(dataset[0][table_dataset_path_field])  # assumes same table path for all samples
-        # TODO import from numtabqa package data_utils.py
-        def create_table_index(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
-            index = {}
-            if 'table' in table_dataset.column_names and table_dataset[0]['table'].get(table_id_col_name) is not None:
-                index = {table_dataset[i]['table'][table_id_col_name]: i for i in range(len(table_dataset))}
-            elif table_dataset.get(table_id_col_name) is not None:
-                index = {table_dataset[i][table_id_col_name]: i for i in range(len(table_dataset))}
-            else:
-                raise KeyError(f'Column "{table_id_col_name}" could not be found in the dataset! Please specify the correct column name for the table ids.')
-            return index
         table_index = create_table_index(table_dataset)
         with open(table_index_path, 'wb') as f:
             pickle.dump(table_index, f)
