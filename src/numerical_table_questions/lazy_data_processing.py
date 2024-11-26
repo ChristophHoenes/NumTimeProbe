@@ -68,6 +68,11 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         self.table_dataset = datasets.Dataset.load_from_disk(table_dataset_path) if table_dataset_path else None
         self.table_index = create_table_index(self.table_dataset, table_id_col_name='table_id') if self.table_dataset else None
 
+    @property
+    def features(self) -> dict:
+        """ Huggingface datasets.Dataset style property (required by lm_eval). """
+        return self.table_question_dataset.features
+
     def __len__(self):
         return len(self.question_index)
 
