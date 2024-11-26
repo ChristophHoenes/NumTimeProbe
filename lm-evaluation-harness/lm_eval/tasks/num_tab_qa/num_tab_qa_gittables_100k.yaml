@@ -10,8 +10,9 @@ dataset_kwargs:
     # diff data
     #test: data/wikitablequestions_test_diff_filtered_multi_answer_filter_agg_count_0/240527_1849_38_857294/cache-d060cae686f2945b.arrow
     # basic data
-    test: /home/mamba/.cache/gittables_group_filtered_standard_templates_test_100k/241016_1417_12_123456/data-00000-of-00001.arrow
-    few: /home/mamba/.cache/gittables_group_filtered_standard_templates_test_100k/241016_1417_12_123456/data-00000-of-00001.arrow
+    #test: /home/mamba/.cache/gittables_group_filtered_standard_templates_test_100k/241016_1417_12_123456/data-00000-of-00001.arrow
+    test: /home/mamba/.cache/3_tables_from_100k_test_set/data-00000-of-00001.arrow
+    few: /home/mamba/.cache/16_few_shot_tables_from_100k_test_set/data-00000-of-00001.arrow
     #test_tables:
 #output_type: loglikelihood
 #training_split: train
