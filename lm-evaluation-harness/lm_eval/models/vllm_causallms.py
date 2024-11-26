@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime
 from importlib.metadata import version
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
@@ -319,6 +320,8 @@ class VLLM(TemplateLM):
         context_encoding: List[List[int]] = self.tok_encode(
             context, add_special_tokens=self.add_bos_token
         )
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) context_encoding len: {len(context_encoding)}, context lengths: {[len(context_encoding[i]) for i in range(len(context_encoding))]} \n")
         requests = [
             ((a, b), c) for a, b, c in zip(context, context_encoding, all_gen_kwargs)
         ]

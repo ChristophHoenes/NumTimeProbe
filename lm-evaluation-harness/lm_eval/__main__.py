@@ -3,7 +3,9 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from functools import partial
+from time import time
 from typing import Union
 
 from lm_eval import evaluator, utils
@@ -259,11 +261,13 @@ def parse_eval_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
 
 
 def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
+    start_cli_evaluate = time()
     if not args:
         # we allow for args to be passed externally, else we parse them ourselves
         parser = setup_parser()
         args = parse_eval_args(parser)
-
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Args: {vars(args)}\n")
     if args.wandb_args:
         wandb_logger = WandbLogger(**simple_parse_args_string(args.wandb_args))
 
@@ -371,7 +375,11 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
     request_caching_args = request_caching_arg_to_dict(
         cache_requests=args.cache_requests
     )
+    end_cli_evaluate = time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Prepare evaluate: {end_cli_evaluate - start_cli_evaluate} seconds\n")
 
+    start_simple_evaluate = time()
     results = evaluator.simple_evaluate(
         model=args.model,
         model_args=args.model_args,
@@ -399,7 +407,10 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         fewshot_random_seed=args.seed[3],
         **request_caching_args,
     )
-
+    end_simple_evaluate = time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished full simple_evaluate in main: {end_simple_evaluate - start_simple_evaluate} seconds\n")
+    start_rest_main = time()
     if results is not None:
         if args.log_samples:
             samples = results.pop("samples")
@@ -448,7 +459,16 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         if args.wandb_args:
             # Tear down wandb run once all the logging is done.
             wandb_logger.run.finish()
+    end_rest_main = time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished rest postprocess in main: {end_rest_main - start_rest_main} seconds\n")
 
 
 if __name__ == "__main__":
+    start_main = time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"\n\n\n\n\nRun Start at {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n")
     cli_evaluate()
+    end_main = time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"Finished main at {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}. After {end_main - start_main} seconds.\n\n")

@@ -1,6 +1,6 @@
 import copy
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
@@ -670,6 +670,9 @@ class HFLM(TemplateLM):
             max_context_enc = max_length
             max_cont_enc = max_length
 
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) max_length: {self.max_length} max_batch_size: {self.max_batch_size}\n")
+
         # if OOM, then halves batch_size and tries again
         @find_executable_batch_size(starting_batch_size=self.max_batch_size)
         def forward_batch(batch_size):
@@ -688,6 +691,10 @@ class HFLM(TemplateLM):
                 test_batch = torch.ones(
                     (batch_size, max_length), device=self.device
                 ).long()
+
+            with open("time_memory_debug_log.txt", "a") as file:
+                file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) test batch tried: shape: {test_batch.shape}\n")
+
             for _ in range(5):
                 out = F.log_softmax(self._model_call(test_batch, **call_kwargs), dim=-1)  # noqa: F841
 

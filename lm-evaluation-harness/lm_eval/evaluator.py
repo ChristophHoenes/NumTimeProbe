@@ -4,6 +4,7 @@ import logging
 import random
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional, Union
 
 import numpy as np
@@ -127,6 +128,10 @@ def simple_evaluate(
     :return
         Dictionary of results
     """
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) in simple_evaluate\n")
+    start_simple_evaluate_setup = time.time()
+
     eval_logger.setLevel(getattr(logging, f"{verbosity}"))
     start_date = time.time()
 
@@ -166,7 +171,10 @@ def simple_evaluate(
         )
         if gen_kwargs == "":
             gen_kwargs = None
-
+    end_simple_evaluate_setup = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Prepare simple_evaluate: {end_simple_evaluate_setup - start_simple_evaluate_setup} seconds\n")
+    start_load_model = time.time()
     if isinstance(model, str):
         if model_args is None:
             eval_logger.warning("model_args not specified. Using defaults.")
@@ -214,7 +222,10 @@ def simple_evaluate(
             + str(lm.rank)
             + ".db",
         )
-
+    end_load_model = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Model loaded: {end_load_model - start_load_model} seconds\n")
+    start_task_setup = time.time()
     if task_manager is None:
         task_manager = TaskManager(verbosity)
 
@@ -273,7 +284,10 @@ def simple_evaluate(
             chat_template=lm.chat_template if apply_chat_template else None,
             fewshot_as_multiturn=fewshot_as_multiturn,
         )
-
+    end_task_setup = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Task setup: {end_task_setup - start_task_setup} seconds\n")
+    start_evaluate = time.time()
     results = evaluate(
         lm=lm,
         task_dict=task_dict,
@@ -288,6 +302,10 @@ def simple_evaluate(
         fewshot_as_multiturn=fewshot_as_multiturn,
         verbosity=verbosity,
     )
+    end_evaluate = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Full evaluate: {end_evaluate - start_evaluate} seconds\n")
+    start_process_results = time.time()
 
     if lm.rank == 0:
         if isinstance(model, str):
@@ -327,6 +345,9 @@ def simple_evaluate(
         results["date"] = start_date
         add_env_info(results)  # additional environment info to results
         add_tokenizer_info(results, lm)  # additional info about tokenizer
+        end_process_results = time.time()
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Full postprocess: {end_process_results - start_process_results} seconds\n")
         return results
     else:
         return None
@@ -370,7 +391,9 @@ def evaluate(
     :return
         Dictionary of results
     """
-
+    start_evaluate_setup = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) In evaluate.\n")
     eval_logger.setLevel(getattr(logging, f"{verbosity}"))
 
     # tracks all Instances/requests a model must generate output on.
@@ -387,7 +410,11 @@ def evaluate(
             for task_output in eval_tasks
         ):
             raise ValueError("log_samples must be True for 'bypass' metric-only tasks")
+    end_evaluate_setup = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished evaluate setup: {end_evaluate_setup - start_evaluate_setup} seconds\n")
     for task_output in eval_tasks:
+        start_task = time.time()
         task: Task = task_output.task
         limit = get_sample_size(task, limit)
         task.build_all_requests(
@@ -406,6 +433,10 @@ def evaluate(
             if apply_chat_template
             else "",
         )
+        end_task = time.time()
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished task requests: {end_task - start_task} seconds\n")
+        start_batching = time.time()
         eval_logger.debug(
             f"Task: {task_output.task_name}; number of requests on this rank: {len(task.instances)}"
         )
@@ -431,10 +462,15 @@ def evaluate(
             numpad = max(gathered_item) - gathered_item[lm.rank]
             # todo: may not account for padding in cases like SquadV2 which has multiple req types
             padding_requests[reqtype] += numpad
+            end_batching = time.time()
+            with open("time_memory_debug_log.txt", "a") as file:
+                file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished task batching: {end_batching - start_batching} seconds\n")
 
+    start_model = time.time()
     ### Run LM on inputs, get all outputs ###
     # execute each type of request
     for reqtype, reqs in requests.items():
+        start_request = time.time()
         eval_logger.info(f"Running {reqtype} requests")
         # create `K` copies of each request `req` based off `K = req.repeats`
         cloned_reqs = []
@@ -447,6 +483,9 @@ def evaluate(
 
         # run requests through model
         resps = getattr(lm, reqtype)(cloned_reqs)
+        end_request = time.time()
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished request: {end_request - start_request} seconds\n")
 
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):
@@ -454,7 +493,15 @@ def evaluate(
 
         if lm.world_size > 1:
             lm.accelerator.wait_for_everyone()
+        end_requests = time.time()
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished all devices' requests: {end_requests - start_request} seconds\n")
 
+    end_model = time.time()
+    with open("time_memory_debug_log.txt", "a") as file:
+        file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished all model requests: {end_model - start_model} seconds\n")
+
+    start_postprocess_metrics = time.time()
     RANK = lm.rank
     WORLD_SIZE = lm.world_size
     ### Postprocess outputs ###
@@ -674,6 +721,9 @@ def evaluate(
         }
         if log_samples:
             results_dict["samples"] = dict(samples)
+        end_postprocess_metrics = time.time()
+        with open("time_memory_debug_log.txt", "a") as file:
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) Finished postprocessing results and metrics: {end_postprocess_metrics - start_postprocess_metrics} seconds\n")
 
         return results_dict
 
