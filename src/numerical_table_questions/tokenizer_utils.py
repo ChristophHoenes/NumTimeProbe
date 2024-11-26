@@ -421,7 +421,7 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
     return tokenized
 
 
-def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict, question_number: Optional[int] = None):
+def restore_metadata(original_data: Union[datasets.Dataset, List[dict]], tokenized_data: dict, question_number: Optional[int] = None):
     # check assumptions on inputs
     if not isinstance(tokenized_data['input_ids'], list):
         raise TypeError("Expected tokenized_data's values to be (nested) lists (table_batch and samples per table) "
@@ -433,7 +433,7 @@ def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict, ques
                          )
 
     # add other fields of data split that did not go through the tokenizer
-    missing_fields = list(set(original_data.column_names)
+    missing_fields = list(set(original_data[0].keys())
                           # TODO remove obsolete fields ('column_name', 'aggregator', 'condition_value') from data and this code
                           - set(['table', 'column_name', 'aggregator', 'condition_value'])  # do not copy table for each question
                           - set(tokenized_data.keys())
