@@ -83,10 +83,9 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         data = self.table_question_dataset.select([table_idx])
         if isinstance(data[0]['table'], str):
             table_dict = retrieve_table_from_table_dataset(table_search_id=data[0]['table'], table_dataset=self.table_dataset, table_index=self.table_index)
-            # TODO think what are the benefits of keeping data a datasets.Dataset vs. a python dict (memory mapping of single example?)
-            datasets.disable_progress_bars()
-            data = data.map(lambda x: {'table': table_dict})
-            datasets.enable_progress_bars()
+            data = data[0]  # get first and only item from dataset to obtain dict version
+            data.update({'table': table_dict})
+            data = [data]  # wrap in list to be similar to datasets.Dataset structure (samples = list, fields = dict keys)
         # maybe leave for collate for more flexibility
         # table = Table.from_state_dict(table_data['table'])
         # question = table_data['questions'][question_number]
