@@ -9,14 +9,8 @@ from numerical_table_questions.data_utils import create_table_index
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 
 
-def process_docs(dataset: datasets.Dataset, table_index_path='tmp_table_index.pickle', table_dataset_path_field: Optional[str] = 'table_dataset_path'):
-    print(dataset.column_names)
-    if table_dataset_path_field in dataset.column_names:
-        print("Loading table dataset...")
-        table_dataset = get_table_dataset(dataset[0][table_dataset_path_field])  # assumes same table path for all samples
-        table_index = create_table_index(table_dataset)
-        with open(table_index_path, 'wb') as f:
-            pickle.dump(table_index, f)
+def process_docs(dataset: datasets.Dataset):
+    dataset = QuestionTableIndexDataset(dataset)
     print("Finished dataset preparation.")
     return dataset
 
@@ -49,8 +43,15 @@ def get_table_dataset(absolute_table_dataset_path: str) -> datasets.Dataset:
     return table_dataset
 
 
+def is_question_table_index_style_sample(question_data) -> bool:
+    # QuestionTableIndexDataset style samples contain key 'data' as either datasets.Dataset or List[dict] type
+    return (isinstance(question_data.get('data'), datasets.Dataset) or
+            (isinstance(question_data.get('data'), list) and isinstance(question_data['data'][0], dict))
+            )
+
+
 def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_format=True, cot=False, col_sep=', ', row_sep='\n', table_index_path='tmp_table_index.pickle'):
-    if isinstance(question_data.get('data'), datasets.Dataset):  # QuestionTableIndexDataset style samples
+    if is_question_table_index_style_sample(question_data):
         # reformat data to be consistent with other conditions
         table_data = [question_data['data'][0]['table']]
         question_data = {'questions': [question_data['data'][0]['questions'][question_data['question_number']]],
@@ -104,8 +105,6 @@ def short_tabfact_sep_prompt_inference(table_data):
 
 
 def plain_single_answer(table_data):
-    return table_data['answers'][0]
-
-
-def extract_from_pattern(table_data):
+    if is_question_table_index_style_sample(table_data):
+        return table_data['data'][0]['answers'][table_data['question_number']]
     return table_data['answers'][0]
