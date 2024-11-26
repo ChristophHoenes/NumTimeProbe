@@ -76,11 +76,9 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
             raise TypeError(f"Index must be of type int not {type(idx)}!")
         if idx >= len(self):
             raise IndexError(f"Index {idx} is out of bounds for question_index of len {len(self)}!")
-        try:
-            table_idx, question_number = self.question_index[idx]
-        except KeyError as e:
-            print("max idx: ", len(self)-1, "len q index: ", len(self.question_index))
-            raise e
+
+        table_idx, question_number = self.question_index[idx]
+
         # TODO think of unwrapping retrieved table_data
         data = self.table_question_dataset.select([table_idx])
         if isinstance(data[0]['table'], str):
