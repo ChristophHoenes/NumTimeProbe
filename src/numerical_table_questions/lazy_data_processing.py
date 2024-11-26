@@ -94,6 +94,25 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         # question = table_data['questions'][question_number]
         return {'data': data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
 
+    def __iter__(self):
+        class DatasetIterator:
+            def __init__(self, dataset):
+                self.current_index = 0
+                self.max_index = len(dataset) - 1
+                self.dataset = dataset
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self.current_index > self.max_index:
+                    raise StopIteration
+                next_item = self.dataset[self.current_index]
+                self.current_index += 1
+                return next_item
+
+        return DatasetIterator(self)
+
 
 class QuestionTableConnectDataset(torch.utils.data.Dataset):
     def __init__(self, table_dataset: Union[str, Path, datasets.Dataset], question_dataset: Union[str, Path, datasets.Dataset], data_dir: str = '/home/mamba/.cache', cutoff=None):
