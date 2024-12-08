@@ -22,6 +22,9 @@ CACHE_DIR="/scratch/choenes/.cache"
 IMAGE_TAG="choenes/num_tab_qa"
 
 docker run -it \
+    --volume="/etc/group:/etc/group:ro" \
+    --volume="/etc/passwd:/etc/passwd:ro" \
+    --volume="/etc/shadow:/etc/shadow:ro" \
     --user $(id -u):$(id -g) \
     $([[ "$DEVICES" != "NONE" ]] && echo "--gpus=\"device=$DEVICES\"") \
     --ipc host \
