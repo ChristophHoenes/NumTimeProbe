@@ -57,20 +57,3 @@ echo "restore console script"
 # restore original state of the console script
 rm scripts/console.sh
 mv scripts/.console_og.sh scripts/console.sh
-
-echo "setup environment in container"
-# change directory and install local packages in editable mode and other dependencies
-# install num_tab_qa package in editable mode
-NUMTABQAINSTALL="pip install -e ."
-LMEVALDIR="cd lm-evaluation-harness"
-LMEVALINSTALL="pip install -e ."
-INSTALLDEPENDENCIES="bash install_missing_pip_packages.sh"
-LMEVALVLLMINSTALL="pip install lm_eval[vllm]"
-
-echo "start lm_eval run"
-# docker start main lm_eval script
-docker exec $CONTAINER_NAME /bin/bash -l -c "${NUMTABQAINSTALL}; ${LMEVALDIR}; ${LMEVALINSTALL}; ${INSTALLDEPENDENCIES}; ${LMEVALVLLMINSTALL}; bash test_vllm_model.sh"
-
-echo "lm_eval run terminated. stopping the container"
-# stop container
-docker stop $CONTAINER_NAME
