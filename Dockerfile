@@ -62,6 +62,15 @@ FROM ${TARGETARCH}${OS_SELECTOR} as final
 # From https://github.com/mamba-org/micromamba-docker#adding-micromamba-to-an-existing-docker-image
 # The commands below add micromamba to an existing image to give the capability to ad-hoc install new dependencies
 
+# gpuserver 1 U/G IDs for choenes -> change with build arguments if needed e.g on different host
+ARG USERNAME=choenes
+ARG UID=1021
+ARG GID=1023
+
+# setup container-user analogously to host user
+RUN groupadd --gid $GID $USERNAME \
+    && useradd --uid $UID --gid $GID -m $USERNAME
+
 ####################################################
 ######### Adding micromamba starts here ############
 ####################################################
@@ -71,8 +80,8 @@ USER root
 # next 3 ARG commands match the values in your image. You can get the values
 # by running: docker run --rm -it my/image id -a
 ARG MAMBA_USER=mamba
-ARG MAMBA_USER_ID=$(id -u)
-ARG MAMBA_USER_GID=$(id -u)
+ARG MAMBA_USER_ID=$UID
+ARG MAMBA_USER_GID=$GID
 ENV MAMBA_USER=$MAMBA_USER
 ENV MAMBA_ROOT_PREFIX="/opt/conda"
 ENV MAMBA_EXE="/bin/micromamba"
