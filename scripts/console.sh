@@ -22,15 +22,12 @@ CACHE_DIR="/scratch/choenes/.cache"
 IMAGE_TAG="choenes/num_tab_qa"
 
 docker run -it \
-    --volume="/etc/group:/etc/group:ro" \
-    --volume="/etc/passwd:/etc/passwd:ro" \
-    --volume="/etc/shadow:/etc/shadow:ro" \
     --user $(id -u):$(id -g) \
     $([[ "$DEVICES" != "NONE" ]] && echo "--gpus=\"device=$DEVICES\"") \
     --ipc host \
     --env WANDB_API_KEY \
     --env HF_DATASETS_CACHE='/home/mamba/.cache/' \
-    -v "$(pwd)":/workspace \
+    -v "$(pwd)":/home/$(whoami)/workspace \
     -w /workspace \
     $([ "$CACHE_DIR" != "NONE" ] && echo "--mount type=bind,source=$CACHE_DIR,target=/home/mamba/.cache") \
     $IMAGE_TAG \
