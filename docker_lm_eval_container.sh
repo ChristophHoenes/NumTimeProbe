@@ -41,7 +41,7 @@ cp scripts/console.sh scripts/.console_og.sh
 # replace GPUs to select in console with the argument 
 sed -i -E -e "s/DEVICES=.+\"$/DEVICES=\"$1\"/" scripts/console.sh
 # change to non-interactive container (since we do not want to wait until the container closes and call docker exec for all commands)
-sed -i -E -e 's/docker run -it \\$/docker run -dt \\/' scripts/console.sh
+sed -i -E -e 's/docker run -it \\$/docker run -itd \\/' scripts/console.sh
 # no need for bash console
 sed -i -E -e 's/^\s+bash$//' scripts/console.sh
 # add container name
