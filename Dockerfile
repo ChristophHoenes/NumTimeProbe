@@ -97,6 +97,9 @@ COPY --from=micromamba /usr/local/bin/_dockerfile_setup_root_prefix.sh /usr/loca
 RUN /usr/local/bin/_dockerfile_initialize_user_accounts.sh && \
     /usr/local/bin/_dockerfile_setup_root_prefix.sh
 
+# after mamba user and group are initiallized add host-user to the mamba user group
+RUN usermod -a -G $MAMBA_USER_GID $USERNAME
+
 USER $MAMBA_USER
 
 SHELL ["/usr/local/bin/_dockerfile_shell.sh"]
@@ -146,3 +149,6 @@ RUN micromamba config set show_banner false --env
 
 # Use our environment `research` as default
 ENV ENV_NAME=research
+
+# switch to 'host-user'
+USER $USERNAME
