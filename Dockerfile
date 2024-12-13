@@ -100,7 +100,9 @@ RUN /usr/local/bin/_dockerfile_initialize_user_accounts.sh && \
 
 # after mamba user and group are initiallized add host-user to the mamba user group and in rootless docker add to root group
 RUN usermod -a -G $MAMBA_USER_GID $USERNAME \
-    && [ "${IS_ROOTLESS_DOCKER:-}" = "true" ] && usermod -a -G 0 $USERNAME
+    && [ "${IS_ROOTLESS_DOCKER:-}" = "true" ] && \
+    echo "This is rootless docker. Adding user to root group (host user access)."; usermod -a -G 0 $USERNAME || \
+    echo "This is normal docker (no root group access granted automatically)."
 
 USER $MAMBA_USER
 
