@@ -66,6 +66,7 @@ FROM ${TARGETARCH}${OS_SELECTOR} as final
 ARG USERNAME=choenes
 ARG UID=1021
 ARG GID=1023
+ARG IS_ROOTLESS_DOCKER=false
 
 # setup container-user analogously to host user
 RUN groupadd --gid $GID $USERNAME \
@@ -97,8 +98,9 @@ COPY --from=micromamba /usr/local/bin/_dockerfile_setup_root_prefix.sh /usr/loca
 RUN /usr/local/bin/_dockerfile_initialize_user_accounts.sh && \
     /usr/local/bin/_dockerfile_setup_root_prefix.sh
 
-# after mamba user and group are initiallized add host-user to the mamba user group
-RUN usermod -a -G $MAMBA_USER_GID $USERNAME
+# after mamba user and group are initiallized add host-user to the mamba user group and in rootless docker add to root group
+RUN usermod -a -G $MAMBA_USER_GID $USERNAME \
+    && [ "${IS_ROOTLESS_DOCKER:-}" = "true" ] && usermod -a -G 0 $USERNAME
 
 USER $MAMBA_USER
 
