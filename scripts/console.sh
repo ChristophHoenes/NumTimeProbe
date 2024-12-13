@@ -27,8 +27,8 @@ docker run -it \
     --ipc host \
     --env WANDB_API_KEY \
     --env HF_DATASETS_CACHE='/home/mamba/.cache/' \
-    -v "$(pwd)":/home/$(whoami)/workspace \
-    -w /workspace \
+    -v "$(pwd)":/home/$(whoami)/workspace:ro \
+    -w /home/$(whoami)/workspace \
     $([ "$CACHE_DIR" != "NONE" ] && echo "--mount type=bind,source=$CACHE_DIR,target=/home/mamba/.cache") \
     $IMAGE_TAG \
     bash
