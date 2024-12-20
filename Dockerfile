@@ -62,6 +62,16 @@ FROM ${TARGETARCH}${OS_SELECTOR} as final
 # From https://github.com/mamba-org/micromamba-docker#adding-micromamba-to-an-existing-docker-image
 # The commands below add micromamba to an existing image to give the capability to ad-hoc install new dependencies
 
+# gpuserver 1 U/G IDs for choenes -> change with build arguments if needed e.g on different host
+ARG USERNAME=choenes
+ARG UID=1021
+ARG GID=1023
+ARG IS_ROOTLESS_DOCKER=false
+
+# setup container-user analogously to host user
+RUN groupadd --gid $GID $USERNAME \
+    && useradd --uid $UID --gid $GID -m $USERNAME
+
 ####################################################
 ######### Adding micromamba starts here ############
 ####################################################
@@ -71,8 +81,8 @@ USER root
 # next 3 ARG commands match the values in your image. You can get the values
 # by running: docker run --rm -it my/image id -a
 ARG MAMBA_USER=mamba
-ARG MAMBA_USER_ID=1021
-ARG MAMBA_USER_GID=1023
+ARG MAMBA_USER_ID=1000
+ARG MAMBA_USER_GID=1000
 ENV MAMBA_USER=$MAMBA_USER
 ENV MAMBA_ROOT_PREFIX="/opt/conda"
 ENV MAMBA_EXE="/bin/micromamba"
@@ -87,6 +97,12 @@ COPY --from=micromamba /usr/local/bin/_dockerfile_setup_root_prefix.sh /usr/loca
 
 RUN /usr/local/bin/_dockerfile_initialize_user_accounts.sh && \
     /usr/local/bin/_dockerfile_setup_root_prefix.sh
+
+# after mamba user and group are initiallized add host-user to the mamba user group and in rootless docker add to root group
+RUN usermod -a -G $MAMBA_USER_GID $USERNAME \
+    && [ "${IS_ROOTLESS_DOCKER:-}" = "true" ] && \
+    echo "This is rootless docker. Adding user to root group (host user access)."; usermod -a -G 0 $USERNAME || \
+    echo "This is normal docker (no root group access granted automatically)."
 
 USER $MAMBA_USER
 
@@ -137,3 +153,6 @@ RUN micromamba config set show_banner false --env
 
 # Use our environment `research` as default
 ENV ENV_NAME=research
+
+# switch to 'host-user'
+USER $USERNAME

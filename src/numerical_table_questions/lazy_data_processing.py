@@ -68,23 +68,52 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         self.table_dataset = datasets.Dataset.load_from_disk(table_dataset_path) if table_dataset_path else None
         self.table_index = create_table_index(self.table_dataset, table_id_col_name='table_id') if self.table_dataset else None
 
+    @property
+    def features(self) -> dict:
+        """ Huggingface datasets.Dataset style property (required by lm_eval). """
+        return self.table_question_dataset.features
+
     def __len__(self):
         return len(self.question_index)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
+        if not isinstance(idx, int):
+            raise TypeError(f"Index must be of type int not {type(idx)}!")
+        if idx >= len(self):
+            raise IndexError(f"Index {idx} is out of bounds for question_index of len {len(self)}!")
+
         table_idx, question_number = self.question_index[idx]
+
         # TODO think of unwrapping retrieved table_data
         data = self.table_question_dataset.select([table_idx])
         if isinstance(data[0]['table'], str):
             table_dict = retrieve_table_from_table_dataset(table_search_id=data[0]['table'], table_dataset=self.table_dataset, table_index=self.table_index)
-            # TODO think what are the benefits of keeping data a datasets.Dataset vs. a python dict (memory mapping of single example?)
-            datasets.disable_progress_bars()
-            data = data.map(lambda x: {'table': table_dict})
-            datasets.enable_progress_bars()
+            data = data[0]  # get first and only item from dataset to obtain dict version
+            data.update({'table': table_dict})
+            data = [data]  # wrap in list to be similar to datasets.Dataset structure (samples = list, fields = dict keys)
         # maybe leave for collate for more flexibility
         # table = Table.from_state_dict(table_data['table'])
         # question = table_data['questions'][question_number]
         return {'data': data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
+
+    def __iter__(self):
+        class DatasetIterator:
+            def __init__(self, dataset):
+                self.current_index = 0
+                self.max_index = len(dataset) - 1
+                self.dataset = dataset
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self.current_index > self.max_index:
+                    raise StopIteration
+                next_item = self.dataset[self.current_index]
+                self.current_index += 1
+                return next_item
+
+        return DatasetIterator(self)
 
 
 class QuestionTableConnectDataset(torch.utils.data.Dataset):

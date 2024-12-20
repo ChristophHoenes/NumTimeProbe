@@ -24,6 +24,7 @@ dependencies:
   - loguru
   - tqdm
   - pynvml
+  - matplotlib
 
   # Dev dependencies
   - black

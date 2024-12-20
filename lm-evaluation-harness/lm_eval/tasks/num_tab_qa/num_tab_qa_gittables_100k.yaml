@@ -1,0 +1,32 @@
+group:
+  - num_tab_qa
+task: num_tab_qa_gittables_100k
+# todo make local HF dataset with loading script from artifacts -> then only the folder needs to be provided
+dataset_path: arrow
+dataset_name: num_tab_qa_gittables_100k
+dataset_kwargs:
+  data_files:
+    #test: data/wikitablequestions_test_diff_filtered_multi_answer_filter_agg_count_0_questions_only_format/240527_1849_38_857294/data-00000-of-00001.arrow
+    # diff data
+    #test: data/wikitablequestions_test_diff_filtered_multi_answer_filter_agg_count_0/240527_1849_38_857294/cache-d060cae686f2945b.arrow
+    # basic data
+    #test: /home/mamba/.cache/gittables_group_filtered_standard_templates_test_100k/241016_1417_12_123456/data-00000-of-00001.arrow
+    test: /home/mamba/.cache/3_tables_from_100k_test_set/data-00000-of-00001.arrow
+    few: /home/mamba/.cache/16_few_shot_tables_from_100k_test_set/data-00000-of-00001.arrow
+    #test_tables:
+#output_type: loglikelihood
+#training_split: train
+#validation_split: validation
+test_split: test
+fewshot_split: few
+process_docs: !function utils.process_docs
+doc_to_text: !function utils.short_tabfact_sep_prompt_inference
+doc_to_target: !function utils.plain_single_answer  #"{{answers}}"
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    regexes_to_ignore: ['\s+']  # LLama tokenizer always starts with a space -> low exact match
+    #regexes_to_ignore: TODO exclude solution in text form [a-zA-Z]* and symbolic form [*=<whitespace>+]
+    # for CoT and deepseek-ai/deepseek-math-7b-rl ignore everything that is not in \\boxed{} --> regexes_to_ignore: ['.*boxed', '{', '}\.', '}', '\s+']
+    #regexes_to_ignore: ['.*boxed', '{', '}\.', '}', '\s+']

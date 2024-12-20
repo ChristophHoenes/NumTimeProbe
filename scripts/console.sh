@@ -21,14 +21,15 @@ CACHE_DIR="/scratch/choenes/.cache"
 # Change the following image-tag to the name of your own image, if you do not want to use the default one
 IMAGE_TAG="choenes/num_tab_qa"
 
+# only log in as user (without group) to benefit from all preconfigured group privileges
 docker run -it \
-    --user $(id -u):$(id -g) \
+    --user $(id -u) \
     $([[ "$DEVICES" != "NONE" ]] && echo "--gpus=\"device=$DEVICES\"") \
     --ipc host \
     --env WANDB_API_KEY \
     --env HF_DATASETS_CACHE='/home/mamba/.cache/' \
-    -v "$(pwd)":/workspace \
-    -w /workspace \
+    -v "$(pwd)":/home/$(whoami)/workspace \
+    -w /home/$(whoami)/workspace \
     $([ "$CACHE_DIR" != "NONE" ] && echo "--mount type=bind,source=$CACHE_DIR,target=/home/mamba/.cache") \
     $IMAGE_TAG \
     bash
