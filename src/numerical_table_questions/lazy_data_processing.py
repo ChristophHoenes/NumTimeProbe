@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Union, Dict, Tuple
+from time import time
+from typing import Optional, Union, Dict, Tuple
 
 import datasets
 import torch
 
 from numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_utils import cutoff_num_questions
-from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.data_utils import cutoff_num_questions, create_table_index
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
 
@@ -20,44 +20,142 @@ def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
     return question2table_index
 
 
+def retrieve_table_from_table_dataset(table_search_id: str, table_dataset: Union[datasets.Dataset, str], table_index: Optional[dict] = None):
+    # define exception for cases where table is not found
+    table_not_found_exception = ValueError(
+        f"No table with id {table_search_id} was found in the table dataset {'at ' + table_dataset if isinstance(table_dataset, str) else ''}! "
+        "Make sure to provide the original table dataset that was used to generate the questions."
+        )
+    if isinstance(table_dataset, str):
+        table_dataset = datasets.Dataset.load_from_disk(table_dataset)
+    if table_index is None:
+        # search entire dataset for matching id
+        datasets.disable_progress_bars()
+        # retrieved_table_data = table_dataset.filter(lambda example: example['table_id'] == table_search_id)  # depends on table dataset column_names
+        retrieved_table_data = table_dataset.filter(lambda example: example['table']['table_id'] == table_search_id)
+        datasets.enable_progress_bars()
+        if len(retrieved_table_data) == 0:
+            raise table_not_found_exception
+        #return retrieved_table_data[0]  # depends on table dataset column_names
+        return retrieved_table_data[0]['table']
+    else:
+        # use instand idx lookup with pre-computed id to idx mapping
+        table_dataset_id = table_index.get(table_search_id)
+        if table_dataset_id is None:
+            raise table_not_found_exception
+        else:
+            return table_dataset[table_dataset_id]['table']
+
+
 class QuestionTableIndexDataset(torch.utils.data.Dataset):
-    def __init__(self, table_dataset: Union[str, Path, datasets.Dataset], data_dir: str = './data/NumTabQA/.cache', cutoff=None):
-        if isinstance(table_dataset, (str, Path)):
+    def __init__(self, table_question_dataset: Union[str, Path, datasets.Dataset], data_dir: str = '/home/mamba/.cache', cutoff=None):
+        if isinstance(table_question_dataset, (str, Path)):
             self.data_dir = data_dir
-            self.dataset_version = table_dataset
-            table_dataset = caching(self.dataset_version, cache_path=data_dir)
-            if table_dataset is None:
+            self.dataset_version = table_question_dataset
+            table_question_dataset = caching(self.dataset_version, cache_path=data_dir)#.select(range(100))  # TODO remove table restriction after debugging
+            if table_question_dataset is None:
                 raise FileNotFoundError(f"No table dataset was found at path {self.data_dir + '/' + self.dataset_version}")
         else:
             self.data_dir = None
             self.dataset_version = None
+        if cutoff is not None:
+            table_question_dataset = cutoff_num_questions(table_question_dataset, cutoff=cutoff)
+
+        self.question_index = generate_question_index(table_question_dataset)
+        self.table_question_dataset = table_question_dataset
+
+        table_dataset_path = table_question_dataset[0].get('table_dataset_path')
+        self.table_dataset = datasets.Dataset.load_from_disk(table_dataset_path) if table_dataset_path else None
+        self.table_index = create_table_index(self.table_dataset, table_id_col_name='table_id') if self.table_dataset else None
+
+    def __len__(self):
+        return len(self.question_index)
+
+    def __getitem__(self, idx):
+        table_idx, question_number = self.question_index[idx]
+        # TODO think of unwrapping retrieved table_data
+        data = self.table_question_dataset.select([table_idx])
+        if isinstance(data[0]['table'], str):
+            table_dict = retrieve_table_from_table_dataset(table_search_id=data[0]['table'], table_dataset=self.table_dataset, table_index=self.table_index)
+            # TODO think what are the benefits of keeping data a datasets.Dataset vs. a python dict (memory mapping of single example?)
+            datasets.disable_progress_bars()
+            data = data.map(lambda x: {'table': table_dict})
+            datasets.enable_progress_bars()
+        # maybe leave for collate for more flexibility
+        # table = Table.from_state_dict(table_data['table'])
+        # question = table_data['questions'][question_number]
+        return {'data': data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
+
+
+class QuestionTableConnectDataset(torch.utils.data.Dataset):
+    def __init__(self, table_dataset: Union[str, Path, datasets.Dataset], question_dataset: Union[str, Path, datasets.Dataset], data_dir: str = '/home/mamba/.cache', cutoff=None):
+        if isinstance(table_dataset, (str, Path)):
+            self.data_dir = data_dir
+            self.table_dataset_version = table_dataset
+            table_dataset = caching(self.dataset_version, cache_path=data_dir)#.select(range(100))  # TODO remove table restriction after debugging
+            if table_dataset is None:
+                raise FileNotFoundError(f"No table dataset was found at path {self.data_dir + '/' + self.table_dataset_version}")
+        else:
+            self.data_dir = None
+            self.dataset_version = None
+            self.table_dataset = table_dataset
+        if isinstance(question_dataset, (str, Path)):
+            self.data_dir = data_dir
+            self.question_dataset_version = question_dataset
+            question_dataset = caching(self.dataset_version, cache_path=data_dir)#.select(range(100))  # TODO remove table restriction after debugging
+            if question_dataset is None:
+                raise FileNotFoundError(f"No table dataset was found at path {self.data_dir + '/' + self.question_dataset_version}")
+        else:
+            self.data_dir = None
+            self.dataset_version = None
+            self.question_dataset = question_dataset
         if cutoff is not None:
             table_dataset = cutoff_num_questions(table_dataset, cutoff=cutoff)
 
         self.index_dict = generate_question_index(table_dataset)
         self.table_dataset = table_dataset
 
-    def __len__(self):
-        return len(self.index_dict)
-
-    def __getitem__(self, idx):
-        table_idx, question_number = self.index_dict[idx]
-        table_data = self.table_dataset.select([table_idx])
-        # maybe leave for collate for more flexibility
-        # table = Table.from_state_dict(table_data['table'])
-        # question = table_data['questions'][question_number]
-        return {'table_data': table_data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
-
 
 def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
                   pad_token_id: int, mask_token_id: int, truncation='drop_rows_to_fit', padding='max_length',
                   is_eval: bool = False,
+                  #table_index: Optional[dict] = None,
                   ):
     tokenized_batch = []
     # get table and question from dataset
     for sample_idx in batch_of_index_ids:
-        table_data = sample_idx['table_data']
+        table_data = sample_idx['data']
         question_number = sample_idx['question_number']
+        """ collate version of retrieve_table_from_table_dataset
+        table_search_id = table_data[0]['table']
+        # if only the table id was saved retrieve the table data from the table dataset
+        if isinstance(table_search_id, str):
+            table_dataset_path = table_data[0].get('table_dataset_path')
+            if table_dataset_path is None:
+                raise ValueError("The provided dataset does not contain the table data but also no path to the table dataset was provided. "
+                                 "Make sure table_dataset_path is set. "
+                                 "This can also be set manually (e.g data_utils.apply_table_dataset_path_changes) if the table dataset was moved to a different location.")
+            table_dataset = datasets.Dataset.load_from_disk(table_dataset_path)
+            datasets.disable_progress_bars()
+            table_not_found_exception = ValueError(
+                f"No table with id {table_search_id} was found in the table dataset at {table_dataset_path}! "
+                "Make sure to provide the original table dataset that was used to generate the questions."
+                )
+            if table_index is None:
+                # retrieved_table_data = table_dataset.filter(lambda example: example['table_id'] == table_data[0]['table'])  # depends on table dataset column_names
+                retrieved_table_data = table_dataset.filter(lambda example: example['table']['table_id'] == table_search_id)
+                if len(retrieved_table_data) == 0:
+                    raise table_not_found_exception
+                # overwrite table id with retrieved table data
+                #table_data = table_data.map(lambda x: {'table': retrieved_table_data[0]})  # depends on table dataset column_names
+                table_data = table_data.map(lambda x: {'table': retrieved_table_data[0]['table']})
+            else:
+                table_dataset_id = table_index.get(table_search_id)
+                if table_dataset_id is None:
+                    raise table_not_found_exception
+                else:
+                    table_data = table_data.map(lambda x: {'table': table_dataset[table_dataset_id]['table']})
+            datasets.enable_progress_bars()        """
         # table augmentation
         # apply informed column deletion (only unaffected columns are dropped)
         # apply informed row deletion (delete percentage of rows that are unaffected by condition, infer from answer_coordinates)
@@ -102,7 +200,11 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
     tokenized_batch['is_truncated'] = tokenized_batch['input_ids'] != pad_token_id  # if not ending with pad token assume truncation
     # for simplifying debugging include table / question id
     tokenized_batch['question_id'] = torch.LongTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
-    tokenized_batch['table_id'] = [sample['table_data'][0]['table']['table_id'] for sample in batch_of_index_ids]
+    tokenized_batch['table_id'] = [sample['table_data'][0]['table']
+                                   if isinstance(sample['table_data'][0]['table'], str)  # in case not the full table but only the ID is serialized
+                                   else sample['table_data'][0]['table']['table_id']
+                                   for sample in batch_of_index_ids
+                                   ]
     tokenized_batch['table_idx'] = torch.LongTensor([sample['table_idx'] for sample in batch_of_index_ids])  # for index based access directly in QuestionTableIndexDataset
     tokenized_batch['question_number'] = torch.LongTensor([sample['question_number'] for sample in batch_of_index_ids])  # local id within table batch
 

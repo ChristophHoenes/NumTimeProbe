@@ -4,7 +4,7 @@ from typing import Optional, Union, List, Dict
 
 import torch
 
-from numerical_table_questions.data_synthesis import Table
+from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config, tapas_generation
 from numerical_table_questions.tapex_model import tapex_model_type_info, tapex_model, tapex_config
 

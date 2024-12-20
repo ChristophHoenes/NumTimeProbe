@@ -1,15 +1,15 @@
-import os
 import logging
 import logging.config
+import os
+from pathlib import Path, PurePath
 import shutil
 import threading
 import time
 import warnings
-from datasets import Dataset
 from datetime import datetime
-from pathlib import Path, PurePath
 from typing import Optional, Any
 
+import datasets
 import dill
 
 
@@ -46,7 +46,7 @@ def caching(cache_file_name, cache_path='./data/NumTabQA/.cache') -> Optional[An
         pickle_target = latest_cache_version / (cache_file_name + '.pickle')
         if len(arrow_files) > 0:
             logger.info("Loading arrow from cache (%s)", latest_cache_version.name)
-            return Dataset.load_from_disk(str(latest_cache_version))
+            return datasets.Dataset.load_from_disk(str(latest_cache_version))
         elif pickle_target.is_file():
             logger.info("Loading pickle from cache (%s)", latest_cache_version.name)
             with pickle_target.open('rb') as f:
@@ -84,16 +84,32 @@ def clear_cache(cache_path: str = './data/NumTabQA/.cache',
         logger.info("Skip clearing cache.")
 
 
-def save_version(obj, cache_path, cache_file_name) -> None:
+def save_version(obj, cache_path, cache_file_name: Optional[str] = None, questions_only: bool = False, table_dataset_save_path: Optional[str] = None) -> None:
     """ Can be called on custom classes from data_synthesis to save them as huggingface datasets or pickle (deprecated). """
-    save_path = Path(cache_path) / cache_file_name / datetime.now().strftime('%y%m%d_%H%M_%S_%f')
+    cache_path = PurePath(cache_path)
+    if cache_file_name:
+        save_path = cache_path / cache_file_name / datetime.now().strftime('%y%m%d_%H%M_%S_%f')
+    else:
+        if cache_path.suffix:
+            raise ValueError(f"Expected cache_path to be a directory but encountered suffix '{cache_path.suffix}'!")
+        save_path = cache_path / datetime.now().strftime('%y%m%d_%H%M_%S_%f')
     logger.info(f"Writing {cache_file_name} to disk...")
+    # object with to_huggingface() (only TableQuestionDataset?)
     if (hasattr(obj, 'to_huggingface') and callable(obj.to_huggingface)):
-        obj.to_huggingface().save_to_disk(save_path)
+        obj.to_huggingface(questions_only=questions_only, table_dataset_save_path=table_dataset_save_path).save_to_disk(save_path)
+    # datasets.Dataset
+    elif isinstance(obj, datasets.Dataset):
+        obj.save_to_disk(save_path)
+    # empty list
     elif isinstance(obj, list) and len(obj) == 0:
         warnings.warn("Provided list is empty! Nothing to save...")
+    # list of dicts
+    elif isinstance(obj, list) and all([isinstance(item, dict) for item in obj]):
+        datasets.Dataset.from_list(obj).save_to_disk(save_path)
+    # list of objects with to_state_dict()
     elif isinstance(obj, list) and (hasattr(obj[0], 'to_state_dict') and callable(obj[0].to_state_dict)):
-        Dataset.from_list([item.to_state_dict() for item in obj]).save_to_disk(save_path)
+        datasets.Dataset.from_list([item.to_state_dict() for item in obj]).save_to_disk(save_path)
+    # last resort try pickle / dill (because more stuff can be dilled WeakRef?)
     else:
         warnings.warn("Saving with pickle is discouraged! "
                       "Consider implementing custom serialization (e.g to_huggingface, to_state_dict).")

@@ -22,6 +22,7 @@ from transformers.data.data_collator import DataCollatorForWholeWordMask
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_caching import caching
+from numerical_table_questions.data_utils import create_table_index
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset, table_collate
 from numerical_table_questions.model_utils import get_model_type_info
 from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, post_tokenizing, restore_metadata
@@ -244,6 +245,7 @@ class TableQADataModule(L.LightningDataModule):
                                         if self.tokenizing_args['allow_custom_truncation'] else False
                                         }
                                        )
+                # TODO memory mapped
                 # transform input to format expected by tokenizer (only considering input and target fields)
                 tokenizer_inputs = prepare_for_tokenizer(data_split, self.model_name, is_eval=(split == 'test'), **tokenizing_args)
                 logger.info("Tokenize examples...")
@@ -299,7 +301,7 @@ class TableQADataModule(L.LightningDataModule):
         # Assign test dataset for use in dataloader(s)
         if stage == 'test':
             if self.lazy_data_processing:
-                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'test'), data_dir=self.data_dir)
+                self.splits['test'] = QuestionTableIndexDataset(path_from_components(self.table_corpus, self.dataset_name, 'test'), data_dir=self.data_dir)#, cutoff=20_000)  # TODO remove cutoff after debug
             else:
                 self.splits['test'] = load_split_tensor('test', self.table_corpus, self.dataset_name, self.model_name, self.data_dir, output_dict=self.is_batch_dict)
                 check_dataset_type('test')
@@ -314,6 +316,22 @@ class TableQADataModule(L.LightningDataModule):
     def _get_dataloader(self, split_name: str, split_config: dict) -> DataLoader:
         # determine collate function for processing during data loading
         if self.lazy_data_processing:
+            # pre-computing table index speeds up collating
+            table_index = None
+            if isinstance(self.splits[split_name], QuestionTableIndexDataset):
+                dataset = self.splits[split_name].table_dataset
+                if len(dataset) > 0 and isinstance(dataset[0].get('table'), str):
+                    table_dataset_path = dataset[0].get('table_dataset_path')
+                    if table_dataset_path is None:
+                        raise ValueError(
+                            "The provided dataset does not contain the table data but also no path to the table dataset was provided. "
+                            "Make sure table_dataset_path is set. "
+                            "This can also be set manually (e.g data_utils.apply_table_dataset_path_changes) if the table dataset was moved to a different location."
+                            )
+                    else:
+                        table_dataset = datasets.Dataset.load_from_disk(table_dataset_path)
+                        table_index = create_table_index(table_dataset)
+
             collate_fn = partial(
                 table_collate,
                 model_name=self.model_name,
@@ -324,6 +342,7 @@ class TableQADataModule(L.LightningDataModule):
                 truncation=self.tokenizing_args['truncation'],
                 padding=self.tokenizing_args['padding'],
                 is_eval=(split_name == 'test'),  # for testing no answer coordinates are needed (tapas)
+                #table_index=table_index,
                 )
         else:
             collate_fn = None

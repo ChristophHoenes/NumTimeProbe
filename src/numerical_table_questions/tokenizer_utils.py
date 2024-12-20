@@ -1,5 +1,6 @@
 import warnings
 from collections.abc import Iterable, Callable
+from time import time
 from typing import Union, Optional, List, Dict, Tuple
 
 import datasets
@@ -9,10 +10,10 @@ from loguru import logger  # TODO check difference to custom python logger and m
 from transformers import TapexTokenizer, TapasTokenizer
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from numerical_table_questions.data_synthesis import TableQuestionDataSet
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_utils import cast_to_reduced_int
 from numerical_table_questions.tapex_model import tapex_tokenizer_format, tapex_tokenize
-from numerical_table_questions.tapas_model import tapas_tokenizer_format
+from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates
 
 
 def get_tokenizer(model_name, **kwargs):
@@ -60,6 +61,13 @@ def list_of_dicts_2_dict_of_lists(list_of_dicts: List[dict]) -> Dict[str, list]:
     return {key: [sample[key] for sample in list_of_dicts] for key in keys}
 
 
+def get_attention_mask(batch, pad_token_id: int = 1, padding_mask_token_id: int = 0, normal_token_id: int = 1):
+    attention_mask_template = torch.ones_like(batch) * normal_token_id
+    is_padding_mask = batch == pad_token_id
+    attention_mask_template[is_padding_mask] = padding_mask_token_id
+    return attention_mask_template
+
+
 def default_tokenize(tokenizer, tokenizer_inputs, model_name, verbose, **kwargs):
     if verbose:
         logger.info(f"No custom tokenizing procedure for model '{model_name}'. Using standard tokenizer call.")
@@ -87,8 +95,10 @@ def default_tokenize(tokenizer, tokenizer_inputs, model_name, verbose, **kwargs)
 def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict],
                               model_name: str,
                               # TODO maybe infer from model type info but maybe better instance-wise -> more direct/safe
-                              pad_token_id: int, mask_token_id: int,
-                              verbose: bool = True, **kwargs):
+                              pad_token_id: int,
+                              mask_token_id: int,
+                              verbose: bool = True,
+                              **kwargs):
     # if a single sample (dict) is passed temporarily wrap in list for generalization
     if isinstance(tokenizer_inputs, dict):
         tokenizer_inputs = [tokenizer_inputs]
@@ -98,10 +108,40 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
 
     match model_name.lower():
         case 'tapex':
-            tokenized = tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, verbose, **kwargs)
+            tokenized = tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, verbose, **kwargs)
         case 'tapas':
-            # TODO add answer_coordinate computation here
+            # reduce answer coorndinates for tables that do not fit into the model
+            reduce_answer_coordinates(tokenizer, tokenizer_inputs)
+            """
+            for tok_input in tokenizer_inputs:
+                if tok_input.get('answer_coordinates') is not None:
+                    iteration = 0
+                    while len(tok_input['answer_coordinates'][0]) > 0:
+                        try:
+                            tokenizer(**tok_input)
+                            break  # if tokenization successful leave loop
+                        except ValueError as e:
+                            logger.debug(e)
+                            logger.debug(f"Table does not fit reducing answer coordinates iteration {iteration}...")
+                            reduce_answer_coordinates(tok_input, iteration, max_length=512)
+                            iteration += 1
+            """
             tokenized = default_tokenize(tokenizer, tokenizer_inputs, pad_token_id, verbose, **kwargs)
+            # add float answer (required for weak supervision)
+            for encoding, tok_input in zip(tokenized, tokenizer_inputs):
+                if tok_input['answer_text'] is not None:
+                    encoding['float_answer'] = torch.tensor(float(tok_input['answer_text'][0])).unsqueeze(dim=0)
+                else:
+                    encoding['float_answer'] = None
+                if token_type_size := kwargs.get('token_type_size'):
+                    token_type_tensor = encoding['token_type_ids']
+                    # replace token_type_ids that are out of range of the embedding matrix with the highest possible index
+                    token_type_tensor[token_type_tensor >= token_type_size] = token_type_size - 1
+            # add attention_mask
+            #print('default_tokenizer_keys', list(tokenized[0].keys()))
+            #for sample in tokenized:
+            #    sample.update({'attention_mask': get_attention_mask(sample['input_ids'], pad_token_id=pad_token_id, padding_mask_token_id=0, normal_token_id=1)})
+            #print('tapas_keys', list(tokenized[0].keys()))
         case _:
             tokenized = default_tokenize(tokenizer, tokenizer_inputs, pad_token_id, verbose, **kwargs)
     # convert from list of samples (dicts) to dict (samples as lists grouped by key)
@@ -384,8 +424,8 @@ def post_tokenizing(tokenized: dict, tokenizing_args: dict, max_sequence_length:
 def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict, question_number: Optional[int] = None):
     # check assumptions on inputs
     if not isinstance(tokenized_data['input_ids'], list):
-        raise TypeError(f"Expected tokenized_data's values to be (nested) lists (table_batch and samples per table) "
-                        "but found {type(tokenized_data['input_ids'])} for tokenized_data['input_ids']!"
+        raise TypeError("Expected tokenized_data's values to be (nested) lists (table_batch and samples per table) "
+                        f"but found {type(tokenized_data['input_ids'])} for tokenized_data['input_ids']!"
                         )
     if len(original_data) != len(tokenized_data['input_ids']):  # assumes that all possible tokenizers used have at least input_ids as output key
         raise ValueError(f"The number of samples in the original_data ({len(original_data)}) and tokenized_data ({len(tokenized_data['input_ids'])}) "
@@ -398,9 +438,8 @@ def restore_metadata(original_data: datasets.Dataset, tokenized_data: dict, ques
                           - set(['table', 'column_name', 'aggregator', 'condition_value'])  # do not copy table for each question
                           - set(tokenized_data.keys())
                           )
-
     additional_fields_dict = {field: [[table_batch[field][question_number]]  # if idx is specified only select value for a single sample
-                                      if question_number is not None
+                                      if question_number is not None and isinstance(table_batch[field], list)
                                       else table_batch[field]  # otherwise select the entire table batch
                                       for table_batch in original_data
                                       ]

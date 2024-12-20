@@ -1,11 +1,14 @@
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Union, Optional, TypeVar, Type
+from typing import Tuple, List, Dict, Union, Optional, TypeVar, Type, TypeAlias
 
 
 OP = TypeVar('OP', bound='SQLOperatorTemplate')
+E = TypeVar('E', bound='SQLColumnExpression')
 T = TypeVar('T', bound='SQLTemplate')
+ExpressionArgument: TypeAlias = Union[str, int, E]
+
 
 @dataclass(frozen=True)
 class SQLOperator:
@@ -39,6 +42,17 @@ COUNT = SQLOperator('count', ('numeric', 'text', 'alphanumeric'), 'count', ('num
 NOOP = SQLOperator('', ('numeric',), 'value', tuple(), False)
 
 
+def get_operator_by_name(name: str) -> SQLOperator:
+    match name.lower():
+        case 'min': return MIN
+        case 'max': return MAX
+        case 'avg': return AVG
+        case 'sum': return SUM
+        case 'count': return COUNT
+        case 'noop' | '': return NOOP
+        case _: raise ValueError(f"Operator {name} is unknown! Please use either of (min, max, avg, sum, count or noop) or register your new operator in sql_templates.")
+
+
 class SQLColumnExpression:
     """Defines the structure of an SQL column expression.
 
@@ -52,31 +66,77 @@ class SQLColumnExpression:
             - revisit if multiple arguments or always exact two
               (see ellipsis in type annotation)
     """
-    def __init__(self, arguments: Union[str, Tuple[Union[str, 'SQLColumnExpression'], ...]],
+    def __init__(self,
+                 arguments: Union[str, Tuple[ExpressionArgument, ExpressionArgument]],
                  operand: Optional[str] = None
                  ):
+        if isinstance(arguments, tuple):
+            if len(arguments) > 2:
+                raise ValueError(f"Expected at most two arguments but {len(arguments)} were provided!")
+            if operand is None and len(arguments) > 1:
+                warnings.warn(f"{len(arguments)} arguments but no operand were specified! Only the first argument will be considered.")
         self._allowed_operands = ('+', '-', '*', '/', None)
-        assert operand in self._allowed_operands, \
-            f"Only operands in {self._allowed_operands} allowed!"
+        if operand not in self._allowed_operands:
+            raise ValueError(f"Only operands in {self._allowed_operands} allowed, but found '{operand}'!")
         # allow lazy conversion of single string argument to tuple
         if isinstance(arguments, str):
             arguments = (arguments,)
+        # make sure arguments is either a single variable or a hard-coded column name
+        for argument in arguments:
+            if isinstance(argument, str):
+                num_brace_open = argument.count('{')
+                num_brace_close = argument.count('}')
+                if num_brace_open == 0 and num_brace_close == 0:
+                    warnings.warn(f"Added hard-coded column name '{arguments}' to SQLColumnExpression, this will result in limited reusability of the SQL template!")
+                elif num_brace_open >= 2 or num_brace_close >= 2:
+                    raise ValueError("Encountered multiple variables within a single argument! For nested expressions pass SQLColumnExpressions as arguments.")
         self.arguments = arguments
         self.operand = operand  # Maybe operand class that defines allowed types
 
-    def generate(self):
-        if self.operand is None:
-            return f'"{self.arguments[0]}"'
-        else:
-            if isinstance(self.arguments[0], str):
-                first_arg = f'"{self.arguments[0]}"'
-            else:
-                first_arg = f'({self.arguments[0].generate()})'
-            if isinstance(self.arguments[1], str):
-                second_arg = f'"{self.arguments[1]}"'
-            else:
-                second_arg = f'({self.arguments[1].generate()})'
-        return f"{first_arg} {self.operand} {second_arg}"
+    def _generate_argument(self, argument: ExpressionArgument) -> str:
+        match argument:
+            case str():
+                return f'"{argument}"'
+            case int():
+                return str(argument)
+            case SQLColumnExpression():
+                return f'({argument.generate()})'
+            case _:
+                raise TypeError(f"Type {type(argument)} is not allowed for an argument! Valid types are str, int and SQLColumnExpression.")
+
+    def generate(self) -> str:
+        if self.operand is None or len(self.arguments) == 1:
+            if self.operand is not None:
+                warnings.warn(f"Found operator '{self.operand}' but only one argument! "
+                              "Operator will be ignored. Please check your template for validity."
+                              )
+            return self._generate_argument(self.arguments[0])
+        return f"{self._generate_argument(self.arguments[0])} {self.operand} {self._generate_argument(self.arguments[1])}"
+
+    def to_state_dict(self) -> dict:
+        return {
+            'argument0': self.arguments[0] if not isinstance(self.arguments[0], SQLColumnExpression) else None,
+            'argument0_recursion': self.arguments[0].to_state_dict() if isinstance(self.arguments[0], SQLColumnExpression) else None,
+            'argument1': self.arguments[1] if len(self.arguments) > 1 and not isinstance(self.arguments[1], SQLColumnExpression) else None,
+            'argument1_recursion': self.arguments[1].to_state_dict() if len(self.arguments) > 1 and isinstance(self.arguments[1], SQLColumnExpression) else None,
+            'operand': self.operand,
+        }
+
+    @classmethod
+    def from_state_dict(cls, state_dict) -> SQLColumnExpression:
+        instance = cls.__new__(cls)
+        # only one argument
+        if state_dict['argument1_recursion'] is None and state_dict['argument1'] is None:
+            instance.arguments = (
+                SQLColumnExpression.from_state_dict(state_dict['argument0_recursion']) if isinstance(state_dict['argument0_recursion'], dict) else state_dict['argument0'],
+                )
+        else:  # two arguments
+            instance.arguments = (
+                SQLColumnExpression.from_state_dict(state_dict['argument0_recursion']) if isinstance(state_dict['argument0_recursion'], dict) else state_dict['argument0'],
+                SQLColumnExpression.from_state_dict(state_dict['argument1_recursion']) if isinstance(state_dict['argument1_recursion'], dict) else state_dict['argument1']
+                )
+        instance.operand = state_dict['operand']
+        return instance
 
 
 class SQLOverClauseTemplate:
@@ -284,4 +344,5 @@ class SQLTemplate:
 
 def find_template_variables(template: str) -> List[str]:
     regex_pattern = r'\{[^\{]+\}'  # any sequence of chars in braces (excluding opening brace char) where len > 0
-    return [elem.strip('{}') for elem in re.findall(regex_pattern, template)]
+    # search for template variables and return unique variable names found while preserving order -> use dict instead of set
+    return list({elem.strip('{}'): None for elem in re.findall(regex_pattern, template)}.keys())

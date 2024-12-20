@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from dargparser import dArg
-from typing import Literal
+from typing import Literal, List, Optional, Union
 
 from loguru import logger
 from torch import multiprocessing
@@ -34,7 +34,7 @@ class TrainingArgs:
         aliases="--tokenizer",
     )
     data_dir: str = dArg(
-        default="./data/NumTabQA/.cache",
+        default="/home/mamba/.cache",
         help="Path to the data directory. By default, expects a train.txt and dev.txt file inside the directory.",  # noqa: E501
         aliases="-d",
     )
@@ -96,7 +96,7 @@ class TrainingArgs:
         help="Specific CUDA devices (selected by specified indices) to use. Overwrites `--num_devices`. Requires CUDA on the host system.",
     )
     workers: int = dArg(
-        default=4,
+        default=12,
         help="Number of workers for dataloaders. *Every device* will use that many workers.",
         aliases="-w",
     )
@@ -127,7 +127,7 @@ class TrainingArgs:
         aliases="--vfq",
     )
     model_log_frequency: float = dArg(
-        default=0.1,
+        default=0.2,
         help="Period in training goal units between two model checkpoints. If <1, compute as fraction of training_goal",
         aliases="--mfq",
     )
@@ -139,7 +139,7 @@ class TrainingArgs:
         aliases="-b",
     )
     eval_batch_size_per_device: int = dArg(
-        default=32,
+        default=64,
         help="Batch size per device for evaluation (no gradients -> can be larger than batch_size_per_device for training).",
     )
     effective_batch_size: int | None = dArg(
@@ -185,10 +185,10 @@ class TrainingArgs:
         default=False, help="Do not use pre-trained weights to intialize the token embeddings."
     )
     table_corpus: str = dArg(
-        default="wikitables", help="Name of the table corpus the dataset is based on."
+        default="gittables_group_filtered_standard_templates", help="Name of the table corpus the dataset is based on."
     )
     dataset_name: str = dArg(
-        default="basic_dataset", help="Name of the dataset to use."
+        default="100k", help="Name of the dataset to use."
     )
     dummy_ipykernel_fix: str = dArg(
         default='',
@@ -270,6 +270,13 @@ class TokenizationArgs:
               "'only_first' and 'only_second' are applicable if sequences are provided as pairs "
               "and only truncate one of the sequences for each sample."),
     )
+    token_type_size: int = dArg(
+        default=256,
+        help=("For TAPAS tokenization tables that exceed a certain number of rows can lead to problems "
+              "because even when truncating the token_type_ids do not get adapted accordinly, "
+              "leading to out of range error for indices in the token_type_id_4 embedding matrix."
+              "All indices higher or equal to token_type_size will be set to token_type_size - 1 to fit the embedding matrix size."),
+    )
     keep_oversized_samples: bool = dArg(
         default=False,
         help=("Whether or not to keep examples that do not fit into memory. If False, too long sequences are filtered (default), "
@@ -312,11 +319,35 @@ class DataProcessingArgs:
         default="./data/NumTabQA/.cache", help="File path to the location in the file system where the data is stored."
     )
     table_corpus: str = dArg(
-        default="wikitables", help="Name of the table corpus the dataset is based on."
+        default="gittables_group_filtered", help="Name of the table corpus the dataset is based on."
     )
     dataset_name: str = dArg(
         default="basic_dataset", help="Name of the dataset to use."
     )
     split: str = dArg(
         default="test", help="Name of the split to use."
+    )
+    #/home/mamba/.cache/templates/standard_templates
+    template_name: str = dArg(
+        default="/home/mamba/.cache/templates/standard_templates", help="Name of the template to use for question generation."
+    )
+    num_proc: int = dArg(
+        default=36, help="Number of processes to use in datasets map functions (multi processing). Highly system dependent. Might require 1 in some cases."
+    )
+    max_num_value_samples: int = dArg(
+        default=10, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
+                          "A higher value increases the number of generated questions at cost of diversity."
+                          "The same question type about the same columns will be generated max_num_value_samples times "
+                          "with just the value asked for in a condition differing among those questions.")
+    )
+    max_value_length: Optional[int] = dArg(
+        default=256, help="Maximum number of characters allowed for values sampled from the table that occur in the questions."
+    )
+    max_questions_per_table: Optional[int] = dArg(
+        default=100, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
+    )
+    question_only: bool = dArg(
+        default="True", help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
+                              "Conserves disk space but requires more complicated and slower collate during data loading."
+                              )
     )

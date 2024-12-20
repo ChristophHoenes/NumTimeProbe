@@ -1,20 +1,27 @@
 import random
 import re
 import wandb
+import warnings
+from collections.abc import Iterable
 from dargparser import dargparse
-from pathlib import Path
+from multiprocessing import Pool
+from pathlib import Path, PurePath
 from typing import Dict, List, Optional, Union
 
 import datasets
 import torch
 import numpy as np
 import pandas as pd
+from datetime import datetime
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 from numerical_table_questions.arguments import DataProcessingArgs
 from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 #from src.numerical_table_questions.data_caching import caching
 from numerical_table_questions.data_caching import caching, delete_dataset
-from numerical_table_questions.data_synthesis import Table, remove_duplicate_qa_pairs
+from numerical_table_questions.data_synthesis.table import Table
+from numerical_table_questions.data_synthesis.table_creation import remove_duplicate_qa_pairs
 
 
 DUMMY_DATA = datasets.Dataset.from_dict({
@@ -223,7 +230,12 @@ def sample_questions(table_dataset_sample: dict, len_dataset: int = -1, min_num_
     return output_dict
 
 
-def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None) -> datasets.Dataset:
+def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None, num_proc: Optional[int] = None) -> datasets.Dataset:
+    """ Returns a subsample of the dataset with at most cutoff number of questions.
+        (equal number of questions per table is enforced --> smaller (than cutoff) number of total questions possible)
+        if cutoff is None the smallest number of questions for any table is used as number of questions per table
+        if cutoff is an int smaller than len(dataset) 0 questions per table will be returned.
+    """
     min_num_questions = min([len(table_sample['questions']) for table_sample in dataset])
     return dataset.map(sample_questions,
                        fn_kwargs={
@@ -231,8 +243,132 @@ def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None
                            'min_num_questions': min_num_questions,
                            'cutoff': cutoff,
                            },
+                       num_proc=num_proc,
                        desc=f"Sampling a maximum of {cutoff or min_num_questions*len(dataset)} samples in total..."
                        )
+
+
+def apply_table_dataset_path_changes(example, path_change_mapping: dict = {}, key_name: str = 'table_dataset_path'):
+    if len(path_change_mapping) == 0:
+        warnings.warn("Expected a dictionary with at least one path key (old_path: new_path) but no mapping was provided! No action will be performed")
+    new_path = path_change_mapping.get(example[key_name])
+    if new_path is None:
+        return {}
+    return {key_name: new_path}
+
+
+def get_cache_path(dataset: datasets.Dataset) -> Optional[str]:
+    if len(dataset.cache_files) >= 1:  # if not in memory dataset
+        return str(PurePath(dataset.cache_files[0]['filename']).parent)
+    warnings.warn("No cache path found. Dataset seems to be in-memory!")
+
+
+# you shold delete all other keys
+def add_hierarchy_level(dataset: datasets.Dataset,
+                        hierarchy_level: str = 'table',
+                        columns: Optional[List[str]] = None,
+                        save_path: Optional[str] = None,
+                        delete_old: bool = True,
+                        ) -> datasets.Dataset:
+    if not columns:
+        columns = dataset.column_names
+    old_path = None
+    if len(old_files := dataset.cache_files) > 0:
+        old_path = str(PurePath(old_files[0]['filename']).parent.parent)
+    dataset, _ = dataset.map(
+        lambda x: {hierarchy_level: {col: x[col] for col in columns}},
+        remove_columns=columns,
+        desc=f"Transfering all data to field {hierarchy_level}...",
+        ), delete_dataset(dataset) if delete_old else None
+    if save_path or old_path:
+        dataset.save_to_disk(str(PurePath(save_path or old_path) / datetime.now().strftime('%y%m%d_%H%M_%S_%f')))
+    return dataset
+
+
+def column_lengths(sample):
+    return {'col_name_lengths': [len(col_name) for col_name in sample['table']['data_dict']['header']]}
+
+
+def filter_column_name_length(dataset: datasets.Dataset, min_length: int = 32, num_proc: int = 24) -> datasets.Dataset:
+    dataset = dataset.map(column_lengths, num_proc=num_proc)
+    return dataset.filter(lambda x: max(x['col_name_lengths']) >= min_length, num_proc=num_proc)
+
+
+# fn needs to return a dict with the two keys 'idx' and 'data' which overwrite the data in overwrite_data at position 'idx' with the process result ('data')
+# data generator needs to generate a tuple of the idx of the example (matching len(overwrite_data)) and the other data needed by fn
+def lazy_multi_processing_posthoc_order(fn, data_generator, overwrite_data=None, num_proc: Optional[int] = None, batch_size: Optional[int] = None, desc: Optional[str] = None):
+    result_idxs = []
+    process_results = []
+    with Pool(processes=num_proc) as pool:
+        for result in tqdm(pool.imap_unordered(func=fn, iterable=data_generator, chunksize=batch_size or 1), desc=desc):
+            if overwrite_data is not None:
+                overwrite_data[result['idx']] = result['data']
+            else:
+                result_idxs.append(result['idx'])
+                process_results.append(result['data'])
+    return [result for idx, result in sorted(zip(result_idxs, process_results))]
+
+
+def get_table_by_id(table_dataset: datasets.Dataset, table_id: str, table_id_col_name: str = 'table_id') -> Table:
+    table_id_column = None
+    if 'table' in table_dataset.column_names:
+        if isinstance(table_dataset[0]['table'], str):
+            table_id_column = table_dataset['table']
+        elif isinstance(table_dataset[0]['table'], dict) and table_dataset[0]['table'].get(table_id_col_name) is not None:
+            #table_id_column = [sample[table_id_col_name] for sample in table_dataset['table']]  # slower
+            table_id_column = [table_dataset[i]['table'][table_id_col_name] for i in range(len(table_dataset))]  # faster (due to parquet partition magic)
+    if table_id_column is None:
+        if table_id_col_name in table_dataset.column_names:
+            table_id_column = table_dataset[table_id_col_name]
+        else:
+            raise KeyError(f'Column "{table_id_col_name}" could not be found in the dataset! Please specify the correct column name for the table ids.')
+    for t, tab_id in enumerate(table_id_column):
+        if table_id == tab_id:
+            if 'table' in table_dataset.column_names:
+                return Table.from_state_dict(table_dataset['table'][t])
+            else:
+                return Table.from_state_dict(table_dataset[t])
+    raise ValueError(f"Table ID {table_id} could not be found in the provided table_dataset!")
+
+
+def create_table_index(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
+    index = {}
+    if 'table' in table_dataset.column_names and table_dataset[0]['table'].get(table_id_col_name) is not None:
+        index = {table_dataset[i]['table'][table_id_col_name]: i for i in range(len(table_dataset))}
+    elif table_dataset.get(table_id_col_name) is not None:
+        index = {table_dataset[i][table_id_col_name]: i for i in range(len(table_dataset))}
+    else:
+        raise KeyError(f'Column "{table_id_col_name}" could not be found in the dataset! Please specify the correct column name for the table ids.')
+    return index
+
+
+def plot_histogram(dataset: datasets.Dataset, field='answers', bins=10, cast_float=True):
+    dataset_df = dataset.to_pandas()
+    if cast_float:
+        # infer datatypes for columns
+        dataset_df = dataset_df.convert_dtypes()
+    field_data = dataset_df[field]
+    if isinstance(field_data, Iterable):
+        if cast_float:
+            # convert all elements in array to float
+            field_data = field_data.apply(lambda x: x.astype(np.float64))
+        # join all arrays
+        flat_field_data = np.concatenate(field_data)
+    else:
+        flat_field_data = field_data.to_numpy()
+    if cast_float:
+        # remove nan and inf values to not mess up range of histogram
+        finate_mask = np.isfinite(flat_field_data)
+        flat_field_data = flat_field_data[np.isfinite(flat_field_data)]
+        removed_non_finate = (~finate_mask).sum()
+        median = np.median(flat_field_data)
+        large_mask = flat_field_data > 5*median
+        flat_field_data = flat_field_data[~large_mask]
+        small_mask = flat_field_data < -5*median
+        flat_field_data = flat_field_data[~small_mask]
+        removed = removed_non_finate + large_mask.sum() + small_mask.sum()
+    plt.hist(flat_field_data, bins=bins)
+    plt.savefig(f"dat{len(dataset)}_{field}_removed{removed if cast_float else ''}_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}.pdf")
 
 
 def main(args):
@@ -264,7 +400,6 @@ def main(args):
         'freqency_aggregators': cnt_by_agg,
         'freqency_table': cnt_by_tab,  # TODO reduce number of tables (e.g. 10-percentiles, min max mean)
         'frequency_answer': cnt_by_answer,
-        
         #num_row_agg_freq, num_row_agg_val
     }
     print(acc_by_agg, cnt_by_agg)

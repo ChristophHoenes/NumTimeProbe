@@ -13,14 +13,19 @@ from lightning import Trainer
 from lightning.pytorch.loggers import WandbLogger
 from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
 
-import numerical_table_questions.data_synthesis
 from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
 from numerical_table_questions.data_loading import TableQADataModule
-from numerical_table_questions.data_synthesis import Table, TableQuestionDataSet, QuestionTemplate, SQLColumnExpression, SQLOperator, SQLConditionTemplate, TableQuestion, execute_sql
+from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
+from numerical_table_questions.data_synthesis.question import TableQuestion
+from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
+from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.metrics import token_accuracy
 from numerical_table_questions.model import LightningWrapper
 from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
+from numerical_table_questions.sql_templates import SQLColumnExpression, SQLOperator, SQLConditionTemplate
+from numerical_table_questions.sql_utils import execute_sql
+from numerical_table_questions.system_helpers import choose_auto_accelerator, choose_auto_devices
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
@@ -121,7 +126,7 @@ def evaluate(model: Type[TableQaModel],
                                 tables,
                                 output_tokens=metric == 'token_accuracy'
                                 )
-    # Semantic parsing models return the originally predicted SQL query 
+    # Semantic parsing models return the originally predicted SQL query
     # additionally to the answer via execution
     if isinstance(predictions, tuple):
         predictions, query_predictions = predictions
@@ -156,6 +161,17 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
             args.checkpoint_path, wandb_logger.experiment
         )
 
+    ########### Specifiy auto arguments ###########
+    if args.accelerator == "auto":
+        args.accelerator = choose_auto_accelerator()
+    if args.num_devices == -1:
+        args.num_devices = choose_auto_devices(args.accelerator)
+    if args.cuda_device_ids:
+        cuda_device_count = torch.cuda.device_count()
+        if cuda_device_count < len(args.cuda_device_ids):
+            raise ValueError(
+                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
+            )
     # Initialize trainer
     trainer = Trainer(
         max_steps=eval_args.training_goal,
@@ -220,8 +236,8 @@ def main(model_name, dataset_version, **kwargs):
 
 
 if __name__ == "__main__":
-    # import os
-    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    import os
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     args, misc_args, tokenizer_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
     try:
         # old training data (agg count 1 a lot)
@@ -231,17 +247,18 @@ if __name__ == "__main__":
         # new training data (agg count 0%)
         #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
         # zero shot
-        #evaluate_trained(args, misc_args, tokenizer_args)
+        evaluate_trained(args, misc_args, tokenizer_args)
         # trained with lazy processing (e.g. truncating too long tables)
         #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
         # trained lazy diff
-        evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
+        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
+        # fine-tuned TAPAS
+        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/9n4lmvw1/checkpoints/last_model_ckpt.ckpt')
         wandb.finish()
     except:
         logger.error("Uncaught exception: %s", traceback.format_exc())
         raise SystemExit
     finally:
         artifact = wandb.Artifact("run.log", type="logfile")
-        artifact.add_file("../../run.log")
         wandb.log_artifact(artifact)
         wandb.finish()
