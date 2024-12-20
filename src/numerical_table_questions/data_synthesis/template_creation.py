@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import PurePath
 
 import datasets
-from dargparser import dargparse
 from typing import Optional, Tuple, List, Union
 
 from numerical_table_questions.arguments import DataProcessingArgs
@@ -1032,9 +1031,60 @@ def main(single_version: bool = True, table_corpus: str = 'wikitablequestions', 
             print(f'done with {dataset_name} split {split}')  # TODO proper logging instead
 
 
+def template_list_from_dataset(dataset: Union[datasets.Dataset, str, PurePath]) -> List[QuestionTemplate]:
+    if isinstance(dataset, (str, PurePath)):
+        dataset = datasets.load_from_disk(dataset)
+    return [QuestionTemplate.from_state_dict(template) for template in dataset]
+
+
+def generate_questions_from_templates(templates: Union[datasets.Dataset, str, PurePath],
+                                      table_corpus: str,
+                                      dataset_splits: Union[str, List[str]] = 'test',
+                                      dataset_name: Optional[str] = None,
+                                      dataset_description: str = '',
+                                      cache_path: str = './data/NumTabQA/.cache',
+                                      ) -> None:
+    if isinstance(dataset_splits, str):
+        dataset_splits = [dataset_splits]  # make sure it is a list
+    if dataset_name is None:
+        # load template dataset to extract name from cache path
+        if isinstance(templates, (str, PurePath)):
+            templates = datasets.load_from_disk(templates)
+        dataset_name = (table_corpus +
+                        str(PurePath(templates.cache_files[0]).parent.name)  # if saved with save_version should be .parent.parent.name because of timestamp
+                        )
+    # if dataset_name argument was None (and templates argument was originally str or Path) templates will already be of type datasets.Dataset
+    # and does not need to be loaded by template_list_from_dataset again
+    template_list = template_list_from_dataset(templates)
+    for split in dataset_splits:
+        dataset = create_dataset(template_list,
+                                 dataset_name=dataset_name,
+                                 description=dataset_description,
+                                 table_corpus=table_corpus,
+                                 split=split,
+                                 )
+        save_version(dataset, cache_path=cache_path, dataset_name=dataset_name + f'_{split}')
+
+
+
 if __name__ == "__main__":
     # TODO refactor functions should do one thing (e.g apply quality filter should not save dataset version) -> have script instead that only executes all required functions
-    main()
+    # TODO separate template creation and dataset creation modules
+    table_corpus = 'wikitablequestions'
+    dataset_splits = ['test', 'train', 'validation']
+    template_set_name = 'standard_templates'
+    cache_path = './data/NumTabQA/.cache'
+    generate_questions_from_templates(templates='./data/NumTabQA/.cache/templates/standard_templates',
+                                      table_corpus=table_corpus,
+                                      dataset_splits=dataset_splits,
+                                      dataset_name=table_corpus + '_' + template_set_name,
+                                      dataset_description='All combinations of standard templates with the wikitablequestion corpus.',
+                                      cache_path=cache_path)
+    for split in dataset_splits:
+        dataset_name = f"{table_corpus}_{template_set_name}_{split}"
+        dataset = caching(dataset_name, cache_path=cache_path)
+        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=cache_path, save=True)
+    #main()
     # gittables example
     # table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
     # create_basic_table_question_dataset(table_dataset, name='gittables_subset_10_train', use_cache=False, cache_path='/home/mamba/.cache')

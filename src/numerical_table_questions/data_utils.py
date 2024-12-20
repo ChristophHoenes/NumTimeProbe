@@ -158,11 +158,11 @@ def extract_template_fields_from_query(dataset):
     return dataset
 
 
-def extract_properties_posthoc(args, use_dummy_data=False):
+def extract_properties_posthoc(args: DataProcessingArgs, use_dummy_data=False):
     if use_dummy_data:
         data_split = DUMMY_DATA
     else:
-        base_filename = f"{args.table_corpus}_{args.split}_{args.dataset_name}"
+        base_filename = f"{args.table_corpus}_{args.splits[0]}_{args.dataset_name}"
         data_split = caching(base_filename, cache_path=args.data_dir)
 
     deduplicated = data_split.map(remove_duplicate_qa_pairs)

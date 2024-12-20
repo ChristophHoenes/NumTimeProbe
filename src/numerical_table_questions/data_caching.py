@@ -96,10 +96,10 @@ def save_version(obj, cache_path, cache_file_name: Optional[str] = None, questio
     logger.info(f"Writing {cache_file_name} to disk...")
     # object with to_huggingface() (only TableQuestionDataset?)
     if (hasattr(obj, 'to_huggingface') and callable(obj.to_huggingface)):
-        obj.to_huggingface(questions_only=questions_only, table_dataset_save_path=table_dataset_save_path).save_to_disk(save_path)
+        obj.to_huggingface(questions_only=questions_only, table_dataset_save_path=table_dataset_save_path).save_to_disk(str(save_path))
     # datasets.Dataset
     elif isinstance(obj, datasets.Dataset):
-        obj.save_to_disk(save_path)
+        obj.save_to_disk(str(save_path))
     # empty list
     elif isinstance(obj, list) and len(obj) == 0:
         warnings.warn("Provided list is empty! Nothing to save...")
@@ -108,14 +108,14 @@ def save_version(obj, cache_path, cache_file_name: Optional[str] = None, questio
         datasets.Dataset.from_list(obj).save_to_disk(save_path)
     # list of objects with to_state_dict()
     elif isinstance(obj, list) and (hasattr(obj[0], 'to_state_dict') and callable(obj[0].to_state_dict)):
-        datasets.Dataset.from_list([item.to_state_dict() for item in obj]).save_to_disk(save_path)
+        datasets.datasets.Dataset.from_list([item.to_state_dict() for item in obj]).save_to_disk(save_path)
     # last resort try pickle / dill (because more stuff can be dilled WeakRef?)
     else:
         warnings.warn("Saving with pickle is discouraged! "
                       "Consider implementing custom serialization (e.g to_huggingface, to_state_dict).")
         pickle_target = save_path / (cache_file_name + '.pickle')
         with pickle_target.open('wb') as f:
-            dill.dump(f)
+            dill.dump(obj, f)
 
 
 def delete_dataset(dataset) -> None:
