@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import PurePath
 
 import datasets
-from typing import Optional, Tuple, List, Union
+import numpy as np
+from dargparser import dargparse
+from typing import Dict, List, Optional, Tuple, Union
 
 from numerical_table_questions.arguments import DataProcessingArgs
 from numerical_table_questions.data_caching import save_version, caching
@@ -401,15 +403,21 @@ def get_standard_templates(save_path: Optional[str] = None) -> List[QuestionTemp
     return templates
 
 
-def create_dataset(template_list,
+def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
                    dataset_name: str,
                    description: Optional[str] = None,
                    table_corpus: str = 'wikitables',
                    split: Optional[str] = None,
-                   tables: Optional[List[Table]] = None,
+                   tables: Optional[Union[List[Table], datasets.Dataset]] = None,
                    cache_path: str = './data/NumTabQA/.cache',
                    save: bool = True,
+                   num_proc: Optional[int] = None,
+                   max_num_value_samples: int = 10,
+                   max_value_length: Optional[int] = 256,
+                   max_questions_per_table: Optional[int] = None,
                    ) -> TableQuestionDataSet:
+    if isinstance(templates, QuestionTemplate):
+        templates = [templates]  # make sure templates is a list
     # load table corpus
     if tables is not None:
         table_corpus = 'custom_' + table_corpus
@@ -417,12 +425,16 @@ def create_dataset(template_list,
         tables = load_table_dataset(table_corpus, split, cache_path)
     if len(tables) == 0:
         warnings.warn("Empty taple corpus encountered. Nothing to generate!")
-    save_name = f"{table_corpus}_{dataset_name}"
+    save_name = f"{table_corpus}_{dataset_name}_{split or 'all'}"
     dataset = TableQuestionDataSet(
         save_name,
         description=description,
-        question_templates=[template_list],
-        tables=tables
+        question_templates=templates,
+        tables=tables,
+        num_proc=num_proc,
+        max_num_value_samples=max_num_value_samples,
+        max_value_length=max_value_length,
+        max_questions_per_table=max_questions_per_table,
         )
     if save:
         save_version(dataset, cache_path, save_name)
@@ -468,7 +480,6 @@ def create_basic_table_question_dataset(tables,
         }
         basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
         dataset = TableQuestionDataSet(name + '_basic',
-                                       args,
                                        description=base_description,
                                        question_templates=[basic_template],
                                        tables=tables,
@@ -495,7 +506,6 @@ def create_table_question_dataset(tables: Union[datasets.Dataset, List[Table]],
         main_expr = template.main_expression.generate() if isinstance(template, QuestionTemplate) else '?'
         auto_name = f"{len(tables)}_tables_{num_templates}_templates_{main_expr}_{num_conditions}_conditions_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}"
     dataset = TableQuestionDataSet(name or auto_name,
-                                   args,
                                    description=description,
                                    question_templates=[template] if isinstance(template, QuestionTemplate) else template,
                                    tables=tables,
@@ -1015,48 +1025,70 @@ def generate_questions_from_templates(templates: Union[datasets.Dataset, str, Pu
                                       dataset_splits: Union[str, List[str]] = 'test',
                                       dataset_name: Optional[str] = None,
                                       dataset_description: str = '',
-                                      cache_path: str = './data/NumTabQA/.cache',
-                                      ) -> None:
+                                      cache_path: str = '/home/mamba/.cache',
+                                      num_proc: Optional[int] = None,
+                                      max_num_value_samples: int = 10,
+                                      max_value_length: Optional[int] = 256,
+                                      max_questions_per_table: Optional[int] = None,
+                                      ) -> Union[datasets.Dataset, Dict[str, datasets.Dataset]]:
     if isinstance(dataset_splits, str):
         dataset_splits = [dataset_splits]  # make sure it is a list
     if dataset_name is None:
         # load template dataset to extract name from cache path
         if isinstance(templates, (str, PurePath)):
-            templates = datasets.load_from_disk(templates)
-        dataset_name = (table_corpus +
-                        str(PurePath(templates.cache_files[0]).parent.name)  # if saved with save_version should be .parent.parent.name because of timestamp
-                        )
+            templates = datasets.load_from_disk(templates)  # TODO use caching
+        dataset_name = str(PurePath(templates.cache_files[0]).parent.name)  # if saved with save_version should be .parent.parent.name because of timestamp
     # if dataset_name argument was None (and templates argument was originally str or Path) templates will already be of type datasets.Dataset
     # and does not need to be loaded by template_list_from_dataset again
     template_list = template_list_from_dataset(templates)
+    split_dict = {}
     for split in dataset_splits:
-        dataset = create_dataset(template_list,
-                                 dataset_name=dataset_name,
-                                 description=dataset_description,
-                                 table_corpus=table_corpus,
-                                 split=split,
-                                 )
-        save_version(dataset, cache_path=cache_path, dataset_name=dataset_name + f'_{split}')
-
+        split_dict[split] = create_dataset(template_list,
+                                           dataset_name=dataset_name,
+                                           description=dataset_description,
+                                           table_corpus=table_corpus,
+                                           split=split,
+                                           save=True,
+                                           cache_path=cache_path,
+                                           num_proc=num_proc,
+                                           max_num_value_samples=max_num_value_samples,
+                                           max_value_length=max_value_length,
+                                           max_questions_per_table=max_questions_per_table,
+                                           )
+    if len(dataset_splits) == 1:
+        return split_dict[dataset_splits[0]]
+    return split_dict
 
 
 if __name__ == "__main__":
     # TODO refactor functions should do one thing (e.g apply quality filter should not save dataset version) -> have script instead that only executes all required functions
     # TODO separate template creation and dataset creation modules
-    table_corpus = 'wikitablequestions'
-    dataset_splits = ['test', 'train', 'validation']
-    template_set_name = 'standard_templates'
-    cache_path = './data/NumTabQA/.cache'
-    generate_questions_from_templates(templates='./data/NumTabQA/.cache/templates/standard_templates',
-                                      table_corpus=table_corpus,
-                                      dataset_splits=dataset_splits,
-                                      dataset_name=table_corpus + '_' + template_set_name,
+    args = dargparse(DataProcessingArgs)
+    # check if args.template_name is a path and extract name
+    if '/' in args.template_name:
+        template_name = PurePath(args.template_name).name  # if saved with save_version should be .parent.name because of timestamp
+        template_path = args.template_name
+    else:
+        template_path = None
+        template_name = args.template_name
+
+    generate_questions_from_templates(templates=template_path or args.data_dir + '/templates/' + template_name,
+                                      table_corpus=args.table_corpus,
+                                      dataset_splits=args.splits,
+                                      dataset_name=template_name,
                                       dataset_description='All combinations of standard templates with the wikitablequestion corpus.',
-                                      cache_path=cache_path)
-    for split in dataset_splits:
-        dataset_name = f"{table_corpus}_{template_set_name}_{split}"
-        dataset = caching(dataset_name, cache_path=cache_path)
-        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=cache_path, save=True)
+                                      cache_path=args.data_dir,
+                                      num_proc=args.num_proc,
+                                      max_num_value_samples=args.max_num_value_samples,
+                                      max_value_length=args.max_value_length,
+                                      max_questions_per_table=args.max_questions_per_table,
+                                      )
+
+    # apply quality filters and save filtered versions
+    for split in args.splits:
+        dataset_name = f"{args.table_corpus}_{template_name}_{split}"
+        dataset = caching(dataset_name, cache_path=args.data_dir)
+        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=args.data_dir, save=True)
     #main()
     # gittables example
     # table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')

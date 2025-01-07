@@ -48,7 +48,6 @@ class TableQuestionDataSet:
 
     def __init__(self,
                  name: str,
-                 args,
                  description: Optional[str] = None,
                  question_templates: Optional[List[QuestionTemplate]] = None,
                  tables: Optional[Union[List[Table], datasets.Dataset]] = None,
@@ -57,10 +56,17 @@ class TableQuestionDataSet:
                  compute_coordinates=False,
                  allow_multiple_answers=True,
                  memory_mapped=True,
+                 num_proc: Optional[int] = None,
+                 max_num_value_samples: int = 10,
+                 max_value_length: Optional[int] = 256,
+                 max_questions_per_table: Optional[int] = None,
                  ) -> None:
         self.name = name
         self.description = description
-        self.args = args
+        self.num_proc = num_proc
+        self.max_num_value_samples = max_num_value_samples
+        self.max_value_length = max_value_length
+        self.max_questions_per_table = max_questions_per_table
         self._question_templates = question_templates
         if isinstance(tables, datasets.Dataset):
             self._tables = tables
@@ -425,14 +431,14 @@ class TableQuestionDataSet:
                         template_obj=question_template,
                         create_alternatives=compute_alternatives,
                         do_count_augmentation=do_count_augmentation,
-                        max_num_value_samples=self.args.max_num_value_samples,
-                        max_value_length=self.args.max_value_length,
-                        max_questions_per_table=self.args.max_questions_per_table,
+                        max_num_value_samples=self.max_num_value_samples,
+                        max_value_length=self.max_value_length,
+                        max_questions_per_table=self.max_questions_per_table,
                         memory_mapped=memory_mapped,
                         ),
                     desc="Create questions...",
                     #num_proc=1,  # maybe this is necessary or try torch.set_num_threads(1) (https://discuss.huggingface.co/t/using-num-proc-1-in-dataset-map-hangs/44310)
-                    num_proc=self.args.num_proc,
+                    num_proc=self.num_proc,
                     )
                 """ need question dataset instead (not all questions in memory)
                 flattened_question_dataset, _ = hierarcical_question_dataset.map(
@@ -451,7 +457,7 @@ class TableQuestionDataSet:
                         object_class=TableQuestion,
                         ),
                     desc="Deduplicate questions...",
-                    num_proc=self.args.num_proc,
+                    num_proc=self.num_proc,
                     ), delete_dataset(hierarcical_question_dataset) if delete_intermediate_cache else None
 
                 # TODO before flatten make table batches and compute per table batch the answer
@@ -485,7 +491,7 @@ class TableQuestionDataSet:
                                    'cache_field': 'sql_query',
                                    },
                         desc='Computing answers to questions...',
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
                         ), delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                     self._is_answers_computed = compute_answers
 
@@ -496,7 +502,7 @@ class TableQuestionDataSet:
                                    'cache_field': 'count_hash',
                                    },
                         desc='Computing answers to count questions...',
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
                         ), delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                     #print(deduplicated_question_dataset[0]['count_questions'][0]['answer'])
                     # determine which questions with count aggregator should be explicit questions in the dataset (rather than just for meta data)
@@ -512,12 +518,12 @@ class TableQuestionDataSet:
                                                 ]
                             },
                         desc="Filtering explicit count questions...",
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
                         )
                     # flatten the filtered hierarchical
                     flattened_explicit_count_questions, _ = flatten_table_batches(
                         explicit_count_questions,
-                        field_name='count_questions',
+                        field_names='count_questions',
                         delete_batches=delete_intermediate_cache,
                         ), delete_dataset(explicit_count_questions) if delete_intermediate_cache else None
 
@@ -531,20 +537,20 @@ class TableQuestionDataSet:
                     flattened_explicit_count_questions, _ = flattened_explicit_count_questions.map(
                         _count_answer_as_num_aggregated,
                         desc="Fill num_rows_aggregated_in_answer for explicit count questions...",
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
                         ), delete_dataset(flattened_explicit_count_questions) if delete_intermediate_cache else None
                     # TODO maybe do this part (adding num_rows_aggregated_in_answer) always and only skip the explicit count questions?
                     # depends on definition of do_count_augmentation
                     # get normal questions batched by table as their own dataset
-                    question_batches = extract_field_datasets(deduplicated_question_dataset, field_name='questions')
+                    question_batches = extract_field_datasets(deduplicated_question_dataset, field_names='questions')
                     # per table batch add num_rows_aggregated_in_answer from count cache
                     datasets.disable_progress_bar()
                     lazy_multi_processing_posthoc_order(
                         fn=table_batches_add_pre_aggregation_row_counts,
                         data_generator=enumerate(zip(question_batches, deduplicated_question_dataset)),
                         overwrite_data=question_batches,
-                        num_proc=self.args.num_proc,
-                        desc=f"Fill num_rows_aggregated_in_answer (table batches)... (num_proc={self.args.num_proc})"
+                        num_proc=self.num_proc,
+                        desc=f"Fill num_rows_aggregated_in_answer (table batches)... (num_proc={self.num_proc})"
                         )
                     """ too slow table batch per table batch -> parallelize table batches (see code above)
                     for b, batch in tqdm(enumerate(question_batches), desc="Fill num_rows_aggregated_in_answer (table batches)..."):
@@ -556,7 +562,7 @@ class TableQuestionDataSet:
                             'num_rows_aggregated_in_answer',
                             cache,
                             key='count_hash',
-                            num_proc=self.args.num_proc,
+                            num_proc=self.num_proc,
                             delete_old_version_cache=True,
                             )
                         question_batches[b] = updated_batch
@@ -595,9 +601,9 @@ class TableQuestionDataSet:
             question_batches, count_question_batches = zip(
                 *[question_template.create_questions(tables,
                                                      do_count_augmentation=do_count_augmentation,
-                                                     max_num_value_samples=self.args.max_num_value_samples,
-                                                     max_value_length=self.args.max_value_length,
-                                                     max_questions_per_table=self.args.max_questions_per_table,
+                                                     max_num_value_samples=self.max_num_value_samples,
+                                                     max_value_length=self.max_value_length,
+                                                     max_questions_per_table=self.max_questions_per_table,
                                                      )
                   for question_template in question_templates]
                 )
