@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dargparser import dargparse
 from multiprocessing import Pool
 from pathlib import Path, PurePath
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
 
 import datasets
 import torch
@@ -253,6 +253,35 @@ def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None
                        num_proc=num_proc,
                        desc=f"Sampling a maximum of {cutoff or min_num_questions*len(dataset)} samples in total..."
                        )
+
+
+def count_num_questions_dataset(dataset: datasets.Dataset) -> int:
+    total_num_questions = 0
+    for table_sample in dataset:
+        total_num_questions += len(table_sample['questions'])
+    return total_num_questions
+
+
+def aggregator_counts(dataset: datasets.Dataset,
+                      aggregators: List[str] = ('min', 'max', 'avg', 'sum', 'count', ''),
+                      ) -> Tuple[Dict[str, int], Dict[str, float]]:
+    total_counts = {}  # total counts for all aggregators
+    table_counts = []  # counts for each table (for mean and standard deviation)
+    for table_sample in dataset:
+        table_counts.append({agg: 0 for agg in aggregators})  # only consider standard aggregators
+        for agg in table_sample['aggregators']:
+            total_counts[agg] = total_counts.get(agg, 0) + 1
+            # if standard aggregator then add counts to current table dict (for mean and standard deviation)
+            if agg in aggregators:
+                table_counts[-1][agg] += 1
+    # calculate mean and standard deviation
+    means = {agg + '_mean': np.mean([table_count[agg] for table_count in table_counts])
+             for agg in aggregators
+             }
+    stds = {agg + '_std': np.std([table_count[agg] for table_count in table_counts])
+            for agg in aggregators
+            }
+    return total_counts, means | stds
 
 
 def apply_table_dataset_path_changes(example, path_change_mapping: dict = {}, key_name: str = 'table_dataset_path'):
