@@ -925,21 +925,103 @@ def create_postprocessed_versions(data_version_function: Callable[..., TableQues
                               )
 
 
-def apply_quality_filters(dataset,
+def apply_filter_condition(dataset: datasets.Dataset, num_proc: Optional[int] = 4) -> datasets.Dataset:
+    """ Applies a precomputed filter condition to a dataset that has equal length sequences as fields.
+        filter_condition already needs to be a field in dataset and contain a list of booleans (True is kept False is filtered).
+        The length of the list must be equivalent to every sequence field in the dataset.
+        Only sequence entries where the corresponding filter_condition is True are kept for each field.
+        The field filter_condition is removed from the dataset during the process.
+    """
+    if 'filter_condition' not in dataset.column_names:
+        raise ValueError("Dataset must contain a 'filter_condition' field with a list of booleans!")
+    return dataset.map(lambda x: {col_name: [x[col_name][i]
+                                             for i, is_kept in enumerate(x['filter_condition'])
+                                             if is_kept
+                                             ]
+                                  for col_name in x.keys()
+                                  if isinstance(x[col_name], list)
+                                  },
+                       desc="Applying pre-computed filter condition...",
+                       remove_columns=['filter_condition'],
+                       num_proc=num_proc,
+                       )
+
+
+def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet],
                           remove_multi_answer: bool = True,
                           single_row_agg_tolerances: Tuple[float] = (0.2, 0.0),
+                          threshold: int = 2,
                           save: bool = True,
                           dataset_name: Optional[str] = None,
+                          num_proc: Optional[int] = 12,
                           cache_path: str = './data/NumTabQA/.cache',
                           ):
     if save and dataset_name is None:
         raise ValueError("Need to provide dataset name if you want to save it!")
+    # remove invalid answers
+    if isinstance(dataset, datasets.Dataset):
+        dataset = dataset.map(lambda x: {'filter_condition': [x['answers'][i] != '' or x['answers'] != 'None'
+                                                              for i in range(len(x['questions']))
+                                                              ]
+                                         },
+                              desc="Prepare filter_condition: valid answer string...",
+                              num_proc=num_proc,
+                              )
+        dataset = apply_filter_condition(dataset, num_proc=num_proc)
+    else:
+        dataset._remove_unanswered_questions()
+
+    # remove multi-answer questions
     if remove_multi_answer:
-        dataset.remove_multi_answer_questions()
+        if isinstance(dataset, datasets.Dataset):
+            dataset = dataset.map(lambda x: {'filter_condition': [x['is_multy_row_answer'][i] == 'False' or x['is_multy_row_answer'][i] is False
+                                                                  for i in range(len(x['questions']))
+                                                                  ]
+                                             },
+                                  desc="Prepare filter_condition: multi_answer questions...",
+                                  num_proc=num_proc,
+                                  )
+            dataset = apply_filter_condition(dataset, num_proc=num_proc)
+        else:
+            dataset.remove_multi_answer_questions()
         if save:
             save_version(dataset, cache_path, dataset_name + '_filtered_multi_answer')
-    for tolerance in sorted(single_row_agg_tolerances, reverse=True):  # filter higher tolerances first subsequent removal
-        dataset.remove_questions_with_lower_aggregation_count(tolerance=tolerance)
+
+    # remove questions with low aggregation count
+    old_dataset = dataset  # keep reference to original dataset for subsequent removal of questions with lower tolerance
+    for tolerance in sorted(single_row_agg_tolerances, reverse=True):  # filter higher tolerances first subsequent removal <- TODO check if this is still necessary
+        if isinstance(dataset, TableQuestionDataSet):
+            # TODO revisit if in-place removal makes sense in this context with subsequent tolerances
+            dataset.remove_questions_with_lower_aggregation_count(threshold=threshold, tolerance=tolerance)
+        else:
+            if not isinstance(dataset, datasets.Dataset):
+                raise ValueError(f"Dataset must be either a TableQuestionDataSet or a datasets.Dataset (not {type(dataset)})!")
+            # Analogous to remove_questions_with_lower_aggregation_count() from TableQuestionDataSet just for post hock huggingface datasets serialization
+            if tolerance > 1.0 or tolerance < 0.0:
+                raise ValueError(f"tolerance must be between 0 and 1 but was {tolerance}!"
+                                 "It represents the allowed proportion of questions with aggregation of rows with less than threshold.")
+            if tolerance == 0.0:
+                dataset = dataset.map(lambda x: {'filter_condition': [x['aggregators'][i] == '' or int(x['aggregation_num_rows'][i] or -1) >= threshold
+                                                                      for i in range(len(x['questions']))
+                                                                      ]
+                                                 },
+                                      desc=f"Prepare filter_condition: questions with agg_count lower {threshold}...",
+                                      num_proc=num_proc,
+                                      )
+                dataset = apply_filter_condition(dataset, num_proc=num_proc)
+            else:
+                warnings.warn("For datasets.Dataset serialization the tolerance is approximated through probabalistic sampling. "
+                              "This may lead minor shifts in the data distribution compared to the deterministic case.")
+                dataset = old_dataset.map(lambda x: {'filter_condition': [int(x['aggregation_num_rows'][i] or -1) >= threshold
+                                                                          or x['aggregators'][i] == ''
+                                                                          or np.random.rand() <= tolerance
+                                                                          for i in range(len(x['questions']))
+                                                                          ],
+                                                     },
+                                          desc=f"Prepare filter_condition: questions with agg_count lower {threshold} (tolerance {tolerance})...",
+                                          num_proc=num_proc,
+                                          )
+                dataset = apply_filter_condition(dataset, num_proc=num_proc)
         if save:
             save_version(dataset, cache_path, dataset_name + f"{'_filtered_multi_answer' if remove_multi_answer else ''}_filter_agg_count_{int(tolerance*100)}")
     return dataset
