@@ -718,9 +718,9 @@ class TableQuestionDataSet:
 
     def _remove_unanswered_questions(self) -> None:
         if isinstance(self._questions, datasets.Dataset):
-            self._unanswerable_questions = self._questions.filter(lambda x: x['answer'] == '', desc="Saving unanswered/unanswerable questions...")
+            self._unanswerable_questions = self._questions.filter(lambda x: x['answer'] == '' or x['answer'] == 'None', desc="Saving unanswered/unanswerable questions...")
             # remove unanswerable_questions from questions
-            self._questions = self._questions.filter(lambda x: x['answer'] != '', desc="Removing unanswered/unanswerable questions...")
+            self._questions = self._questions.filter(lambda x: x['answer'] != '' or x['answer'] == 'None', desc="Removing unanswered/unanswerable questions...")
         else:
             self._unanswerable_questions.extend([question
                                                 for question in self._questions
@@ -732,7 +732,7 @@ class TableQuestionDataSet:
     def remove_multi_answer_questions(self) -> None:
         if isinstance(self._questions, datasets.Dataset):
             # remove unanswerable_questions from questions
-            self._questions = self._questions.filter(lambda x: x['multi_row_answer'] != 'True', desc="Removing multi_answer questions...")
+            self._questions = self._questions.filter(lambda x: x['multi_row_answer'] != 'True' or x['multi_row_answer'] is True, desc="Removing multi_answer questions...")
         else:
             self._questions = [question for question in self._questions
                                if not question._multi_row_answer
