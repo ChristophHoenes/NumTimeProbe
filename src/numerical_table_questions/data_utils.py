@@ -371,6 +371,16 @@ def plot_histogram(dataset: datasets.Dataset, field='answers', bins=10, cast_flo
     plt.savefig(f"dat{len(dataset)}_{field}_removed{removed if cast_float else ''}_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}.pdf")
 
 
+def infer_python_type_from_str(string: str) -> Union[int, float, str]:
+    try:
+        return int(string)
+    except ValueError:
+        try:
+            return float(string)
+        except ValueError:
+            return string
+
+
 def main(args):
     # TODO if else for deciding whether to postproces or not (properties already created during synthesis?)
     # extract_properties_posthoc(args)
