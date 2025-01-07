@@ -171,6 +171,13 @@ def extract_properties_posthoc(args: DataProcessingArgs, use_dummy_data=False):
     return output
 
 
+def infer_is_multi_answer_posthoc(sample: dict) -> dict:
+    return {'is_multy_row_answer': [sample['aggregators'][i] == '' and int(sample['aggregation_num_rows'][i] or -1) > 1
+                                    for i in range(len(sample['questions']))
+                                    ]
+            }
+
+
 def load_artifact_from_wandb(run_id, artifact_name='text_predictions', version='latest', wandb_entity=WANDB_ENTITY, wandb_project=WANDB_PROJECT):
     api = wandb.Api()
     artifact = api.artifact(f"{wandb_entity}/{wandb_project}/run-{run_id}-{artifact_name}:{version}")
