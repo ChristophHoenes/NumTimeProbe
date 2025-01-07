@@ -758,8 +758,8 @@ class TableQuestionDataSet:
                               "This may lead minor shifts in the data distribution compared to the deterministic case.")
                 self._questions = self._questions.filter(lambda x:
                                                          int(x['num_rows_aggregated_in_answer'] or -1) >= threshold
-                                                         and x['operator'] != ''
-                                                         and np.random.rand() <= tolerance,
+                                                         or x['operator'] == ''
+                                                         or np.random.rand() <= tolerance,
                                                          desc=f"Removing questions with agg_count lower {threshold} (tolerance {tolerance})..."
                                                          )
             else:
