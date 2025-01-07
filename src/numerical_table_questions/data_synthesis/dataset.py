@@ -474,6 +474,7 @@ class TableQuestionDataSet:
                                                  ) -> dict:
                     table = Table.from_state_dict(sample[table_field])
                     answer_cache = {}
+                    multi_row_answer_cache = {}
                     #answers = []
                     for question_data in sample[question_field]:
                         question = TableQuestion.from_state_dict(question_data, table=table)
@@ -481,12 +482,15 @@ class TableQuestionDataSet:
                         if cached_answer := answer_cache.get(question_hash):
                             #answers.append(cached_answer)
                             question_data.update({'answer': cached_answer})
+                            question_data.update({'multi_row_answer': multi_row_answer_cache[question_hash]})
                         else:
                             question.compute_answer(compute_coordinates=self._compute_coordinates)
                             answer = str(question._answer)  # always convert answer to string
                             #answers.append(answer)
                             question_data.update({'answer': answer})
                             answer_cache[question_hash] = answer
+                            question_data.update({'multi_row_answer': question.multi_row_answer})
+                            multi_row_answer_cache[question_hash] = question.multi_row_answer
                     #sample[question_field].update({'answers': answers})  # add answers
                     return {question_field: sample[question_field]}
 
