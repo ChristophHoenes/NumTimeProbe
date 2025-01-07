@@ -2,13 +2,31 @@ from __future__ import annotations
 
 import re
 import warnings
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import datasets
 
 from numerical_table_questions.answer_coordinates import compute_answer_coordinates
 from numerical_table_questions.data_synthesis.table import Table
+from numerical_table_questions.data_utils import infer_python_type_from_str
 from numerical_table_questions.sql_utils import execute_sql
+
+
+QUESTION_FEATURES = {'nl_question': datasets.Value('string'),
+                     'alternative_phrasings': datasets.Sequence(datasets.Value('string')),
+                     'sql_query': datasets.Value('string'),
+                     'answer': datasets.Value('string'),  # string of numeric to keep original output number format
+                     'alternative_answers': datasets.Sequence(datasets.Value('string')),
+                     'answer_coordinates': datasets.Sequence(datasets.Sequence(datasets.Value('int32'))),
+                     'operator': datasets.Value('string'),
+                     'aggregation_column': datasets.Value('string'),
+                     'condition_assignments': datasets.Sequence(datasets.Sequence(datasets.Value('string'))),
+                     'num_rows_aggregated_in_answer': datasets.Value('int32'),
+                     'multi_row_answer': datasets.Value('bool'),
+                     'table_id': datasets.Value('string'),
+                     'template_hash': datasets.Value('string'),
+                     'count_hash': datasets.Value('string'),
+                     }
 
 
 class TableQuestion:
@@ -18,7 +36,7 @@ class TableQuestion:
                  sql_query: Optional[str] = None,
                  operator: Optional[str] = None,
                  aggregation_column: Optional[str] = None,
-                 condition_assignments: Optional[List[str]] = None,
+                 condition_assignments: Optional[List[Tuple[str, Union[str, int, float]]]] = None,
                  _template_hash: Optional[str] = None,
                  _count_hash: Optional[str] = None,
                  ) -> None:
@@ -30,7 +48,10 @@ class TableQuestion:
         self._answer_coordinates = None
         self._operator = operator
         self._agg_col = aggregation_column or self._infer_aggregation_column()
-        self._condition_assignments = condition_assignments or self._infer_condition_assignments()
+        if condition_assignments is None:  # only if explicitly None (empty list is a valid value and no need to infer)
+            self._condition_assignments = self._infer_condition_assignments()
+        else:
+            self._condition_assignments = condition_assignments
         self._num_rows_aggregated_in_answer = None
         self._multi_row_answer = None
         self._table = table
@@ -44,13 +65,16 @@ class TableQuestion:
             'alternative_phrasings': self.alternative_phrasings,
             'sql_query': self._sql_query,
             'answer': str(self._answer or ''),
-            'alternative_answers': str(self._alternative_answers),
+            'alternative_answers': [str(answer) for answer in self._alternative_answers],
             'answer_coordinates': self._answer_coordinates,
             'operator': self._operator,
             'aggregation_column': self._agg_col,
-            'condition_assignments': str(self._condition_assignments),  # tuple of var_name + var_value can be mix of int and str -> cast str
-            'num_rows_aggregated_in_answer': str(self._num_rows_aggregated_in_answer or ''),
-            'multi_row_answer': str(self._multi_row_answer or ''),
+            # tuple of var_name + var_value (var_value can be int or str) -> cast to str for consistent feature dtype in serialization
+            'condition_assignments': [(var_name, str(value))
+                                      for var_name, value in self._condition_assignments
+                                      ] if len(self._condition_assignments) > 0 else None,
+            'num_rows_aggregated_in_answer': self._num_rows_aggregated_in_answer,
+            'multi_row_answer': self._multi_row_answer,
             'table_id': self._table_id,
             'template_hash': self._template_hash,
             'count_hash': self._count_hash,
@@ -70,17 +94,14 @@ class TableQuestion:
         instance._answer_coordinates = state_dict['answer_coordinates']
         instance._operator = state_dict['operator']
         instance._agg_col = state_dict['aggregation_column']
-        instance._condition_assignments = state_dict['condition_assignments']
-        if state_dict['num_rows_aggregated_in_answer'] == '':
-            instance._num_rows_aggregated_in_answer = None
+        if state_dict['condition_assignments'] is None:
+            # explicit None is only used in __init__ to tell the object to infer the condition assignments -> empty list (post-init)
+            instance._condition_assignments = []
         else:
-            instance._num_rows_aggregated_in_answer = int(state_dict['num_rows_aggregated_in_answer'])
-        if state_dict['multi_row_answer'] == '':
-            instance._multi_row_answer = None
-        elif state_dict['multi_row_answer'] == 'False':
-            instance._multi_row_answer = False
-        else:
-            instance._multi_row_answer = bool(state_dict['multi_row_answer'])
+            instance._condition_assignments = [(var_name, infer_python_type_from_str(value))
+                                               for var_name, value in state_dict['condition_assignments']
+                                               ]
+        instance._num_rows_aggregated_in_answer = state_dict['num_rows_aggregated_in_answer']
         instance._multi_row_answer = state_dict['multi_row_answer']
         instance._table = restore_table_from_id(state_dict['table_id'], table)
         instance._table_id = state_dict['table_id']
@@ -92,12 +113,16 @@ class TableQuestion:
     def _infer_aggregation_column(self):
         # TODO extract from sql string for cases where the question is not generated by a template
         # regex(self._sql_query)
-        pass
+        # TODO logger instead of print
+        print("Aggregation column not explicitly provided. Inferring from SQL query (this is discouraged).")
+        raise NotImplementedError("Method not implemented yet!")
 
-    def _infer_condition_assignments(self):
+    def _infer_condition_assignments(self) -> List[Tuple[str, Union[str, int, float]]]:
         # TODO extract from sql string for cases where the question is not generated by a template
         # regex(self._sql_query)
-        pass
+        # TODO logger instead of print
+        print("Condition assignments not explicitly provided. Inferring from SQL query (this is discouraged).")
+        raise NotImplementedError("Method not implemented yet!")
 
     @property
     def aggregation_column(self):

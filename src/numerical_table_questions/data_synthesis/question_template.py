@@ -117,14 +117,15 @@ class QuestionTemplate:
         non_count_operators = tuple([op for op in operators if op.sql != 'count'])
         return non_count_operators, count_definition
 
-    def extract_aggregation_column(self, assignment: dict):
+    def extract_aggregation_column(self, assignment: dict) -> str:
         if self.main_expression.operand is None:
+            # arguments should always be tuple and if operand is None should be a tuple with one string element
             agg_col_var_name = self.main_expression.arguments[0].strip('{}')
             return assignment.get(agg_col_var_name)
         else:
             return '_column_expression'
 
-    def extract_condition_variables(self):
+    def extract_condition_variables(self) -> List[Tuple[str, str]]:
         condition_vars = []
         for condition in self.conditions:
             # add first condition argument (column expression)
@@ -134,7 +135,7 @@ class QuestionTemplate:
                 if condition.condition_column.operand is None:
                     condition_column = condition.condition_column.arguments[0].strip('{}')
                 else:
-                    condition_column = None
+                    condition_column = '_column_expression'
             else:
                 raise TypeError(f"Expected condition to be of type [str, SQLColumnExpression] but got '{type(condition.condition)}'!")
             # add value variable
@@ -144,12 +145,12 @@ class QuestionTemplate:
                 if condition.value.operand is None:
                     condition_value = condition.value.arguments[0].strip('{}')
                 else:
-                    condition_value = None
+                    condition_value = '_expression_value'
             condition_vars.append((condition_column, condition_value))
         return condition_vars
 
-    def extract_condition_assignments(self, condition_vars, assignment: dict):
-        return [(assignment.get(col_var_name, '_column_expression'), assignment.get(val_var_name, '_column_expression'))
+    def extract_condition_assignments(self, condition_vars: List[Tuple[str, str]], assignment: dict) -> List[Tuple[str, str]]:
+        return [(assignment.get(col_var_name, '_column_expression'), assignment.get(val_var_name, '_expression_value'))
                 for col_var_name, val_var_name in condition_vars]
 
     @property

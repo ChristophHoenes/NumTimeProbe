@@ -16,7 +16,7 @@ from numerical_table_questions.data_synthesis.memmep_data_synth import (
     add_cached_field_to_dataset, create_table_batch_questions, deduplicate_field,
     extract_field_datasets, join_batch_datasets, flatten_table_batches, table_batches_add_pre_aggregation_row_counts
     )
-from numerical_table_questions.data_synthesis.question import TableQuestion, restore_table_from_id
+from numerical_table_questions.data_synthesis.question import TableQuestion, restore_table_from_id, QUESTION_FEATURES
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_utils import get_cache_path, lazy_multi_processing_posthoc_order
@@ -206,7 +206,7 @@ class TableQuestionDataSet:
                             'aggregators': [question['operator']],
                             'aggregation_columns': [question['aggregation_column']],
                             #'aggregation_column_types': aggregation_column_types,  # missing for datasets.Dataset serialization
-                            'num_conditions': [len(question['condition_assignments'])],
+                            'num_conditions': [len(question['condition_assignments']) if question['condition_assignments'] is not None else 0],
                             'aggregation_num_rows': [str(question['num_rows_aggregated_in_answer'])],
                             }
                     else:
@@ -219,7 +219,7 @@ class TableQuestionDataSet:
                         table_batch['sql'].append(question['sql_query'])
                         table_batch['aggregators'].append(question['operator'])
                         table_batch['aggregation_columns'].append(question['aggregation_column'])
-                        table_batch['num_conditions'].append(len(question['condition_assignments']))
+                        table_batch['num_conditions'].append(len(question['condition_assignments']) if question['condition_assignments'] is not None else 0)
                         table_batch['aggregation_num_rows'].append(str(question['num_rows_aggregated_in_answer']))
                 return datasets.Dataset.from_list(list(hierarchy_dict.values()))
 
@@ -425,6 +425,9 @@ class TableQuestionDataSet:
                 raise TypeError(f"Argument tables is expected to be of type List[Table], str (path to dataset) or datasets.Dataset, but found {type(tables)}!")
             template_datasets = []
             for question_template in question_templates:
+                features = table_dataset.features
+                features['questions'] = [QUESTION_FEATURES]
+                features['count_questions'] = [QUESTION_FEATURES]
                 hierarcical_question_dataset = table_dataset.map(
                     create_table_batch_questions,
                     fn_kwargs=dict(
@@ -439,6 +442,9 @@ class TableQuestionDataSet:
                     desc="Create questions...",
                     #num_proc=1,  # maybe this is necessary or try torch.set_num_threads(1) (https://discuss.huggingface.co/t/using-num-proc-1-in-dataset-map-hangs/44310)
                     num_proc=self.num_proc,
+                    # due to a bug in datasets library it is required to pass the features to the map function when multiprocessing with high number of workers whils low number of examples
+                    # see https://github.com/huggingface/datasets/issues/6020
+                    features=features,
                     )
                 """ need question dataset instead (not all questions in memory)
                 flattened_question_dataset, _ = hierarcical_question_dataset.map(
