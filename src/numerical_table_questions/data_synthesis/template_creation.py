@@ -1017,7 +1017,7 @@ def main(single_version: bool = True, table_corpus: str = 'wikitablequestions', 
 
 def template_list_from_dataset(dataset: Union[datasets.Dataset, str, PurePath]) -> List[QuestionTemplate]:
     if isinstance(dataset, (str, PurePath)):
-        dataset = datasets.load_from_disk(dataset)
+        dataset = datasets.Dataset.load_from_disk(dataset)
     return [QuestionTemplate.from_state_dict(template) for template in dataset]
 
 
