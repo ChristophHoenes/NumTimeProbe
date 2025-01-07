@@ -145,7 +145,12 @@ def create_all_question_fields(sample,
                     ]
                 generated_count_questions.extend(count_questions)
             else:
-                count_questions = [TableQuestion('', table, sql, 'count', _template_hash=template_obj._template_hash, _count_hash=count_config)
+                count_questions = [TableQuestion('_IMPLICIT_COUNT_NL', table, sql, 'count',
+                                                 aggregation_column='_IMPLICIT_COUNT_AGG_COL',
+                                                 condition_assignments=[('_IMPLICIT_COUNT_CONDITION_COL', '_IMPLICIT_COUNT_CONDITION_VAL')],
+                                                 _template_hash=template_obj._template_hash,
+                                                 _count_hash=count_config,
+                                                 )
                                    for sql, count_config in zip(compiled_count_sql_statements, count_configurations)
                                    ]
                 generated_count_questions.extend(count_questions)
@@ -340,7 +345,12 @@ def create_table_batch_questions(sample,  # sample of dataset if used with datas
                         )
                     ]
             else:
-                count_questions = [TableQuestion('', table, sql, 'count', _template_hash=template_obj._template_hash, _count_hash=count_config)
+                count_questions = [TableQuestion('_IMPLICIT_COUNT_NL', table, sql, 'count',
+                                                 aggregation_column='_IMPLICIT_COUNT_AGG_COL',
+                                                 condition_assignments=[('_IMPLICIT_COUNT_CONDITION_COL', '_IMPLICIT_COUNT_CONDITION_VAL')],
+                                                 _template_hash=template_obj._template_hash,
+                                                 _count_hash=count_config,
+                                                 )
                                    for sql, count_config in zip(compiled_count_sql_statements, count_configurations)
                                    ]
             # prepare for serialization if memory mapped
