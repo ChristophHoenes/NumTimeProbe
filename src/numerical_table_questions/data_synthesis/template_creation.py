@@ -172,6 +172,7 @@ def get_template_by_name(template_name: Union[str, List[str]]) -> Optional[Union
             case 'diff' | 'difference': template_list.append(DIFF_TEMPLATE)
             case 'ratio_no_filter': template_list.append(RATIO_NO_FILTER_TEMPLATE)
             case 'expression' | 'expr': template_list.append(EXPRESSION_TEMPLATE)
+            case 'standard_templates': template_list.extend(get_standard_templates())
             case _:
                 warnings.warn("No template could be found for the name {name}! Trying to find template dataset at this path.")
                 #raise ValueError("No template could be found for the name {name}! Please make sure you have crafted and registered the template correctly.")
