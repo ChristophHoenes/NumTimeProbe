@@ -47,33 +47,6 @@ BASIC_TEMPLATE = QuestionTemplate(
     template_alternatives=None
 )
 
-BASIC_TEMPLATE = QuestionTemplate(
-    nl_template_string="What is the {op} of column {col1} given that {col2} has value {val1}?",
-    sql_main_expression=SQLColumnExpression(("{col1}",)),
-    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT]),  # not NOOP because it would be simple lookup without numerical skill
-    sql_conditions=(SQLConditionTemplate('{col2}', '=', '{val1}'),),
-    schema={
-        'variables': {
-            'col1': {
-                'type': 'column',
-                'allowed_dtypes': ['numeric']
-                },
-            'col2': {
-                'type': 'column',
-                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
-                },
-            'val1': {
-                'type': 'value',
-                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
-                }
-            },
-        'sample_strategy': 'random',
-        'value_pool': 'distinct_values',
-        'interpolation_args': dict(),
-        },
-    template_alternatives=None
-)
-
 # TODO post-hoc add-one/distractor dataset from basic Template by sampling random distractor and updating answer according to operator (and pre-aggregation count)
 
 DIFF_TEMPLATE = QuestionTemplate(
