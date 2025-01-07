@@ -185,7 +185,7 @@ def main(hf_base_dataset: str, splits=('test', 'train', 'validation'), cache_pat
             base_dataset_prepared = custom_prepare_func(base_dataset_prepared)
         # use custom logic (deduplication, custom table object creation, etc.) to create table dataset
         table_dataset = create_table_dataset(base_dataset=base_dataset_prepared, cache_path=cache_path, save=True)
-        logger.info(f"Finished creating dataset. Results saved at {table_dataset.cache_files[0]["filename"]} (and the potentially following arrow files).")
+        logger.info(f"Finished creating dataset. Results saved at {table_dataset.cache_files[0]['filename']} (and the potentially following arrow files).")
 
 
 if __name__ == "__main__":
