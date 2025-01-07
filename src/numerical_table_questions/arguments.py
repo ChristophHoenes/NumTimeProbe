@@ -316,7 +316,7 @@ class TokenizationArgs:
 @dataclass
 class DataProcessingArgs:
     data_dir: str = dArg(
-        default="./data/NumTabQA/.cache", help="File path to the location in the file system where the data is stored."
+        default="/home/mamba/.cache", help="File path to the location in the file system where the data is stored."
     )
     table_corpus: str = dArg(
         default="wikitablequestions", help="Name of the table corpus the dataset is based on."
@@ -344,7 +344,7 @@ class DataProcessingArgs:
         default=256, help="Maximum number of characters allowed for values sampled from the table that occur in the questions."
     )
     max_questions_per_table: Optional[int] = dArg(
-        default=100, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
+        default=None, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
     )
     question_only: bool = dArg(
         default="True", help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
