@@ -410,20 +410,18 @@ def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
                    table_corpus: str = 'wikitables',
                    split: Optional[str] = None,
                    tables: Optional[Union[List[Table], datasets.Dataset]] = None,
-                   cache_path: str = './data/NumTabQA/.cache',
                    save: bool = True,
-                   num_proc: Optional[int] = None,
-                   max_num_value_samples: int = 10,
-                   max_value_length: Optional[int] = 256,
-                   max_questions_per_table: Optional[int] = None,
+                   args: Optional[DataProcessingArgs] = None,
                    ) -> TableQuestionDataSet:
+    if args is None:
+        args = DataProcessingArgs()  # get default args
     if isinstance(templates, QuestionTemplate):
         templates = [templates]  # make sure templates is a list
     # load table corpus
     if tables is not None:
         table_corpus = 'custom_' + table_corpus
     else:
-        tables = load_table_dataset(table_corpus, split, cache_path)
+        tables = load_table_dataset(table_corpus, split, args.data_dir)
     if len(tables) == 0:
         warnings.warn("Empty taple corpus encountered. Nothing to generate!")
     save_name = f"{table_corpus}_{dataset_name}_{split or 'all'}"
@@ -432,13 +430,15 @@ def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
         description=description,
         question_templates=templates,
         tables=tables,
-        num_proc=num_proc,
-        max_num_value_samples=max_num_value_samples,
-        max_value_length=max_value_length,
-        max_questions_per_table=max_questions_per_table,
+        num_proc=args.num_proc,
+        max_num_value_samples=args.max_num_value_samples,
+        max_value_length=args.max_value_length,
+        max_questions_per_table=args.max_questions_per_table,
+        load_from_cache=args.load_from_cache,
+        delete_intermediate_cache=args.delete_intermediate_cache,
         )
     if save:
-        save_version(dataset, cache_path, save_name)
+        save_version(dataset, args.data_dir, save_name)
     return dataset
 
 
@@ -1108,14 +1108,18 @@ def generate_questions_from_templates(templates: Union[datasets.Dataset, str, Pu
                                       dataset_splits: Union[str, List[str]] = 'test',
                                       dataset_name: Optional[str] = None,
                                       dataset_description: str = '',
-                                      cache_path: str = '/home/mamba/.cache',
-                                      num_proc: Optional[int] = None,
-                                      max_num_value_samples: int = 10,
-                                      max_value_length: Optional[int] = 256,
-                                      max_questions_per_table: Optional[int] = None,
+                                      args: Optional[DataProcessingArgs] = None,
                                       ) -> Union[datasets.Dataset, Dict[str, datasets.Dataset]]:
+    if args is None:
+        # TODO think if also complete initialization from args is possible
+        args = DataProcessingArgs()  # use default arguments
+    # type check fpr templates
+    if not isinstance(templates, (datasets.Dataset, str, list, PurePath)):
+        raise ValueError(f"templates must be either a datasets.Dataset, a PurePath, a string or a list of strings but {type(templates)} was passed!")
+    # make sure dataset_splits is a list
     if isinstance(dataset_splits, str):
-        dataset_splits = [dataset_splits]  # make sure it is a list
+        dataset_splits = [dataset_splits]
+    # determine dataset_name if not provided
     if dataset_name is None:
         # load template dataset to extract name from cache path
         if isinstance(templates, (str, PurePath)):
@@ -1132,11 +1136,7 @@ def generate_questions_from_templates(templates: Union[datasets.Dataset, str, Pu
                                            table_corpus=table_corpus,
                                            split=split,
                                            save=True,
-                                           cache_path=cache_path,
-                                           num_proc=num_proc,
-                                           max_num_value_samples=max_num_value_samples,
-                                           max_value_length=max_value_length,
-                                           max_questions_per_table=max_questions_per_table,
+                                           args=args,
                                            )
     if len(dataset_splits) == 1:
         return split_dict[dataset_splits[0]]
