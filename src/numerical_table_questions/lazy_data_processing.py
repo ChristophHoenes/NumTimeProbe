@@ -229,9 +229,9 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
     tokenized_batch['is_truncated'] = tokenized_batch['input_ids'] != pad_token_id  # if not ending with pad token assume truncation
     # for simplifying debugging include table / question id
     tokenized_batch['question_id'] = torch.LongTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
-    tokenized_batch['table_id'] = [sample['table_data'][0]['table']
-                                   if isinstance(sample['table_data'][0]['table'], str)  # in case not the full table but only the ID is serialized
-                                   else sample['table_data'][0]['table']['table_id']
+    tokenized_batch['table_id'] = [sample['data'][0]['table']
+                                   if isinstance(sample['data'][0]['table'], str)  # in case not the full table but only the ID is serialized
+                                   else sample['data'][0]['table']['table_id']
                                    for sample in batch_of_index_ids
                                    ]
     tokenized_batch['table_idx'] = torch.LongTensor([sample['table_idx'] for sample in batch_of_index_ids])  # for index based access directly in QuestionTableIndexDataset
