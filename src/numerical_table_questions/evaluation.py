@@ -156,9 +156,9 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
     )
 
     # process (download) checkpoint_path to enable remote wandb checkpoint paths
-    if eval_args.checkpoint_path:
-        eval_args.checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
-            eval_args.checkpoint_path, wandb_logger.experiment
+    if resolved_checkpoint_path:
+        resolved_checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
+            resolved_checkpoint_path, wandb_logger.experiment
         )
 
     ########### Specifiy auto arguments ###########
