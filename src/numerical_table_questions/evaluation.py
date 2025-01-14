@@ -2,6 +2,7 @@ import logging
 import logging.config
 import pickle
 import traceback
+import warnings
 from mock import Mock
 from pathlib import PurePath
 from typing import List, Type, Union
@@ -155,12 +156,6 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
         name=misc_args.wandb_run_name,
     )
 
-    # process (download) checkpoint_path to enable remote wandb checkpoint paths
-    if resolved_checkpoint_path:
-        resolved_checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
-            resolved_checkpoint_path, wandb_logger.experiment
-        )
-
     ########### Specifiy auto arguments ###########
     if eval_args.accelerator == "auto":
         eval_args.accelerator = choose_auto_accelerator()
@@ -192,10 +187,21 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
     model_module = get_model_module(eval_args.model_name_or_path)
     model_kwargs = get_model_specific_config(eval_args.model_name_or_path)
     model = LightningWrapper(model_module, eval_args, **model_kwargs)
-    # TODO check local first then wandb
+
+    # try load a checkpoint if provided
     if resolved_checkpoint_path:
-        checkpoint_content = torch.load(resolved_checkpoint_path)
+        # first check if the checkpoint is available locally to avoid unnecessary downloading
+        try:
+            checkpoint_content = torch.load(resolved_checkpoint_path)
+        except FileNotFoundError:
+            warnings.warn(f"Checkpoint file '{resolved_checkpoint_path}' not found locally. Trying to download it from W&B...")
+            # try download remote wandb checkpoint for provided path/model id
+            resolved_checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
+                resolved_checkpoint_path, wandb_logger.experiment
+                )
+            checkpoint_content = torch.load(resolved_checkpoint_path)
         model.load_state_dict(checkpoint_content["state_dict"])
+
     dm = TableQADataModule(model.model_specs,
                            table_corpus=eval_args.table_corpus,
                            dataset_name=eval_args.dataset_name,
