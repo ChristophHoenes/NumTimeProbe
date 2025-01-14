@@ -129,10 +129,15 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
             tokenized = default_tokenize(tokenizer, tokenizer_inputs, pad_token_id, verbose, **kwargs)
             # add float answer (required for weak supervision)
             for encoding, tok_input in zip(tokenized, tokenizer_inputs):
-                if tok_input['answer_text'] is not None:
-                    encoding['float_answer'] = torch.tensor(float(tok_input['answer_text'][0])).unsqueeze(dim=0)
-                else:
-                    encoding['float_answer'] = None
+                try:
+                    float_answer = float(tok_input['answer_text'][0])
+                    encoding['float_answer'] = torch.tensor(float_answer).unsqueeze(dim=0)
+                except (TypeError, ValueError):
+                    if tok_input['answer_text'] is None:
+                        warnings.warn("Answer text is None! The float answer will be None.")
+                    else:
+                        warnings.warn(f"Could not convert answer text '{tok_input['answer_text']}' to float! The float answer will be None.")
+                    encoding['float_answer'] = torch.tensor(float('nan')).unsqueeze(dim=0)
                 if token_type_size := kwargs.get('token_type_size'):
                     token_type_tensor = encoding['token_type_ids']
                     # replace token_type_ids that are out of range of the embedding matrix with the highest possible index
