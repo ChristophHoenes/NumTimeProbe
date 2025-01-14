@@ -60,6 +60,10 @@ class TableQuestionDataSet:
                  max_num_value_samples: int = 10,
                  max_value_length: Optional[int] = 256,
                  max_questions_per_table: Optional[int] = None,
+                 # for datasets.Dataset .map operations (whether to try load from cache or recompute everything)
+                 load_from_cache: bool = True,
+                 # whether to delete intermediate cache files to conserve disk space or keep for caching instead of recomputing
+                 delete_intermediate_cache: bool = False,
                  ) -> None:
         self.name = name
         self.description = description
@@ -79,6 +83,8 @@ class TableQuestionDataSet:
                                                      compute_answers=compute_answers,
                                                      compute_alternatives=compute_alternatives,
                                                      memory_mapped=memory_mapped,
+                                                     load_from_cache=load_from_cache,
+                                                     delete_intermediate_cache=delete_intermediate_cache
                                                      )
         self._questions_by_table_id = lambda: None  # callable since weakref is also callable
 
@@ -381,6 +387,7 @@ class TableQuestionDataSet:
                               compute_alternatives=False,
                               do_count_augmentation=True,
                               memory_mapped=True,
+                              load_from_cache=True,
                               delete_intermediate_cache=False,
                               ) -> Union[List[TableQuestion], datasets.Dataset]:
         """Creates the quelstions from the datasets' question templates and tables.
@@ -442,6 +449,7 @@ class TableQuestionDataSet:
                     desc="Create questions...",
                     #num_proc=1,  # maybe this is necessary or try torch.set_num_threads(1) (https://discuss.huggingface.co/t/using-num-proc-1-in-dataset-map-hangs/44310)
                     num_proc=self.num_proc,
+                    load_from_cache_file=load_from_cache,
                     # due to a bug in datasets library it is required to pass the features to the map function when multiprocessing with high number of workers whils low number of examples
                     # see https://github.com/huggingface/datasets/issues/6020
                     features=features,
@@ -464,6 +472,7 @@ class TableQuestionDataSet:
                         ),
                     desc="Deduplicate questions...",
                     num_proc=self.num_proc,
+                    load_from_cache_file=load_from_cache,
                     ), delete_dataset(hierarcical_question_dataset) if delete_intermediate_cache else None
 
                 # TODO before flatten make table batches and compute per table batch the answer
@@ -502,6 +511,7 @@ class TableQuestionDataSet:
                                    },
                         desc='Computing answers to questions...',
                         num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         ), delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                     self._is_answers_computed = compute_answers
 
@@ -513,6 +523,7 @@ class TableQuestionDataSet:
                                    },
                         desc='Computing answers to count questions...',
                         num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         ), delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                     #print(deduplicated_question_dataset[0]['count_questions'][0]['answer'])
                     # determine which questions with count aggregator should be explicit questions in the dataset (rather than just for meta data)
@@ -529,6 +540,7 @@ class TableQuestionDataSet:
                             },
                         desc="Filtering explicit count questions...",
                         num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         )
                     # flatten the filtered hierarchical
                     flattened_explicit_count_questions, _ = flatten_table_batches(
@@ -548,6 +560,7 @@ class TableQuestionDataSet:
                         _count_answer_as_num_aggregated,
                         desc="Fill num_rows_aggregated_in_answer for explicit count questions...",
                         num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         ), delete_dataset(flattened_explicit_count_questions) if delete_intermediate_cache else None
                     # TODO maybe do this part (adding num_rows_aggregated_in_answer) always and only skip the explicit count questions?
                     # depends on definition of do_count_augmentation
@@ -579,7 +592,7 @@ class TableQuestionDataSet:
                     """
                     datasets.enable_progress_bar()
                     # join table batches to a single dataset of all questions
-                    flattened_questions = join_batch_datasets(question_batches)
+                    flattened_questions = join_batch_datasets(question_batches, delete_batches=delete_intermediate_cache)
 
                     # add explicit cout questions
                     flattened_questions, _, _ = (

@@ -346,8 +346,17 @@ class DataProcessingArgs:
     max_questions_per_table: Optional[int] = dArg(
         default=None, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
     )
+    load_from_cache: bool = dArg(
+        default=True, help="If True (default) tries to load all dataset.Dataset .map operations from cache instead of recomputing them."
+    )
+    delete_intermediate_cache: bool = dArg(
+        default=False, help=("If False (default) the datasets.Dataset cache is not managed actively which accumulates intermediate processing results that can be reused for caching."
+                             "If True deletes all intermediate dataset.Dataset objects to conserve disk space."
+                             )
+    )
+    # This argument seems to not be used in the code -> TODO investigate and use or remove
     question_only: bool = dArg(
-        default="True", help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
-                              "Conserves disk space but requires more complicated and slower collate during data loading."
-                              )
+        default=True, help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
+                            "Conserves disk space but requires more complicated and slower collate during data loading."
+                            )
     )
