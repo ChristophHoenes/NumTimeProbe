@@ -156,21 +156,21 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
     )
 
     # process (download) checkpoint_path to enable remote wandb checkpoint paths
-    if args.checkpoint_path:
-        args.checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
-            args.checkpoint_path, wandb_logger.experiment
+    if eval_args.checkpoint_path:
+        eval_args.checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
+            eval_args.checkpoint_path, wandb_logger.experiment
         )
 
     ########### Specifiy auto arguments ###########
-    if args.accelerator == "auto":
-        args.accelerator = choose_auto_accelerator()
-    if args.num_devices == -1:
-        args.num_devices = choose_auto_devices(args.accelerator)
-    if args.cuda_device_ids:
+    if eval_args.accelerator == "auto":
+        eval_args.accelerator = choose_auto_accelerator()
+    if eval_args.num_devices == -1:
+        eval_args.num_devices = choose_auto_devices(args.accelerator)
+    if eval_args.cuda_device_ids:
         cuda_device_count = torch.cuda.device_count()
-        if cuda_device_count < len(args.cuda_device_ids):
+        if cuda_device_count < len(eval_args.cuda_device_ids):
             raise ValueError(
-                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
+                f"Requested {len(eval_args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
             )
     # Initialize trainer
     trainer = Trainer(
@@ -201,9 +201,9 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
                            dataset_name=eval_args.dataset_name,
                            train_batch_size=eval_args.batch_size_per_device,
                            eval_batch_size=eval_args.eval_batch_size_per_device,
-                           lazy_data_processing=args.lazy_data_processing,
-                           is_batch_dict=args.is_batch_dict,
-                           data_dir=args.data_dir,
+                           lazy_data_processing=eval_args.lazy_data_processing,
+                           is_batch_dict=eval_args.is_batch_dict,
+                           data_dir=eval_args.data_dir,
                            tokenizing_args=tokenizer_args,
                            num_dataloader_workers=eval_args.workers,
                            too_many_open_files_fix=misc_args.too_many_open_files_fix,
