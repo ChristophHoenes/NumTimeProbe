@@ -351,27 +351,3 @@ class DataProcessingArgs:
                               "Conserves disk space but requires more complicated and slower collate during data loading."
                               )
     )
-    #/home/mamba/.cache/templates/standard_templates
-    template_name: str = dArg(
-        default="/home/mamba/.cache/templates/standard_templates", help="Name of the template to use for question generation."
-    )
-    num_proc: int = dArg(
-        default=36, help="Number of processes to use in datasets map functions (multi processing). Highly system dependent. Might require 1 in some cases."
-    )
-    max_num_value_samples: int = dArg(
-        default=10, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
-                          "A higher value increases the number of generated questions at cost of diversity."
-                          "The same question type about the same columns will be generated max_num_value_samples times "
-                          "with just the value asked for in a condition differing among those questions.")
-    )
-    max_value_length: Optional[int] = dArg(
-        default=256, help="Maximum number of characters allowed for values sampled from the table that occur in the questions."
-    )
-    max_questions_per_table: Optional[int] = dArg(
-        default=100, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
-    )
-    question_only: bool = dArg(
-        default="True", help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
-                              "Conserves disk space but requires more complicated and slower collate during data loading."
-                              )
-    )
