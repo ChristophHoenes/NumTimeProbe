@@ -13,6 +13,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_utils import cast_to_reduced_int
 from numerical_table_questions.model_utils import extract_model_name
+from numerical_table_questions.sqlcoder_model import get_sqlcoder_tokenizer
 from numerical_table_questions.tapex_model import tapex_tokenizer_format, tapex_tokenize
 from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates
 
@@ -26,6 +27,8 @@ def get_tokenizer(model_name_or_path: str, **kwargs):
             return AutoTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "neulab/omnitab-large-finetuned-wtq", **kwargs)
         case 'tapas':
             return TapasTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "google/tapas-base", **kwargs)
+        case 'sqlcoder':
+            return get_sqlcoder_tokenizer(model_name_or_path if '/' in model_name_or_path else "defog/sqlcoder-7b-2", **kwargs)
         case _:
             # TODO proper logging
             print(f"No tokenizer explicitly implemented for model '{model_name_or_path}'. Trying to load tokenizer from Huggingface model hub...")

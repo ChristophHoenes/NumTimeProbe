@@ -367,6 +367,43 @@ class TableQADataModule(L.LightningDataModule):
         return self._get_dataloader(split_name='test', split_config=dict(batch_size=self.eval_batch_size))
 
 
+def batch_samples_collate(index_dataset_samples):
+    # get table and question from dataset
+    prepared_batch = {'tables': [], 'questions': [], 'answers': []}
+    for sample in index_dataset_samples:
+        data = sample['data'][0]  # data is always a list of one element
+        question_number = sample['question_number']
+        prepared_batch['tables'].append(data['table'])
+        prepared_batch['questions'].append(data['questions'][question_number])
+        prepared_batch['answers'].append(data['answers'][question_number])
+    return prepared_batch
+
+
+class SQLCoderDataModule(TableQADataModule):
+    def prepare_data(self):
+        # download not needed as locally on disk from data_synthesis
+        if self.lazy_data_processing:
+            return  # no preparation needed if it is doene on the fly during data loading
+        else:
+            raise NotImplementedError("Data pre-processing is not implemented for SQLCoderDataModule use lazy_data_processing.")
+
+    def setup(self, stage: str):
+        if self.lazy_data_processing:
+            super().setup(stage)
+        else:
+            raise NotImplementedError("Data pre-processing is not implemented for SQLCoderDataModule use lazy_data_processing.")
+
+    def _get_dataloader(self, split_name: str, split_config: dict) -> DataLoader:
+        # determine collate function for processing during data loading
+        if self.lazy_data_processing:
+            # load default config from self and (partially) override with custom split config
+            data_loader_args = copy.deepcopy(self.data_loader_args)
+            data_loader_args.update(split_config)
+            return DataLoader(self.splits[split_name], collate_fn=batch_samples_collate, **data_loader_args)
+        else:
+            raise NotImplementedError("Data pre-processing is not implemented for SQLCoderDataModule use lazy_data_processing.")
+
+
 class LMDataModule(L.LightningDataModule):
     def __init__(
         self,
