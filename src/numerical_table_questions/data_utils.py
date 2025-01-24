@@ -305,6 +305,7 @@ def add_hierarchy_level(dataset: datasets.Dataset,
                         columns: Optional[List[str]] = None,
                         save_path: Optional[str] = None,
                         delete_old: bool = True,
+                        num_proc: Optional[int] = 12,
                         ) -> datasets.Dataset:
     if not columns:
         columns = dataset.column_names
@@ -315,6 +316,7 @@ def add_hierarchy_level(dataset: datasets.Dataset,
         lambda x: {hierarchy_level: {col: x[col] for col in columns}},
         remove_columns=columns,
         desc=f"Transfering all data to field {hierarchy_level}...",
+        num_proc=num_proc,
         ), delete_dataset(dataset) if delete_old else None
     if save_path or old_path:
         dataset.save_to_disk(str(PurePath(save_path or old_path) / datetime.now().strftime('%y%m%d_%H%M_%S_%f')))
