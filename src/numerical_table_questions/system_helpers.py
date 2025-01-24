@@ -58,6 +58,20 @@ def choose_auto_devices(accelerator: str):
             raise ValueError(f"Cannot use auto number of devices with accelerator {accelerator}.")
 
 
+def parse_auto_arguments(args):
+    ########### Specifiy auto arguments ###########
+    if args.accelerator == "auto":
+        args.accelerator = choose_auto_accelerator()
+    if args.num_devices == -1:
+        args.num_devices = choose_auto_devices(args.accelerator)
+    if args.cuda_device_ids:
+        cuda_device_count = torch.cuda.device_count()
+        if cuda_device_count < len(args.cuda_device_ids):
+            raise ValueError(
+                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
+            )
+
+
 def handle_batch_size_logic_(args: "TrainingArgs"):
     """Calculates and sets effective batch size / gradient accumulation steps."""
     ACCELERATOR = args.accelerator.upper() if args.accelerator != "cuda" else "GPU"
