@@ -69,7 +69,7 @@ class TrainingArgs:
               "are more interesting than the loss and the time of computing forward can be saved."),
     )
     test_after_train_end: bool = dArg(
-        default=True,
+        default=False,
         help=("Whether to run a test epoch directly after training or not."),
     )
 
