@@ -192,7 +192,7 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
         # apply row permutation
         tokenizer_inputs = []
         tokenizer_inputs.extend(
-            prepare_for_tokenizer(table_data, model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding, is_eval=is_eval)
+            prepare_for_tokenizer(table_data, model_name_or_path=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding, is_eval=is_eval)
             )
         tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, pad_token_id=pad_token_id, mask_token_id=mask_token_id, verbose=False, **tokenizing_args)
         # save tokenizer keys for default filter of keys in dict style batch
