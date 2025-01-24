@@ -12,12 +12,13 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_utils import cast_to_reduced_int
+from numerical_table_questions.model_utils import extract_model_name
 from numerical_table_questions.tapex_model import tapex_tokenizer_format, tapex_tokenize
 from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates
 
 
-def get_tokenizer(model_name, **kwargs):
-    match model_name.lower():
+def get_tokenizer(model_name_or_path: str, **kwargs):
+    match model_name_or_path.lower():
         case 'tapex':
             return TapexTokenizer.from_pretrained("microsoft/tapex-base-finetuned-wtq")
         case 'omnitab':
@@ -25,10 +26,13 @@ def get_tokenizer(model_name, **kwargs):
         case 'tapas':
             return TapasTokenizer.from_pretrained("google/tapas-base")
         case _:
-            raise NotImplementedError(f"No tokenizer getter implemented for model '{model_name}'!")
+            # TODO proper logging
+            print(f"No tokenizer explicitly implemented for model '{model_name_or_path}'. Trying to load tokenizer from Huggingface model hub...")
+            return AutoTokenizer.from_pretrained(model_name_or_path)
 
 
-def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name, lazy: bool = False, is_eval: bool = False, **kwargs):
+def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name_or_path: str, lazy: bool = False, is_eval: bool = False, **kwargs):
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
         case 'tapex' | 'omnitab':
             return tapex_tokenizer_format(data, lazy, **kwargs)
@@ -93,7 +97,7 @@ def default_tokenize(tokenizer, tokenizer_inputs, model_name, verbose, **kwargs)
 
 
 def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict],
-                              model_name: str,
+                              model_name_or_path: str,
                               # TODO maybe infer from model type info but maybe better instance-wise -> more direct/safe
                               pad_token_id: int,
                               mask_token_id: int,
@@ -105,9 +109,9 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
         single_example = True
     else:
         single_example = False
-
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
-        case 'tapex':
+        case 'tapex' | 'omnitab':
             tokenized = tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, verbose, **kwargs)
         case 'tapas':
             # reduce answer coorndinates for tables that do not fit into the model

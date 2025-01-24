@@ -35,8 +35,8 @@ def tapex_model_type_info() -> dict:
         )
 
 
-def tapex_model():
-    model = transformers.BartForConditionalGeneration.from_pretrained("microsoft/tapex-base-finetuned-wtq")
+def tapex_model(hf_version_path: str = "microsoft/tapex-base-finetuned-wtq"):
+    model = transformers.BartForConditionalGeneration.from_pretrained(hf_version_path)
     # potentially change model config
     # model.config.xxx = 'xxx'
     return model

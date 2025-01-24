@@ -3,7 +3,7 @@ import logging
 import logging.config
 import warnings
 from pathlib import PurePath
-from typing import List, Optional, Union, Tuple
+from typing import List, Union, Tuple
 
 import pandas as pd
 import torch
@@ -35,8 +35,8 @@ def tapas_model_type_info() -> dict:
         )
 
 
-def tapas_model():
-    model = transformers.TapasForQuestionAnswering.from_pretrained("google/tapas-base-finetuned-wtq")
+def tapas_model(hf_version_path: str = "google/tapas-base-finetuned-wtq"):
+    model = transformers.TapasForQuestionAnswering.from_pretrained(hf_version_path)
     # change model config
     model.config.return_dict = True
     return model
