@@ -242,29 +242,26 @@ def main(model_name, dataset_version, **kwargs):
 
 
 if __name__ == "__main__":
-    import os
-    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    #import os
+    #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     args, misc_args, tokenizer_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
-    try:
-        # old training data (agg count 1 a lot)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
-        # new training data (agg count 20%)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/2kix9c4k/checkpoints/last_model_ckpt.ckpt')
-        # new training data (agg count 0%)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
-        # zero shot
-        evaluate_trained(args, misc_args, tokenizer_args)
-        # trained with lazy processing (e.g. truncating too long tables)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
-        # trained lazy diff
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
-        # fine-tuned TAPAS
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/9n4lmvw1/checkpoints/last_model_ckpt.ckpt')
-        wandb.finish()
-    except:
-        logger.error("Uncaught exception: %s", traceback.format_exc())
-        raise SystemExit
-    finally:
-        artifact = wandb.Artifact("run.log", type="logfile")
-        wandb.log_artifact(artifact)
-        wandb.finish()
+    # old training data (agg count 1 a lot)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
+    # new training data (agg count 20%)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/2kix9c4k/checkpoints/last_model_ckpt.ckpt')
+    # new training data (agg count 0%)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
+    # zero shot
+    evaluate_trained(args, misc_args, tokenizer_args)
+    # trained with lazy processing (e.g. truncating too long tables)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
+    # trained lazy diff
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned TAPAS
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/9n4lmvw1/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned Tapex all standard templates larger batch size (gas)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/sjwf0hff/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned Tapex all standard templates smaller batch size (gas)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/ywup1ksg/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned OmniTab
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/izc1diit/checkpoints/last_model_ckpt.ckpt')
