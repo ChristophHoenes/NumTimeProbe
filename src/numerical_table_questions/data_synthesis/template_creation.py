@@ -221,18 +221,17 @@ def create_templates(main_expr: SQLColumnExpression,
                           'allowed_dtypes': ['numeric']
                           },
         }
-
-    # TODO think of number of samples per group
-    # TODO rethink if excluding operators is necessary (post-hoc filters take care of it?)
     # definition of different basic condition setups that can be used with nearly any main expression
     condition_setups = [
-        ('=', all_aggregators, flex_type_condition_variable_schema),
-        ('!=', all_aggregators, flex_type_condition_variable_schema),
+        # TODO test difficulty and posthoc filter of NOOP questions (all_aggregators setting)
+        ('=', all_base_operators, flex_type_condition_variable_schema),  # because NOOP results in simple lookup
+        ('!=', all_base_operators, flex_type_condition_variable_schema),  # because NOOP results in simple lookup
         ('<', all_base_operators, numeric_condition_variable_schema),
         ('<=', all_base_operators, numeric_condition_variable_schema),
         ('>', all_base_operators, numeric_condition_variable_schema),
         ('>=', all_base_operators, numeric_condition_variable_schema),
-        (None, arithmetic_operators, {}),
+        # TODO test difficulty and posthoc filter of COUNT questions (arithmetic_operators setting)
+        (None, all_aggregators, {}),  # NOOP results in entire (multi-row answer) column COUNT always results in num_rows
     ]
     # ^ above stays same the following must be defined for every question type:
     # transform main expression to natural languagr template string
