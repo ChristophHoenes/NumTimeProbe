@@ -18,17 +18,18 @@ from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce
 
 
 def get_tokenizer(model_name_or_path: str, **kwargs):
-    match model_name_or_path.lower():
+    model_name = extract_model_name(model_name_or_path)
+    match model_name.lower():
         case 'tapex':
-            return TapexTokenizer.from_pretrained("microsoft/tapex-base-finetuned-wtq")
+            return TapexTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "microsoft/tapex-base-finetuned-wtq", **kwargs)
         case 'omnitab':
-            return AutoTokenizer.from_pretrained("neulab/omnitab-large-finetuned-wtq")
+            return AutoTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "neulab/omnitab-large-finetuned-wtq", **kwargs)
         case 'tapas':
-            return TapasTokenizer.from_pretrained("google/tapas-base")
+            return TapasTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "google/tapas-base", **kwargs)
         case _:
             # TODO proper logging
             print(f"No tokenizer explicitly implemented for model '{model_name_or_path}'. Trying to load tokenizer from Huggingface model hub...")
-            return AutoTokenizer.from_pretrained(model_name_or_path)
+            return AutoTokenizer.from_pretrained(model_name_or_path, **kwargs)
 
 
 def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name_or_path: str, lazy: bool = False, is_eval: bool = False, **kwargs):
