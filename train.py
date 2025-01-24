@@ -6,7 +6,7 @@ import torch
 import wandb
 from dargparser import dargparse
 from lightning import Trainer, seed_everything
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.plugins.environments import (
     LightningEnvironment,
@@ -139,6 +139,13 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         auto_insert_metric_name=False,
         every_n_train_steps=args.model_log_frequency,
     )
+    if args.early_stopping_patience > 0:
+        early_stop_callback = EarlyStopping(
+            monitor="val/loss",
+            min_delta=0.00,
+            patience=args.early_stopping_patience,
+            mode="min",
+            )
     wandb_disk_cleanup_callback = WandbCleanupDiskAndCloudSpaceCallback(
         cleanup_local=True, cleanup_online=False, size_limit=20
     )
@@ -221,6 +228,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
                            )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks = [checkpoint_callback, wandb_disk_cleanup_callback, lr_monitor]
+    if args.early_stopping_patience > 0:
+        callbacks.append(early_stop_callback)
     if args.accelerator == "cuda":
         callbacks.append(CUDAMetricsCallback())
 
