@@ -16,16 +16,17 @@ from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGenera
 
 from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
-from numerical_table_questions.data_loading import TableQADataModule
+from numerical_table_questions.data_loading import TableQADataModule, SQLCoderDataModule
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_synthesis.question import TableQuestion
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.metrics import token_accuracy
 from numerical_table_questions.model import LightningWrapper
-from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
+from numerical_table_questions.model_utils import get_model_module, get_model_specific_config, extract_model_name
 from numerical_table_questions.sql_templates import SQLColumnExpression, SQLOperator, SQLConditionTemplate
 from numerical_table_questions.sql_utils import execute_sql
+from numerical_table_questions.sqlcoder_model import SQLCoder
 from numerical_table_questions.system_helpers import choose_auto_accelerator, choose_auto_devices
 
 
@@ -145,17 +146,38 @@ def evaluate(model: Type[TableQaModel],
     return metric_result, predictions, ground_truth, eval_results
 
 
-def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path=None):
-    resolved_checkpoint_path = model_checkpoint_path or eval_args.checkpoint_path
-    # Initiallize Weights&Biases logger to log artefacts
-    wandb_logger = WandbLogger(
-        project=misc_args.wandb_project or WANDB_PROJECT,
-        entity=WANDB_ENTITY,
-        log_model="all",
-        tags=['eval', *misc_args.wandb_tags],
-        name=misc_args.wandb_run_name,
-    )
+def try_load_local_then_wandb_checkpoint(model, wandb_logger, checkpoint_path: str):
+    # first check if the checkpoint is available locally to avoid unnecessary downloading
+    try:
+        checkpoint_content = torch.load(checkpoint_path, map_location=torch.device(args.accelerator))
+    except FileNotFoundError:
+        warnings.warn(f"Checkpoint file '{checkpoint_path}' not found locally. Trying to download it from W&B...")
+        # try download remote wandb checkpoint for provided path/model id
+        resolved_checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
+            checkpoint_path, wandb_logger.experiment
+            )
+        checkpoint_content = torch.load(resolved_checkpoint_path)
+    model.load_state_dict(checkpoint_content["state_dict"])
 
+
+def get_lightning_trainer(eval_args, wandb_logger=None, deterministic: bool = True) -> Trainer:
+    trainer = Trainer(
+        max_steps=eval_args.training_goal,
+        val_check_interval=eval_args.val_frequency,
+        check_val_every_n_epoch=None,  # validation based on steps instead of epochs
+        devices=eval_args.cuda_device_ids or eval_args.num_devices,
+        accelerator=eval_args.accelerator,
+        logger=wandb_logger,
+        deterministic=deterministic,
+        precision=eval_args.precision,
+        gradient_clip_val=eval_args.gradient_clipping,
+        accumulate_grad_batches=eval_args.gradient_accumulation_steps,
+        inference_mode=not eval_args.compile,  # inference_mode for val/test and PyTorch 2.0 compiler don't like each other  # noqa: E501
+    )
+    return trainer
+
+
+def parse_auto_arguments(eval_args):
     ########### Specifiy auto arguments ###########
     if eval_args.accelerator == "auto":
         eval_args.accelerator = choose_auto_accelerator()
@@ -167,42 +189,49 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path
             raise ValueError(
                 f"Requested {len(eval_args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
             )
-    # Initialize trainer
-    trainer = Trainer(
-        max_steps=eval_args.training_goal,
-        val_check_interval=eval_args.val_frequency,
-        check_val_every_n_epoch=None,  # validation based on steps instead of epochs
-        devices=eval_args.cuda_device_ids or eval_args.num_devices,
-        accelerator=eval_args.accelerator,
-        logger=wandb_logger,
-        deterministic=True,
-        precision=eval_args.precision,
-        gradient_clip_val=eval_args.gradient_clipping,
-        accumulate_grad_batches=eval_args.gradient_accumulation_steps,
-        inference_mode=not eval_args.compile,  # inference_mode for val/test and PyTorch 2.0 compiler don't like each other  # noqa: E501
+
+
+def get_wandb_logger(misc_args, tags: Union[str, List[str]] = []) -> WandbLogger:
+    if isinstance(tags, str):
+        tags = [tags]
+    return WandbLogger(
+        project=misc_args.wandb_project or WANDB_PROJECT,
+        entity=WANDB_ENTITY,
+        log_model="all",
+        tags=[*tags, *misc_args.wandb_tags],
+        name=misc_args.wandb_run_name,
     )
-    # for this to work the hyperparameters need to be saved and no positional arguments in LightningWrapper are allowed
-    # alternatively overwrite load_from_checkpoint but not recommended since some other side effects from super() might be lost and model is still needed
-    # model = LightningWrapper.load_from_checkpoint(checkpoint_path=resolved_checkpoint_path)
-    model_module = get_model_module(eval_args.model_name_or_path)
-    model_kwargs = get_model_specific_config(eval_args.model_name_or_path)
-    model = LightningWrapper(model_module, eval_args, **model_kwargs)
+
+
+def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path=None):
+    resolved_checkpoint_path = model_checkpoint_path or eval_args.checkpoint_path
+    # Initiallize Weights&Biases logger to log artefacts
+    wandb_logger = get_wandb_logger(misc_args, tags=['eval'])
+    parse_auto_arguments(eval_args)
+    # Initialize trainer
+    trainer = get_lightning_trainer(eval_args=eval_args, wandb_logger=wandb_logger)
+
+    model_name = extract_model_name(eval_args.model_name_or_path)
+    if model_name == 'sqlcoder':
+        model = SQLCoder(eval_args.model_name_or_path)
+    else:
+        # for this to work the hyperparameters need to be saved and no positional arguments in LightningWrapper are allowed
+        # alternatively overwrite load_from_checkpoint but not recommended since some other side effects from super() might be lost and model is still needed
+        # model = LightningWrapper.load_from_checkpoint(checkpoint_path=resolved_checkpoint_path)
+        model_module = get_model_module(eval_args.model_name_or_path)
+        model_kwargs = get_model_specific_config(eval_args.model_name_or_path)
+        model = LightningWrapper(model_module, eval_args, **model_kwargs)
 
     # try load a checkpoint if provided
     if resolved_checkpoint_path:
-        # first check if the checkpoint is available locally to avoid unnecessary downloading
-        try:
-            checkpoint_content = torch.load(resolved_checkpoint_path)
-        except FileNotFoundError:
-            warnings.warn(f"Checkpoint file '{resolved_checkpoint_path}' not found locally. Trying to download it from W&B...")
-            # try download remote wandb checkpoint for provided path/model id
-            resolved_checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
-                resolved_checkpoint_path, wandb_logger.experiment
-                )
-            checkpoint_content = torch.load(resolved_checkpoint_path)
-        model.load_state_dict(checkpoint_content["state_dict"])
+        try_load_local_then_wandb_checkpoint(model, wandb_logger, resolved_checkpoint_path)
 
-    dm = TableQADataModule(model.model_specs,
+    if model_name == 'sqlcoder':
+        data_module_class = SQLCoderDataModule
+    else:
+        data_module_class = TableQADataModule
+    # Initialize the data module that is appropriate for the model
+    dm = data_module_class(model.model_specs,
                            table_corpus=eval_args.table_corpus,
                            dataset_name=eval_args.dataset_name,
                            train_batch_size=eval_args.batch_size_per_device,
