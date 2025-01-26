@@ -9,6 +9,7 @@
 #mistralai/Mixtral-8x22B-Instruct-v0.1
 #meta-llama/Llama-3.2-3B-Instruct
 #meta-llama/Llama-3.2-1B-Instruct
+#meta-llama/Llama-3.3-70B-Instruct
 
 DEVICE="ALL"
 
