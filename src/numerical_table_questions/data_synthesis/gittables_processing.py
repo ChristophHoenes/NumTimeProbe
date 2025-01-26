@@ -13,7 +13,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from numerical_table_questions.data_caching import caching, save_version
+from numerical_table_questions.utils.data_caching import caching, save_version
 from numerical_table_questions.data_synthesis.table import Table, deduplicate_column_names
 
 
