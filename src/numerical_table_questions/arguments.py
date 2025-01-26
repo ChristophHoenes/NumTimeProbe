@@ -85,6 +85,10 @@ class TrainingArgs:
         help="Distributed training strategy to use. If `auto`, will select automatically (no distributed strategy is used when using a single device).",
         aliases="--ds",
     )
+    optimize_inference_pipeline: bool = dArg(
+        default=True,
+        help=("Only relevant for models that use transformers inference pipeline for evaluation (e.g SQLCoder). Performance will be optimized by passing a datasets.Dataset and sharding pipelines across devices."),
+    )
     num_devices: int = dArg(
         default=-1,
         aliases=["--devices", "--nd"],

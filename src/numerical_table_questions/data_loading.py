@@ -404,6 +404,60 @@ class SQLCoderDataModule(TableQADataModule):
             raise NotImplementedError("Data pre-processing is not implemented for SQLCoderDataModule use lazy_data_processing.")
 
 
+def create_sqlcoder_dataset(eval_args: Optional[TrainingArgs] = None,
+                            tokenizer_args: Optional[TokenizationArgs] = None,
+                            split: str = 'test',
+                            model_type_info: Optional[ModelTypeInfo] = None,
+                            save_path: Optional[str] = None
+                            ) -> datasets.Dataset:
+    """ Creates a dataset.Dataset version from the custom lightning data module,
+        For more efficient use of huggingface pipelines for inference (as used in our SQLCoder model)
+        a dataset should be passed to the pipeline instead of calling a new pipeline for every batch of a DataLoader.
+    """
+    # if no arguments were provided use default values
+    if eval_args is None:
+        eval_args = TrainingArgs()
+    if tokenizer_args is None:
+        tokenizer_args = TokenizationArgs()
+
+    # Initialize the data module that is appropriate for the model
+    dm = SQLCoderDataModule(model_type_info or ModelTypeInfo(eval_args.model_name_or_path),
+                            table_corpus=eval_args.table_corpus_name,
+                            dataset_name=eval_args.dataset_suffix,
+                            train_batch_size=eval_args.batch_size_per_device,
+                            eval_batch_size=eval_args.eval_batch_size_per_device,
+                            lazy_data_processing=eval_args.lazy_data_processing,
+                            is_batch_dict=eval_args.is_batch_dict,
+                            data_dir=eval_args.data_dir,
+                            tokenizing_args=tokenizer_args,
+                            num_dataloader_workers=eval_args.workers,
+                            )
+    match split.lower():
+        case 'test':
+            dm.setup('test')
+            dataloader = dm.test_dataloader()
+        case 'train':
+            dm.setup('fit')
+            dataloader = dm.train_dataloader()
+        case 'validation':
+            dm.setup('validate')
+            dataloader = dm.val_dataloader()
+        case _:  # default to test
+            raise ValueError(f"Invalid split: {split}")
+
+    batch_datasets = []
+    for batch in dataloader:
+        batch_questions = []
+        for sample_idx in range(len(batch['questions'])):
+            batch_questions.append(sqlcoder_prompt_template(batch['questions'][sample_idx], batch['tables'][sample_idx]))
+        batch['questions'] = batch_questions
+        batch_datasets.append(datasets.Dataset.from_dict(batch))
+    dataset = datasets.concatenate_datasets(batch_datasets)
+    if save_path is not None:
+        save_version(dataset, save_path)
+    return dataset
+
+
 class LMDataModule(L.LightningDataModule):
     def __init__(
         self,

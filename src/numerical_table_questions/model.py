@@ -506,3 +506,46 @@ class LightningWrapper(L.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},
         }
+
+
+class SQLCoder(L.LightningModule):
+    def __init__(self, model_name_or_path: str, post_processing_fn=lambda x: [item.strip() for item in x], metric_function=str_match_accuracy, metric_name='str_match_accuracy', model_type_info=None):
+        super().__init__()
+        self.model = get_sqlcoder_model() if model_name_or_path.lower() == 'sqlcoder' else get_sqlcoder_model(model_name_or_path)
+        self.tokenizer = get_sqlcoder_tokenizer() if model_name_or_path.lower() == 'sqlcoder' else get_sqlcoder_tokenizer(model_name_or_path)
+        self.pipeline = get_sqlcoder_inference_pipeline(self.model, self.tokenizer)
+        self.model_specs = model_type_info or ModelTypeInfo(model_name_or_path)
+        self.predictions = []
+        self.post_processing_fn = post_processing_fn
+        self.metric_function = metric_function
+        self.metric_name = metric_name
+
+    def test_step(self, batch, batch_idx):
+        # generate predictions for batch contents
+        questions = batch['questions']
+        tables = batch['tables']
+        text_targets = batch['answers']
+        string_predictions = sqlcoder_generation(questions, tables, self.model, self.tokenizer, self.pipeline)
+        self.predictions.extend(string_predictions)
+        # calculate metric
+        processed_predictions = self.post_processing_fn(string_predictions)
+        processed_targets = self.post_processing_fn(text_targets)
+        metric_outputs = self.metric_function(processed_predictions, processed_targets)
+        # log metric result
+        # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
+        batch_metric_results = {f"test/{self.metric_name}": metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs}
+        self.log_dict(
+                batch_metric_results,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                batch_size=len(batch['questions']),
+                )
+
+    def on_test_epoch_end(self):
+        # log and clear predictions
+        # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
+        text_predictions = [[pred] for pred in self.predictions]
+        # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
+        self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
+        self.predictions.clear()
