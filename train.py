@@ -76,17 +76,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         **wandb_extra_args,
     )
 
-    ########### Specifiy auto arguments ###########
-    if args.accelerator == "auto":
-        args.accelerator = choose_auto_accelerator()
-    if args.num_devices == -1:
-        args.num_devices = choose_auto_devices(args.accelerator)
-    if args.cuda_device_ids:
-        cuda_device_count = torch.cuda.device_count()
-        if cuda_device_count < len(args.cuda_device_ids):
-            raise ValueError(
-                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
-            )
+    parse_auto_arguments(args)
     effective_batch_size_per_step = handle_batch_size_logic_(args)
 
     ########### Log config ###########
