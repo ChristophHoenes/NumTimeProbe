@@ -4,7 +4,7 @@ from typing import List, Union
 import torch
 from lightning.pytorch.loggers import WandbLogger
 
-from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
+from numerical_table_questions.utils.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
 
 
 def try_load_local_then_wandb_checkpoint(model, wandb_logger, checkpoint_path: str, map_location: str = "cpu"):

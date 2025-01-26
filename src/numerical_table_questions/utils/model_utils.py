@@ -8,6 +8,7 @@ from transformers import AutoModel
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config, tapas_generation
 from numerical_table_questions.tapex_model import tapex_model_type_info, tapex_model, tapex_config
+from numerical_table_questions.sqlcoder_model import get_sqlcoder_model
 
 
 @dataclass
@@ -69,6 +70,8 @@ def get_model_module(model_name_or_path: str):
             model = tapex_model(hf_version_path=model_name_or_path if '/' in model_name_or_path else 'neulab/omnitab-large-finetuned-wtq')
         case 'tapas':
             model = tapas_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else tapas_model()
+        case 'sqlcoder':
+            model = get_sqlcoder_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else get_sqlcoder_model()
         case _:
             # TODO use logger instead of print
             print(f"No model with the name {model_name} is explicitly implemented. Trying to load the model from Huggingface model hub...")

@@ -17,9 +17,9 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from numerical_table_questions.arguments import DataProcessingArgs
-from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
+from numerical_table_questions.utils.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 #from src.numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_caching import caching, delete_dataset
+from numerical_table_questions.utils.data_caching import caching, delete_dataset
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import remove_duplicate_qa_pairs
 
@@ -163,11 +163,11 @@ def extract_properties_posthoc(args: DataProcessingArgs, use_dummy_data=False):
         data_split = DUMMY_DATA
     else:
         base_filename = f"{args.table_corpus}_{args.splits[0]}_{args.dataset_name}"
-        data_split = caching(base_filename, cache_path=args.data_dir)
+        data_split = caching(base_filename, cache_path=args.cache_dir)
 
     deduplicated = data_split.map(remove_duplicate_qa_pairs)
     output = extract_template_fields_from_query(deduplicated)
-    output.save_to_disk(Path(args.data_dir) / ("stats_" + base_filename)), delete_dataset(output)
+    output.save_to_disk(Path(args.cache_dir) / ("stats_" + base_filename)), delete_dataset(output)
     return output
 
 
@@ -426,7 +426,7 @@ def main(args):
 
     # load tokenized data with properties
     base_filename = f"stats_{args.table_corpus}_{args.dataset_name}_tapex_tokenized"
-    data_split = caching(base_filename, cache_path=args.data_dir + '/viable_tensors')
+    data_split = caching(base_filename, cache_path=args.cache_dir + '/viable_tensors')
     data_split = data_split.map(extract_table_id)
     artifact = load_artifact_from_wandb('ne0ljo4e', wandb_entity='aiis-nlp')
     extended_predictions = add_column_from_artifact(data_split, artifact, {'text_prediction': 'text_predictions'})
@@ -482,7 +482,7 @@ if __name__ == '__main__':
 
     main(args)
     #base_filename = f"stats_{args.table_corpus}_{args.dataset_name}_tapex_tokenized"
-    #data_split = caching(base_filename, cache_path=args.data_dir + '/viable_tensors')
+    #data_split = caching(base_filename, cache_path=args.cache_dir + '/viable_tensors')
     #artifact = load_artifact_from_wandb('ne0ljo4e', wandb_entity='aiis-nlp')
     #extended_data = add_column_from_artifact(data_split, artifact, 'text_predictions')
     #print(artifact[0])

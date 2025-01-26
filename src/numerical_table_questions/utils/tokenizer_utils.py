@@ -11,8 +11,8 @@ from transformers import TapexTokenizer, TapasTokenizer
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
-from numerical_table_questions.data_utils import cast_to_reduced_int
-from numerical_table_questions.model_utils import extract_model_name
+from numerical_table_questions.utils.data_utils import cast_to_reduced_int
+from numerical_table_questions.utils.model_utils import extract_model_name
 from numerical_table_questions.sqlcoder_model import get_sqlcoder_tokenizer
 from numerical_table_questions.tapex_model import tapex_tokenizer_format, tapex_tokenize
 from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates
