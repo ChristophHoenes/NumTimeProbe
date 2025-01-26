@@ -25,6 +25,7 @@ dependencies:
   - tqdm
   - pynvml
   - matplotlib
+  - accelerate
 
   # Dev dependencies
   - black
@@ -36,6 +37,7 @@ dependencies:
   - pip
   - pip:
       - warmup-scheduler
+      - lightning[extra]
 
 # Non-standard section listing target platforms for conda-lock:
 platforms:
