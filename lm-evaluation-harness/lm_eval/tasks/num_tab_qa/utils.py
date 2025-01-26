@@ -1,11 +1,8 @@
 import os
 import pickle
-from pathlib import PurePath
 
 import datasets
-from typing import Optional
 
-from numerical_table_questions.data_utils import create_table_index
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 
 
