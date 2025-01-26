@@ -324,30 +324,30 @@ class TokenizationArgs:
 
 @dataclass
 class DataProcessingArgs:
-    data_dir: str = dArg(
+    cache_dir: str = dArg(
         default="/home/mamba/.cache", help="File path to the location in the file system where the data is stored."
     )
     table_corpus: str = dArg(
         default="wikitablequestions", help="Name of the table corpus the dataset is based on."
     )
-    dataset_name: str = dArg(
-        default="basic_dataset", help="Name of the dataset to use."
+    dataset_name: Optional[str] = dArg(
+        default="basic_dataset", help="Name of the dataset to use. If None the name will be determined from template_names when using generate_questions_from_templates."
     )
     splits: List[str] = dArg(
         default=["test", "train", "validation"], help="Name of the split(s) to use. Can be a single split or a list of splits."
     )
     #/home/mamba/.cache/templates/standard_templates
-    template_name: str = dArg(
-        default="/home/mamba/.cache/templates/standard_templates", help="Name of the template to use for question generation."
+    template_names: List[str] = dArg(
+        default=["standard_templates"], help="Name of the template to use for question generation."
     )
     num_proc: int = dArg(
         default=36, help="Number of processes to use in datasets map functions (multi processing). Highly system dependent. Might require 1 in some cases."
     )
     max_num_value_samples: int = dArg(
-        default=10, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
-                          "A higher value increases the number of generated questions at cost of diversity."
-                          "The same question type about the same columns will be generated max_num_value_samples times "
-                          "with just the value asked for in a condition differing among those questions.")
+        default=1, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
+                         "A higher value increases the number of generated questions at cost of diversity."
+                         "The same question type about the same columns will be generated max_num_value_samples times "
+                         "with just the value asked for in a condition differing among those questions.")
     )
     max_value_length: Optional[int] = dArg(
         default=256, help="Maximum number of characters allowed for values sampled from the table that occur in the questions."
