@@ -12,7 +12,7 @@ import datasets
 from dargparser import dargparse
 
 from numerical_table_questions.arguments import DataProcessingArgs
-from numerical_table_questions.data_caching import save_version, caching
+from numerical_table_questions.utils.data_caching import save_version, caching
 from numerical_table_questions.data_synthesis.table import Table, name_id_mapping
 
 
@@ -190,4 +190,4 @@ def main(hf_base_dataset: str, splits=('test', 'train', 'validation'), cache_pat
 
 if __name__ == "__main__":
     args = dargparse(DataProcessingArgs)
-    main(hf_base_dataset=args.table_corpus, splits=args.splits, cache_path=args.data_dir)
+    main(hf_base_dataset=args.table_corpus, splits=args.splits, cache_path=args.cache_dir)

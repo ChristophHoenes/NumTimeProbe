@@ -11,7 +11,7 @@ import datasets
 import numpy as np
 from tqdm import tqdm
 
-from numerical_table_questions.data_caching import caching, delete_dataset, save_version
+from numerical_table_questions.utils.data_caching import caching, delete_dataset, save_version
 from numerical_table_questions.data_synthesis.memmep_data_synth import (
     add_cached_field_to_dataset, create_table_batch_questions, deduplicate_field,
     extract_field_datasets, join_batch_datasets, flatten_table_batches, table_batches_add_pre_aggregation_row_counts
@@ -19,7 +19,7 @@ from numerical_table_questions.data_synthesis.memmep_data_synth import (
 from numerical_table_questions.data_synthesis.question import TableQuestion, restore_table_from_id, QUESTION_FEATURES
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
-from numerical_table_questions.data_utils import get_cache_path, lazy_multi_processing_posthoc_order
+from numerical_table_questions.utils.data_utils import get_cache_path, lazy_multi_processing_posthoc_order
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)

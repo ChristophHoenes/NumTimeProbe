@@ -5,9 +5,9 @@ from typing import Optional, Union, Dict, Tuple
 import datasets
 import torch
 
-from numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_utils import cutoff_num_questions, create_table_index
-from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
+from numerical_table_questions.utils.data_caching import caching
+from numerical_table_questions.utils.data_utils import cutoff_num_questions, create_table_index
+from numerical_table_questions.utils.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
 
 def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:

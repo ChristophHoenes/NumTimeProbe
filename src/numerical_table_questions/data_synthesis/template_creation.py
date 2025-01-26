@@ -10,13 +10,13 @@ from dargparser import dargparse
 from typing import Dict, List, Optional, Tuple, Union
 
 from numerical_table_questions.arguments import DataProcessingArgs
-from numerical_table_questions.data_caching import save_version, caching
+from numerical_table_questions.utils.data_caching import save_version, caching
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet, ensure_table_dataset_on_disk
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import create_table_dataset, load_table_dataset
-from numerical_table_questions.data_utils import get_cache_path
-from numerical_table_questions.sql_templates import (
+from numerical_table_questions.utils.data_utils import get_cache_path
+from numerical_table_questions.data_synthesis.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
 )
@@ -433,7 +433,7 @@ def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
     if tables is not None:
         table_corpus = 'custom_' + table_corpus
     else:
-        tables = load_table_dataset(table_corpus, split, args.data_dir)
+        tables = load_table_dataset(table_corpus, split, args.cache_dir)
     if len(tables) == 0:
         warnings.warn("Empty taple corpus encountered. Nothing to generate!")
     save_name = f"{table_corpus}_{dataset_name}_{split or 'all'}"
@@ -450,7 +450,7 @@ def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
         delete_intermediate_cache=args.delete_intermediate_cache,
         )
     if save:
-        save_version(dataset, args.data_dir, save_name)
+        save_version(dataset, args.cache_dir, save_name)
     return dataset
 
 
@@ -1181,19 +1181,19 @@ if __name__ == "__main__":
     # TODO separate template creation and dataset creation modules
     args = dargparse(DataProcessingArgs)
 
-    generate_questions_from_templates(templates=args.template_names,  #template_path or args.data_dir + '/templates/' + template_name,
+    generate_questions_from_templates(templates=args.template_names,  #template_path or args.cache_dir + '/templates/' + template_name,
                                       table_corpus=args.table_corpus,
                                       dataset_splits=args.splits,
                                       dataset_name=args.dataset_name,
-                                      dataset_description='All combinations of standard templates with the wikitablequestion corpus.',
+                                      dataset_description='All combinations of standard templates with the gittables_group_filtered corpus.',
                                       args=args,
                                       )
 
     # apply quality filters and save filtered versions
     for split in args.splits:
         dataset_name = f"{args.table_corpus}_{args.dataset_name or process_template_names(args.template_names)}_{split}"
-        dataset = caching(dataset_name, cache_path=args.data_dir)
-        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=args.data_dir, save=True)
+        dataset = caching(dataset_name, cache_path=args.cache_dir)
+        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=args.cache_dir, save=True)
     #main()
     # gittables example
     # table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')

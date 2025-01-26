@@ -17,9 +17,9 @@ from loguru import logger
 from transformers import PreTrainedModel
 
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
-from numerical_table_questions.dlib.frameworks.lightning import CUDAMetricsCallback
-from numerical_table_questions.dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
-from numerical_table_questions.dlib.frameworks.wandb import (
+from numerical_table_questions.utils.dlib.frameworks.lightning import CUDAMetricsCallback
+from numerical_table_questions.utils.dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
+from numerical_table_questions.utils.dlib.frameworks.wandb import (
     WANDB_ENTITY,
     WANDB_PROJECT,
     WandbCleanupDiskAndCloudSpaceCallback,
@@ -27,14 +27,13 @@ from numerical_table_questions.dlib.frameworks.wandb import (
     check_for_wandb_checkpoint_and_download_if_necessary,
 )
 from numerical_table_questions.data_loading import TableQADataModule
-from numerical_table_questions.system_helpers import (
-    choose_auto_accelerator,
-    choose_auto_devices,
+from numerical_table_questions.utils.system_helpers import (
     handle_batch_size_logic_,
     log_slurm_info,
+    parse_auto_arguments,
 )
 from numerical_table_questions.model import LightningWrapper
-from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
+from numerical_table_questions.utils.model_utils import get_model_module, get_model_specific_config
 
 
 @logger.catch(reraise=True)

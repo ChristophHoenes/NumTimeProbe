@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from numerical_table_questions.data_synthesis.question import TableQuestion, compute_arithmetic_expression_str
 from numerical_table_questions.data_synthesis.table import Table
-from numerical_table_questions.sql_templates import (
+from numerical_table_questions.data_synthesis.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator, SQLOperatorTemplate, SQLOverClauseTemplate, SQLTemplate,
     find_template_variables, get_operator_by_name
 )

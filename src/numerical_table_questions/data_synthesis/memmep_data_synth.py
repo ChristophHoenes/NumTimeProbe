@@ -3,11 +3,11 @@ from typing import Dict, List, Optional, Tuple, Type, Union
 
 import datasets
 
-from numerical_table_questions.data_caching import delete_dataset
+from numerical_table_questions.utils.data_caching import delete_dataset
 from numerical_table_questions.data_synthesis.question import TableQuestion
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
-from numerical_table_questions.sql_templates import SQLTemplate, SQLOperatorTemplate, SQLOverClauseTemplate
+from numerical_table_questions.data_synthesis.sql_templates import SQLTemplate, SQLOperatorTemplate, SQLOverClauseTemplate
 
 
 def create_all_question_fields(sample,

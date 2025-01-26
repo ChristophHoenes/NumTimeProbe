@@ -5,18 +5,11 @@ from typing import List, Optional, Union
 import datasets
 import lightning as L
 import torch
-from accelerate import PartialState
-from dargparser import dargparse
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers.pipelines.pt_utils import KeyDataset
 
-from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs, DataProcessingArgs
-from numerical_table_questions.evaluation import get_wandb_logger, parse_auto_arguments  # move to diferent utils module
-from numerical_table_questions.data_caching import save_version, caching
 from numerical_table_questions.data_synthesis.table import Table
-from numerical_table_questions.data_loading import SQLCoderDataModule
-from numerical_table_questions.metrics import str_match_accuracy
-from numerical_table_questions.model_utils import ModelTypeInfo
-from numerical_table_questions.sql_utils import execute_sql
+from numerical_table_questions.utils.sql_utils import execute_sql
 
 
 PROMPT_TEMPLATE = ("### Task\n"

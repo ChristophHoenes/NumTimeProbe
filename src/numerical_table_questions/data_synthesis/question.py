@@ -8,8 +8,8 @@ import datasets
 
 from numerical_table_questions.answer_coordinates import compute_answer_coordinates
 from numerical_table_questions.data_synthesis.table import Table
-from numerical_table_questions.data_utils import infer_python_type_from_str
-from numerical_table_questions.sql_utils import execute_sql
+from numerical_table_questions.utils.data_utils import infer_python_type_from_str
+from numerical_table_questions.utils.sql_utils import execute_sql
 
 
 QUESTION_FEATURES = {'nl_question': datasets.Value('string'),

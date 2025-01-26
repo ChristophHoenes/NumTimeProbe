@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
-from numerical_table_questions.sql_utils import execute_sql
+from numerical_table_questions.utils.sql_utils import execute_sql
 
 
 class AnswerCoordinates:
