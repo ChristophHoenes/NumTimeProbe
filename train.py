@@ -215,8 +215,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
 
     #################### Construct dataloaders & trainer #################
     dm = TableQADataModule(model.model_specs,
-                           table_corpus=args.table_corpus,
-                           dataset_name=args.dataset_name,
+                           table_corpus=args.table_corpus_name,
+                           dataset_name=args.dataset_suffix,
                            train_batch_size=args.batch_size_per_device,
                            eval_batch_size=args.eval_batch_size_per_device,
                            lazy_data_processing=args.lazy_data_processing,

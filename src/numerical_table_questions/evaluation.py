@@ -172,8 +172,8 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, data_args=DataProcess
         data_module_class = TableQADataModule
     # Initialize the data module that is appropriate for the model
     dm = data_module_class(model.model_specs,
-                           table_corpus=eval_args.table_corpus,
-                           dataset_name=eval_args.dataset_name,
+                           table_corpus=eval_args.table_corpus_name,
+                           dataset_name=eval_args.dataset_suffix,
                            train_batch_size=eval_args.batch_size_per_device,
                            eval_batch_size=eval_args.eval_batch_size_per_device,
                            lazy_data_processing=eval_args.lazy_data_processing,

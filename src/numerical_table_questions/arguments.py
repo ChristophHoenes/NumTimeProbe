@@ -193,11 +193,11 @@ class TrainingArgs:
     from_scratch_embeddings: bool = dArg(
         default=False, help="Do not use pre-trained weights to intialize the token embeddings."
     )
-    table_corpus: str = dArg(
-        default="gittables_group_filtered_standard_templates", help="Name of the table corpus the dataset is based on."
+    table_corpus_name: str = dArg(
+        default="wikitablequestions", help="Name of the table corpus the dataset is based on.",
     )
-    dataset_name: str = dArg(
-        default="100k", help="Name of the dataset to use."
+    dataset_suffix: str = dArg(
+        default="20k_with_count", help="Name of the dataset to use."
     )
     dummy_ipykernel_fix: str = dArg(
         default='',
