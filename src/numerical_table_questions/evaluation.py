@@ -237,7 +237,7 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
         string_predictions.extend(sqlcoder_generation(dataset_shard, pipe=pipe, batch_size=eval_args.eval_batch_size_per_device))
 
     # calculate metric
-    processed_predictions = post_processing_fn(string_predictions)
+    processed_predictions = post_processing_fn(string_predictions if isinstance(string_predictions[0], str) else [pred[0] for pred in string_predictions])
     processed_targets = post_processing_fn(created_datasets['test']['answers'])
     metric_outputs = metric_function(processed_predictions, processed_targets)
     # log metric result
@@ -246,16 +246,10 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
 
     print(metric_results)
     if wandb_logger is not None:
-        wandb_logger.log_dict(
-                metric_results,
-                on_step=False,
-                on_epoch=True,
-                sync_dist=True,
-                batch_size=len(string_predictions),
-                )
+        wandb_logger.log_metrics(metric_results)
 
-        text_predictions = [[pred] for pred in string_predictions]
-        wandb_logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)
+        predictions = [[pred, processed_predictions[i], sql] for i, pred, sql in enumerate(string_predictions)]
+        wandb_logger.log_text(key='predictions', columns=['text_predictions', 'post_processed_answer', 'sql'], data=predictions)
     else:
         predictions_save_path = os.path.join(
             data_args.cache_dir,
@@ -264,7 +258,8 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
         with open(predictions_save_path, 'a') as f:
             f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}\n")
             f.write(f"Metric results: {metric_results}\n")
-            prediction_lines = '\n'.join(string_predictions)
+            formated_predictions = [f"SQL: {sql}\nText Answer: {pred}\nPost-processed Answer: {processed_predictions[i]}" for i, pred, sql in enumerate(string_predictions)]
+            prediction_lines = '\n'.join(formated_predictions)
             f.write(f"Predictions:\n{prediction_lines}\n")
 
 
@@ -315,4 +310,4 @@ if __name__ == "__main__":
     # fine-tuned Tapex all standard templates smaller batch size (gas)
     #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/ywup1ksg/checkpoints/last_model_ckpt.ckpt')
     # fine-tuned OmniTab
-    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/izc1diit/checkpoints/last_model_ckpt.ckpt')
+    #evaluate_trained(args, misc_args, tokenizer_args, model_checkpoint_path='table-qa-debug/izc1diit/checkpoints/last_model_ckpt.ckpt')
