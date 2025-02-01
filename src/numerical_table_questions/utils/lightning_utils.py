@@ -1,4 +1,4 @@
-from pytorch_lightning import Trainer
+from lightning.pytorch import Trainer
 
 
 def get_lightning_trainer(args, wandb_logger=None, deterministic: bool = True) -> Trainer:
