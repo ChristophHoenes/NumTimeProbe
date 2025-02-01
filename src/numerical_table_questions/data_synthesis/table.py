@@ -11,6 +11,59 @@ import numpy as np
 import pandas as pd
 
 
+def deduplicate_column_names(column_names: List[str],
+                             extension_string: str = "_",
+                             use_numbering=True,
+                             while_killswitch: int = 3
+                             ) -> List[str]:
+    """Rename duplicate column names to get a unique set of names.
+
+        Args:
+            ...
+
+        Todos:
+            - finish Args and Returns in docstring
+            - sophisticated pattern detection in repeating columns
+
+    """
+    # TODO try finding patterns of column repetitions and assign them to leftmost
+    # (first column before the pattern)
+    # e.g team1, score, players, team2, score, players, team3, score, ...
+    # and concattenate names if they result in different pairs
+    # e.g team1, team1_score, team1_players, team2, team2_score, ...
+    #  else try _1, _2 ,etc.
+    assert not (extension_string == "" and use_numbering is False), \
+        "Either a non-empty extension_string or use_numbering=True must be used!"
+    original_column_names = column_names
+    while_counter = 0
+    while len(set([col.lower() for col in column_names])) != len(column_names):
+        if while_counter > while_killswitch:
+            raise Exception(
+                f"""
+                Unusual depth of correlated/duplicated column names
+                ({original_column_names}) detected!
+                Consider using different extension_string or a higher number of
+                while_killswitch.
+                """
+            )
+        col_name_counter = dict()
+        new_col_names = []
+        for col_name in column_names:
+            if col_name_counter.get(col_name.lower()) is None:
+                col_name_counter[col_name.lower()] = 1
+                new_col_names.append(col_name)
+            else:
+                col_name_counter[col_name.lower()] += 1
+                new_col_names.append(
+                    col_name
+                    + f"{extension_string}"
+                    + f"{col_name_counter[col_name.lower()] if use_numbering else ''}"
+                )
+        column_names = new_col_names
+        while_counter += 1
+    return column_names
+
+
 class Table:
 
     def __init__(self, data_dict: dict,
@@ -28,7 +81,7 @@ class Table:
         self.table_name = name or self._data_dict['name']
         self._preprocess_column_names()  # fills empty column names
         self.column_names = tuple(
-            self.deduplicate_column_names(self._data_dict['header'])
+            deduplicate_column_names(self._data_dict['header'])
         )
         self._source = source_name
         self._source_split = source_split
@@ -230,59 +283,6 @@ class Table:
             return [idx for idx, typ in enumerate(self._inferred_column_types)
                     if typ == type
                     ]
-
-    def deduplicate_column_names(self,
-                                 column_names: List[str],
-                                 extension_string: str = "_",
-                                 use_numbering=True,
-                                 while_killswitch: int = 3
-                                 ) -> List[str]:
-        """Rename duplicate column names to get a unique set of names.
-
-            Args:
-                ...
-
-            Todos:
-                - finish Args and Returns in docstring
-                - sophisticated pattern detection in repeating columns
-
-        """
-        # TODO try finding patterns of column repetitions and assign them to leftmost
-        # (first column before the pattern)
-        # e.g team1, score, players, team2, score, players, team3, score, ...
-        # and concattenate names if they result in different pairs
-        # e.g team1, team1_score, team1_players, team2, team2_score, ...
-        #  else try _1, _2 ,etc.
-        assert not (extension_string == "" and use_numbering is False), \
-            "Either a non-empty extension_string or use_numbering=True must be used!"
-        original_column_names = column_names
-        while_counter = 0
-        while len(set([col.lower() for col in column_names])) != len(column_names):
-            if while_counter > while_killswitch:
-                raise Exception(
-                    f"""
-                    Unusual depth of correlated/duplicated column names
-                    ({original_column_names}) detected!
-                    Consider using different extension_string or a higher number of
-                    while_killswitch.
-                    """
-                )
-            col_name_counter = dict()
-            new_col_names = []
-            for col_name in column_names:
-                if col_name_counter.get(col_name.lower()) is None:
-                    col_name_counter[col_name.lower()] = 1
-                    new_col_names.append(col_name)
-                else:
-                    col_name_counter[col_name.lower()] += 1
-                    new_col_names.append(
-                        col_name
-                        + f"{extension_string}"
-                        + f"{col_name_counter[col_name.lower()] if use_numbering else ''}"
-                    )
-            column_names = new_col_names
-            while_counter += 1
-        return column_names
 
     def _make_true_numeric(self):
         num_col_ids = [idx for idx, typ in enumerate(self._inferred_column_types)
