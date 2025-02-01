@@ -1,3 +1,4 @@
+from typing import List, Literal, Optional
 from time import time
 
 import torch
@@ -47,6 +48,36 @@ def accuracy_extract_target_position(model_outputs, ground_truth, compare_string
 def str_match_accuracy(predictions, targets):
     is_correct = [pred == targ for pred, targ in zip(predictions, targets)]
     return sum(is_correct)/len(is_correct), is_correct
+
+
+def float_match_accoracy(predictions, targets, tolerance=1e-3):
+    is_correct = []
+    for pred, target in zip(predictions, targets):
+        try:
+            if tolerance > 0:
+                is_correct.append(abs(float(target) - float(pred)) <= tolerance)
+            else:
+                is_correct.append(float(target) == float(pred))
+        except ValueError:
+            is_correct.append(False)
+    return sum(is_correct)/len(is_correct), is_correct
+
+
+def absolute_distance(predictions: List[str], targets: List[str], aggregation: Literal['mean', 'median'] = 'median', in_percent=False, nan_distance: Optional[float] = None):
+    if nan_distance is None:
+        target_values = [abs(float(target)) for target in targets]
+        nan_distance = sum(target_values)/len(target_values) if aggregation == 'mean' else sorted(target_values)[len(target_values)//2]
+    distances = []
+    for pred, target in zip(predictions, targets):
+        try:
+            if in_percent:
+                distances.append(abs(float(target) - float(pred)) / abs(float(target)))
+            else:
+                distances.append(abs(float(target) - float(pred)))
+        except ValueError:
+            distances.append(1.0 if in_percent else nan_distance)
+    metric_result = sum(distances)/len(distances) if aggregation == 'mean' else sorted(distances)[len(distances)//2]
+    return metric_result, distances
 
 
 def token_accuracy(model_outputs, ground_truth):
