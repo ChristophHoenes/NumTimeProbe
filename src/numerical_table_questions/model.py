@@ -547,7 +547,7 @@ class SQLCoder(L.LightningModule):
     def on_test_epoch_end(self):
         # log and clear predictions
         # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
-        text_predictions = [[pred] for pred in self.predictions]
+        predictions = [[pred, sql] for pred, sql in self.predictions]
         # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
-        self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
+        self.logger.log_table(key='predictions', columns=['text_predictions', 'sql'], data=predictions)  # assumes wandb logger
         self.predictions.clear()

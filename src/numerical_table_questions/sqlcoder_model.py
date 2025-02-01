@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import datasets
 import lightning as L
@@ -129,7 +129,7 @@ def run_inference(question: Union[str, List[str]], table: Union[dict, List[dict]
     return generated_queries
 
 
-def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table: Optional[Union[dict, List[dict]]] = None, model=None, tokenizer=None, pipe=None, batch_size: Optional[int] = None) -> Union[str, List[str]]:
+def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table: Optional[Union[dict, List[dict]]] = None, model=None, tokenizer=None, pipe=None, batch_size: Optional[int] = None) -> Tuple[Union[str, List[str]], Union[str, List[str]]]:
     is_single_query = False
     if pipe is None:
         pipe = get_sqlcoder_inference_pipeline(model, tokenizer)
@@ -149,6 +149,11 @@ def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table
     string_results = []
     for q, query in enumerate(generated_query):
         tab = table[q] if isinstance(table, list) else table
+        if tab is None:
+            if isinstance(question, datasets.Dataset):
+                tab = question[q]['tables']
+            else:
+                raise ValueError("Table must be provided for every question in dataset!")
         tab = Table.from_state_dict(tab)
         # execute_sql always uses df as table name
         query = query.replace(tab.table_name, 'df')
@@ -159,5 +164,5 @@ def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table
         else:
             string_results.append('')
     if is_single_query:
-        return string_results[0]
-    return string_results
+        return string_results[0], generated_query[0]
+    return string_results, generated_query
