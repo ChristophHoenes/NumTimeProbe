@@ -4,7 +4,7 @@ import logging
 import math
 import warnings
 import weakref
-from pathlib import PurePath
+from pathlib import PurePath, Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import datasets
@@ -389,6 +389,7 @@ class TableQuestionDataSet:
                               memory_mapped=True,
                               load_from_cache=True,
                               delete_intermediate_cache=False,
+                              cache_path: str = '/home/mamba/.cache',
                               ) -> Union[List[TableQuestion], datasets.Dataset]:
         """Creates the quelstions from the datasets' question templates and tables.
 
@@ -432,6 +433,13 @@ class TableQuestionDataSet:
                 raise TypeError(f"Argument tables is expected to be of type List[Table], str (path to dataset) or datasets.Dataset, but found {type(tables)}!")
             template_datasets = []
             for question_template in question_templates:
+                # check if partial results for a template are already cached and load instead of re-creationg
+                template_cache = Path(f'{cache_path}/{self.name}_{question_template._template_hash}')
+                if template_cache.exists():
+                    # load cached template dataset and continue loop with next template
+                    flattened_questions = caching(template_cache.name, cache_path=cache_path)
+                    template_datasets.append(flattened_questions)
+                    continue
                 features = table_dataset.features
                 features['questions'] = [QUESTION_FEATURES]
                 features['count_questions'] = [QUESTION_FEATURES]
@@ -609,7 +617,10 @@ class TableQuestionDataSet:
                                                                 )
                 # release space of hierarchical dataset after flattened versions have been created
                 delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
-                template_datasets.append(flattened_questions)
+                save_version(flattened_questions, str(template_cache))  # TODO include template_schema hash
+                template_datasets.append(template_cache)
+            # load template datasets and concatenate them
+            template_datasets = [caching(template_cache_path.name, cache_path=cache_path) for template_cache_path in template_datasets]
             flattened_questions = datasets.concatenate_datasets(template_datasets)
             for dataset in template_datasets:
                 delete_dataset(dataset) if delete_intermediate_cache else None
