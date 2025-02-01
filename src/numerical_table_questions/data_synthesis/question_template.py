@@ -26,6 +26,31 @@ logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
 
+def sample_assignments(allowed_columns_map: Dict[str, List[str]],  # column variables to allowed columns mapping
+                       num_assignments: int,
+                       retries: int = 5,
+                       ):
+    column_variable_bindings = []
+    for _ in range(num_assignments):
+        for r in range(retries):
+            assignment_dict = {}
+            already_assigned_cols = []
+            for col_var, allowed_cols in allowed_columns_map.items():
+                available_columns = list(set(allowed_cols) - set(already_assigned_cols))
+                if len(available_columns) == 0:
+                    warnings.warn(f"Could not find a valid column assignment for column variable '{col_var}' from columns {allowed_cols}! Retry {r+1} of {retries}.")
+                    break  # abort insatisfiable assignment
+                drawn_col = random.choice(available_columns)
+                assignment_dict[col_var] = drawn_col
+                already_assigned_cols.append(drawn_col)
+            if len(assignment_dict) == len(allowed_columns_map.keys()):
+                # only add assignment if it is not already present in the list (else retry)
+                if not any([assignment_dict == assignment for assignment in column_variable_bindings]):
+                    column_variable_bindings.append(assignment_dict)
+                    break  # abort retries on valid assignment
+    return column_variable_bindings
+
+
 class QuestionTemplate:
 
     def __init__(self,
@@ -194,6 +219,9 @@ class QuestionTemplate:
                                       max_num_value_samples: int = 10,
                                       max_value_length: Optional[int] = None,
                                       max_num_questions: Optional[int] = None,  # limit questions on same table if many columns
+                                      retries: int = 5,  # number of retries to find max_num_questions without generating all column permutations
+                                      # oversample the assignments (diversity_factor*max_num_questions) to increase the chance of sampling max_num_questions from different assignments
+                                      diversity_factor: int = 2,
                                       ) -> List[Dict[str, str]]:
         variables = find_template_variables(sql_template)
         # filter only type 'column' variables, that get assigned a column name instead of a value
@@ -203,25 +231,29 @@ class QuestionTemplate:
                             if self._schema['variables'][variable]['type'] == 'column']
         # mapping of column name to inferred data type
         infered_types = {name: typ for name, typ in zip(table.column_names, table._inferred_column_types)}
-        # all permutations of a table's column_names for the assignment length (determind by the number of column variables to fill)
-        # TODO make sure that the permutations do not become to big e.g compute n! / (n-r)! (n=column_names, r=len(col_vars))
-        # ...and if higher than threshold reduce n until threshold is met (sample (preferably numerical?) columns for subset of n)
-        column_assignments = list(itertools.permutations(table.column_names,
-                                                         len(column_variables),
-                                                         )
-                                  )
-        # match the names of the column variables with the assignments/bindings of the actual column names of the specific table
-        column_variable_bindings = [dict(zip(column_variables, assignment)) for assignment in column_assignments]
-        # check for unmet dtype constraints and filter invalid variable-column bindings
-        column_variable_bindings = [
-            binding
-            for binding in column_variable_bindings
-            if all(
-                [infered_types[assigned_col] in self._schema['variables'][var_name]['allowed_dtypes']
-                 for var_name, assigned_col in binding.items()
-                 ]
-                )
-            ]
+        if max_value_length is not None:
+            allowed_cols_by_col_var = {col_var: [col_name for col_name, col_typ in infered_types.items() if col_typ in self._schema['variables'][col_var]['allowed_dtypes']] for col_var in column_variables}
+            column_variable_bindings = sample_assignments(allowed_cols_by_col_var, diversity_factor*max_num_questions, retries)
+        else:
+            # all permutations of a table's column_names for the assignment length (determind by the number of column variables to fill)
+            # TODO make sure that the permutations do not become to big e.g compute n! / (n-r)! (n=column_names, r=len(col_vars))
+            # ...and if higher than threshold reduce n until threshold is met (sample (preferably numerical?) columns for subset of n)
+            column_assignments = list(itertools.permutations(table.column_names,
+                                                             len(column_variables),
+                                                             )
+                                      )
+            # match the names of the column variables with the assignments/bindings of the actual column names of the specific table
+            column_variable_bindings = [dict(zip(column_variables, assignment)) for assignment in column_assignments]
+            # check for unmet dtype constraints and filter invalid variable-column bindings
+            column_variable_bindings = [
+                binding
+                for binding in column_variable_bindings
+                if all(
+                    [infered_types[assigned_col] in self._schema['variables'][var_name]['allowed_dtypes']
+                     for var_name, assigned_col in binding.items()
+                     ]
+                     )
+                ]
         # short circuit if no valid variable assignment was found -> no questions for this TableQuestionTemplate are generated
         if len(column_variable_bindings) == 0:
             return []
