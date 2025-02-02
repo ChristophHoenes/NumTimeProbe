@@ -164,6 +164,7 @@ class LightningWrapper(L.LightningModule):
             self.register_buffer("samples_processed", torch.tensor(samples_processed))
             self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
         self.predictions = []
+        self.is_correct_logits = []
 
     # TODO make custom metric class and each metric defines its own requirements -> get rid of dependency with data_loading
     def _get_metric_requirements(self, metric_name):
@@ -426,6 +427,8 @@ class LightningWrapper(L.LightningModule):
                 # compute generation metric on postprocessed texts
                 metric_outputs = metric_function(processed_predictions, processed_targets, **metric_kwargs)
                 # log metric result
+                # TODO if metric_function.__name__ == exact_match_accuracy -> log additional information
+                self.is_correct_logits.extend(metric_outputs[1])
                 # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
                 batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
                 # TODO handling of logging additional outputs, if neccesary for some metric
@@ -451,6 +454,8 @@ class LightningWrapper(L.LightningModule):
         text_predictions = [[pred] for pred in self.predictions]
         # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
         self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
+        is_correct = [[logit] for logit in self.is_correct_logits]
+        self.logger.log_table(key='is_correct_logits', columns=['is_correct_logits'], data=is_correct)  # assumes wandb logger
         self.predictions.clear()
 
     def configure_optimizers(self):
