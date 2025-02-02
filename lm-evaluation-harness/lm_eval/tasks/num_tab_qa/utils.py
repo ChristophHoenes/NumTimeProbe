@@ -7,7 +7,7 @@ from numerical_table_questions.lazy_data_processing import QuestionTableIndexDat
 
 
 def process_docs(dataset: datasets.Dataset):
-    dataset = QuestionTableIndexDataset(dataset)
+    dataset = QuestionTableIndexDataset(dataset, lm_eval_style=True)
     print("Finished dataset preparation.")
     return dataset
 
@@ -42,18 +42,26 @@ def get_table_dataset(absolute_table_dataset_path: str) -> datasets.Dataset:
 
 def is_question_table_index_style_sample(question_data) -> bool:
     # QuestionTableIndexDataset style samples contain key 'data' as either datasets.Dataset or List[dict] type
-    return (isinstance(question_data.get('data'), datasets.Dataset) or
-            (isinstance(question_data.get('data'), list) and isinstance(question_data['data'][0], dict))
-            )
+    return (
+        'table_idx' in question_data.keys() or  # if self.lm_eval_style is True table_idx will be in the samples' keys
+        isinstance(question_data.get('data'), datasets.Dataset) or
+        (isinstance(question_data.get('data'), list) and isinstance(question_data['data'][0], dict))
+        )
 
 
 def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_format=True, cot=False, col_sep=', ', row_sep='\n', table_index_path='tmp_table_index.pickle'):
     if is_question_table_index_style_sample(question_data):
-        # reformat data to be consistent with other conditions
-        table_data = [question_data['data'][0]['table']]
-        question_data = {'questions': [question_data['data'][0]['questions'][question_data['question_number']]],
-                         'answers': [question_data['data'][0]['answers'][question_data['question_number']]],
-                         }
+        if 'table_dataset_path' in question_data.keys():
+            table_data = [datasets.Dataset.load_from_disk(question_data['table_dataset_path'])[question_data['table_idx']]]
+            question_data = {'questions': [question_data['question']],
+                             'answers': [question_data['answer']],
+                             }
+        else:
+            # reformat data to be consistent with other conditions
+            table_data = [question_data['data'][0]['table']]
+            question_data = {'questions': [question_data['data'][0]['questions'][question_data['question_number']]],
+                             'answers': [question_data['data'][0]['answers'][question_data['question_number']]],
+                             }
     elif question_only_format:
         with open(table_index_path, 'rb') as f:
             table_index = pickle.load(f)
@@ -103,5 +111,7 @@ def short_tabfact_sep_prompt_inference(table_data):
 
 def plain_single_answer(table_data):
     if is_question_table_index_style_sample(table_data):
+        if 'answer' in table_data.keys():
+            return table_data['answer']
         return table_data['data'][0]['answers'][table_data['question_number']]
     return table_data['answers'][0]

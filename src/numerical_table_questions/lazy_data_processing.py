@@ -48,7 +48,7 @@ def retrieve_table_from_table_dataset(table_search_id: str, table_dataset: Union
 
 
 class QuestionTableIndexDataset(torch.utils.data.Dataset):
-    def __init__(self, table_question_dataset: Union[str, Path, datasets.Dataset], data_dir: str = '/home/mamba/.cache', cutoff=None):
+    def __init__(self, table_question_dataset: Union[str, Path, datasets.Dataset], lm_eval_style: bool = False, data_dir: str = '/home/mamba/.cache', cutoff=None):
         if isinstance(table_question_dataset, (str, Path)):
             self.data_dir = data_dir
             self.dataset_version = table_question_dataset
@@ -67,6 +67,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         table_dataset_path = table_question_dataset[0].get('table_dataset_path')
         self.table_dataset = datasets.Dataset.load_from_disk(table_dataset_path) if table_dataset_path else None
         self.table_index = create_table_index(self.table_dataset, table_id_col_name='table_id') if self.table_dataset else None
+        self.lm_eval_style = lm_eval_style
 
     @property
     def features(self) -> dict:
@@ -94,6 +95,16 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         # maybe leave for collate for more flexibility
         # table = Table.from_state_dict(table_data['table'])
         # question = table_data['questions'][question_number]
+        if self.lm_eval_style:
+            return {
+                'table_idx': table_idx,
+                'question_number': question_number,
+                'answer': data[0]['answers'][question_number],
+                'question': data[0]['questions'][question_number],
+                'aggregator': data[0]['aggregators'][question_number],
+                'aggregation_num_rows': data[0]['aggregation_num_rows'][question_number],
+                'table_dataset_path': data[0]['table_dataset_path'],
+                }
         return {'data': data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
 
     def __iter__(self):
