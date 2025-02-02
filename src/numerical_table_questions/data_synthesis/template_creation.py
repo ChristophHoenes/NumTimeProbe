@@ -969,10 +969,11 @@ def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet]
                           cache_path: str = './data/NumTabQA/.cache',
                           ):
     if save and dataset_name is None:
+        # TODO infer from cache files
         raise ValueError("Need to provide dataset name if you want to save it!")
     # remove invalid answers
     if isinstance(dataset, datasets.Dataset):
-        dataset = dataset.map(lambda x: {'filter_condition': [x['answers'][i] != '' or x['answers'] != 'None'
+        dataset = dataset.map(lambda x: {'filter_condition': [x['answers'][i].lower() not in ['', 'none', 'nan', 'n/a']
                                                               for i in range(len(x['questions']))
                                                               ]
                                          },
@@ -986,7 +987,9 @@ def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet]
     # remove multi-answer questions
     if remove_multi_answer:
         if isinstance(dataset, datasets.Dataset):
-            dataset = dataset.map(lambda x: {'filter_condition': [x['is_multy_row_answer'][i] == 'False' or x['is_multy_row_answer'][i] is False
+            dataset = dataset.map(lambda x: {'filter_condition': [x['is_multy_row_answer'][i].lower() == 'false'
+                                                                  if isinstance(x['is_multy_row_answer'][i], str)
+                                                                  else x['is_multy_row_answer'][i] is False
                                                                   for i in range(len(x['questions']))
                                                                   ]
                                              },
