@@ -38,7 +38,7 @@ def sample_assignments(allowed_columns_map: Dict[str, List[str]],  # column vari
             for col_var, allowed_cols in allowed_columns_map.items():
                 available_columns = list(set(allowed_cols) - set(already_assigned_cols))
                 if len(available_columns) == 0:
-                    warnings.warn(f"Could not find a valid column assignment for column variable '{col_var}' from columns {allowed_cols}! Retry {r+1} of {retries}.")
+                    logger.debug(f"Could not find a valid column assignment for column variable '{col_var}' from columns {allowed_cols}! Retry {r+1} of {retries}.")
                     break  # abort insatisfiable assignment
                 drawn_col = random.choice(available_columns)
                 assignment_dict[col_var] = drawn_col
