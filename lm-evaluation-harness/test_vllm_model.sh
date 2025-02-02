@@ -24,7 +24,7 @@ lm_eval --model vllm \
     --tasks num_tab_qa_gittables_100k \
     $([ "$DEVICE" != "ALL" ] && echo "--device cuda:$DEVICE") \
     --batch_size auto:4 \
-    --output_path ./num_tab_qa_test_output/output.txt \
+    --output_path /home/mamba/.cache/lm_eval_outputs \
     --num_fewshot 1 \
     --trust_remote_code #\
     #--log_samples
