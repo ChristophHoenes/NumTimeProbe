@@ -120,7 +120,7 @@ class TrainingArgs:
 
     ####### General training ###########
     training_goal: int = dArg(
-        default=200_000, help="Number training goal units to train for.", aliases="--tg"
+        default=500_000, help="Number training goal units to train for.", aliases="--tg"
     )
     training_goal_unit: Literal["samples", "tokens", "optimizer-steps"] = dArg(
         default="samples", help="Unit of training_goal."
@@ -197,7 +197,7 @@ class TrainingArgs:
         default="wikitablequestions", help="Name of the table corpus the dataset is based on.",
     )
     dataset_suffix: str = dArg(
-        default="20k_with_count", help="Name of the dataset to use."
+        default="final", help="Name of the dataset to use."
     )
     dummy_ipykernel_fix: str = dArg(
         default='',
@@ -331,10 +331,10 @@ class DataProcessingArgs:
         default="wikitablequestions", help="Name of the table corpus the dataset is based on."
     )
     dataset_name: Optional[str] = dArg(
-        default="basic_dataset", help="Name of the dataset to use. If None the name will be determined from template_names when using generate_questions_from_templates."
+        default="final", help="Name of the dataset to use. If None the name will be determined from template_names when using generate_questions_from_templates."
     )
     splits: List[str] = dArg(
-        default=["test", "train", "validation"], help="Name of the split(s) to use. Can be a single split or a list of splits."
+        default=["test"], help="Name of the split(s) to use. Can be a single split or a list of splits."
     )
     #/home/mamba/.cache/templates/standard_templates
     template_names: List[str] = dArg(
