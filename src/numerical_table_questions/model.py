@@ -1,6 +1,6 @@
 import warnings
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Union, Dict, Callable, Tuple, List
+from dataclasses import dataclass, field, asdict
+from typing import TYPE_CHECKING, Optional, Union, Dict, Callable, Tuple, Literal
 
 import lightning as L
 import torch
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class OptimizerArgs:
     learning_rate: float
     optimizer_class: torch.optim.Optimizer = AdamW
-    kwargs: dict = field(
+    optimizer_kwargs: dict = field(
         default_factory=lambda: {
             'betas': (0.9, 0.999),
             'eps': 1e-8
@@ -32,7 +32,7 @@ class OptimizerArgs:
 
     def __post_init__(self):
         # pass learning rate as kwarg to the optimizer_class
-        self.kwargs['lr'] = self.learning_rate
+        self.optimizer_kwargs['lr'] = self.learning_rate
 
 
 def order_positional_arguments(inputs, target, input_map: dict) -> tuple:
@@ -98,6 +98,73 @@ def convert_type_and_device_for_lightning_module_log(metric_collection_output, d
         else:
             log_safe_metric_output[metric_name] = metric_collection_output[metric_name]  # Any datatype as is
     return log_safe_metric_output
+
+
+def get_default_optimizer(model_parameters,
+                          optimizer_class=AdamW,
+                          optimizer_kwargs: dict = {},
+                          learning_rate: float = 5e-5,
+                          weight_decay: float = 0.0,
+                          lr_warmup: float = 0.1,
+                          lr_schedule: Literal["cosine", "linear", "reduce_on_plateau", "constant", "cosine_with_restarts", "polynomial"] = "cosine",
+                          num_training_steps: Optional[int] = None,
+                          val_frequency: int = 1,
+                          rank: Optional[int] = None,
+                          **kwargs,
+                          ) -> dict:
+    if rank == 0:
+        logger.info(
+            f"Using lr: {learning_rate}, weight decay: {weight_decay} and warmup steps: {lr_warmup}"
+        )
+
+    named_parameters = list(model_parameters)
+
+    ### Filter out parameters that are not optimized (requires_grad == False)
+    named_parameters = list(
+        filter(lambda named_param: named_param[1].requires_grad, named_parameters)
+    )
+
+    ### Do not include LayerNorm and bias terms for weight decay https://forums.fast.ai/t/is-weight-decay-applied-to-the-bias-term/73212/6
+    no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
+    optimizer_parameters = [
+        {
+            "params": [p for n, p in named_parameters if not any(nd in n for nd in no_decay)],
+            "weight_decay": weight_decay,
+        },
+        {
+            "params": [p for n, p in named_parameters if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer = optimizer_class(optimizer_parameters, **optimizer_kwargs)
+    if lr_schedule == "reduce_on_plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=5, verbose=True
+        )
+        if lr_warmup > 0:  # Wrap ReduceLROnPlateau to enable LR warmup
+            scheduler = GradualWarmupScheduler(
+                optimizer,
+                multiplier=1,
+                total_epoch=lr_warmup,
+                after_scheduler=scheduler,
+            )
+        scheduler_config = {"frequency": val_frequency, "monitor": "train/loss"}
+    else:
+        scheduler_name = lr_schedule
+        if scheduler_name == "constant" and lr_warmup > 0:
+            scheduler_name += "_with_warmup"
+        scheduler = get_scheduler(
+            scheduler_name,
+            optimizer,
+            num_warmup_steps=lr_warmup,
+            num_training_steps=num_training_steps,
+        )
+        scheduler_config = {"frequency": 1}
+
+    return {
+        "optimizer": optimizer,
+        "lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},
+    }
 
 
 class LightningWrapper(L.LightningModule):
@@ -451,68 +518,19 @@ class LightningWrapper(L.LightningModule):
         self.test_metrics.reset()
         # log and clear predictions
         # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
-        text_predictions = [[pred] for pred in self.predictions]
         # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
-        self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
-        is_correct = [[logit] for logit in self.is_correct_logits]
-        self.logger.log_table(key='is_correct_logits', columns=['is_correct_logits'], data=is_correct)  # assumes wandb logger
+        print("columns", list(self.predictions.keys()), "data", list(self.predictions.values()))
+        self.logger.log_table(key='results', columns=list(self.predictions.keys()), data=list(zip(*self.predictions.values())))  # assumes wandb logger
         self.predictions.clear()
 
     def configure_optimizers(self):
-        if self.global_rank == 0:
-            logger.info(
-                f"Using lr: {self.args.learning_rate}, weight decay: {self.args.weight_decay} and warmup steps: {self.args.lr_warmup}"
-            )
-
-        named_parameters = list(self.model.named_parameters())
-
-        ### Filter out parameters that are not optimized (requires_grad == False)
-        named_parameters = list(
-            filter(lambda named_param: named_param[1].requires_grad, named_parameters)
-        )
-
-        ### Do not include LayerNorm and bias terms for weight decay https://forums.fast.ai/t/is-weight-decay-applied-to-the-bias-term/73212/6
-        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-        optimizer_parameters = [
-            {
-                "params": [p for n, p in named_parameters if not any(nd in n for nd in no_decay)],
-                "weight_decay": self.args.weight_decay,
-            },
-            {
-                "params": [p for n, p in named_parameters if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-            },
-        ]
-        optimizer = self.optimizer_args.optimizer_class(optimizer_parameters,
-                                                        **self.optimizer_args.kwargs)
-        if self.args.lr_schedule == "reduce_on_plateau":
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, patience=5, verbose=True
-            )
-            if self.args.lr_warmup > 0:  # Wrap ReduceLROnPlateau to enable LR warmup
-                scheduler = GradualWarmupScheduler(
-                    optimizer,
-                    multiplier=1,
-                    total_epoch=self.args.lr_warmup,
-                    after_scheduler=scheduler,
-                )
-            scheduler_config = {"frequency": self.args.val_frequency, "monitor": "train/loss"}
-        else:
-            scheduler_name = self.args.lr_schedule
-            if scheduler_name == "constant" and self.args.lr_warmup > 0:
-                scheduler_name += "_with_warmup"
-            scheduler = get_scheduler(
-                scheduler_name,
-                optimizer,
-                num_warmup_steps=self.args.lr_warmup,
-                num_training_steps=self.trainer.max_steps,
-            )
-            scheduler_config = {"frequency": 1}
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},
-        }
+        return get_default_optimizer(self.model.named_parameters(),
+                                     **asdict(self.args),
+                                     optimizer_class=self.optimizer_args.optimizer_class,
+                                     optimizer_kwargs=self.optimizer_args.optimizer_kwargs,
+                                     num_training_steps=self.trainer.max_steps,
+                                     rank=self.global_rank
+                                     )
 
 
 class SQLCoder(L.LightningModule):
