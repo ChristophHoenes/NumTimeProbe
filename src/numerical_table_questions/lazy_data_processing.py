@@ -99,6 +99,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
             return {
                 'table_idx': table_idx,
                 'question_number': question_number,
+                'question_id': idx,
                 'answer': data[0]['answers'][question_number],
                 'question': data[0]['questions'][question_number],
                 'aggregator': data[0]['aggregators'][question_number],
