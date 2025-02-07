@@ -1,9 +1,10 @@
 import os
 import logging
 import logging.config
+import warnings
 from datetime import datetime
 from pathlib import PurePath
-from typing import List, Type, Union
+from typing import List, Type, Union, Optional
 
 import datasets
 import torch
@@ -12,11 +13,11 @@ from dargparser import dargparse
 from transformers import TapexTokenizer, BartForConditionalGeneration
 
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs, DataProcessingArgs
-from numerical_table_questions.data_loading import TableQADataModule, SQLCoderDataModule, create_sqlcoder_dataset
+from numerical_table_questions.data_loading import TableQADataModule, SQLCoderDataModule, create_sqlcoder_dataset, path_from_components
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.utils.lightning_utils import get_lightning_trainer
-from numerical_table_questions.metrics import token_accuracy, str_match_accuracy
+from numerical_table_questions.metrics import token_accuracy, str_match_accuracy, float_match_accuracy, absolute_distance
 from numerical_table_questions.model import LightningWrapper, SQLCoder
 from numerical_table_questions.sqlcoder_model import (
     sqlcoder_generation,
@@ -146,9 +147,14 @@ def evaluate(model: Type[TableQaModel],
     return metric_result, predictions, ground_truth, eval_results
 
 
-def evaluate_trained(eval_args, misc_args, tokenizer_args, data_args=DataProcessingArgs(), model_checkpoint_path=None):
+def evaluate_trained(model_name: Optional[str] = None, model_checkpoint_path: str = None, eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_args=TokenizationArgs(), data_args=DataProcessingArgs()):
     resolved_checkpoint_path = model_checkpoint_path or eval_args.checkpoint_path
-    model_name = extract_model_name(eval_args.model_name_or_path)
+    extracted_model_name = extract_model_name(eval_args.model_name_or_path)
+    if model_name is not None and model_name != extracted_model_name:
+        warnings.warn("Provided model name does not match the model name in the configuration arguments! Trying the provided model name...")
+        eval_args.model_name_or_path = model_name
+    else:
+        model_name = extracted_model_name
     # Initiallize Weights&Biases logger to log artefacts
     tags = ['eval', model_name]
     wandb_logger = get_wandb_logger(misc_args, tags=tags)
@@ -158,7 +164,7 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, data_args=DataProcess
 
     if model_name == 'sqlcoder':
         if eval_args.optimize_inference_pipeline:
-            evaluate_sqlcoder(eval_args, misc_args, tokenizer_args, data_args, wandb_logger)
+            evaluate_sqlcoder(eval_args, misc_args, tokenizer_args, data_args, wandb_logger=wandb_logger)
             return
         else:
             model = SQLCoder(eval_args.model_name_or_path)
@@ -191,13 +197,16 @@ def evaluate_trained(eval_args, misc_args, tokenizer_args, data_args=DataProcess
                            num_dataloader_workers=eval_args.workers,
                            too_many_open_files_fix=misc_args.too_many_open_files_fix,
                            )
+    wandb_logger.log_text(key='eval_dataset_path', columns=['eval_dataset_path'], data=[[path_from_components(dm.table_corpus, dm.dataset_name, 'test')]])
     trainer.test(model, datamodule=dm)
 
 
-def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_args=TokenizationArgs(), data_args=DataProcessingArgs(), wandb_logger=None):
+def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_args=TokenizationArgs(), data_args=DataProcessingArgs(),
+                      metrics: dict = {'str_match_accuracy': str_match_accuracy, 'float_match_accuracy': float_match_accuracy, 'absolute_distance': absolute_distance},
+                      post_processing_fn=lambda x: [item.strip() for item in x],
+                      wandb_logger=None,
+                      ):
     parse_auto_arguments(eval_args)  # maybe not needed because accelerate determines gpus
-    post_processing_fn = lambda x: [item.strip() for item in x]
-    metric_function = str_match_accuracy
     if wandb_logger is None:
         wandb_logger = get_wandb_logger(misc_args, tags=['sqlcoder', 'eval'])
 
@@ -207,6 +216,8 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
         save_path = os.path.join(data_args.cache_dir,
                                  cache_file_name
                                  )
+        if split == 'test':
+            wandb_logger.log_text(key='eval_dataset_path', columns=['eval_dataset_path'], data=[[save_path]])
         if os.path.exists(save_path):
             created_datasets[split] = caching(cache_file_name=cache_file_name, cache_path=data_args.cache_dir)
         else:
@@ -226,7 +237,9 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
             ))
         for i in range(distributed_state.num_processes)
         ]
-    string_predictions = []
+    predictions = {'text_predictions': [], 'processed_text_predictions': [], 'sql': [], 'question_ids': []}
+    metric_results = {key: [] for key in metrics.keys()}
+    predictions.update(metric_results)
     with distributed_state.split_between_processes(data_shards) as dataset_shard:
         if isinstance(dataset_shard, list) and len(dataset_shard) > 1:
             dataset_shard = datasets.concatenate_datasets(dataset_shard)
@@ -234,22 +247,29 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
             dataset_shard = dataset_shard[0]
         if not isinstance(dataset_shard, datasets.Dataset):
             raise TypeError(f"Expected dataset shard to be of type datasets.Dataset but encountered {type(dataset_shard)}!")
-        string_predictions.extend(sqlcoder_generation(dataset_shard, pipe=pipe, batch_size=eval_args.eval_batch_size_per_device))
+        string_predictions, sql_predictions = sqlcoder_generation(dataset_shard, pipe=pipe, batch_size=eval_args.eval_batch_size_per_device)
+        predictions['text_predictions'].extend(string_predictions)
+        predictions['sql'].extend(sql_predictions)
+        predictions['question_ids'].extend(dataset_shard['question_id'])
 
-    # calculate metric
+    # postprocess generation
     processed_predictions = post_processing_fn(string_predictions if isinstance(string_predictions[0], str) else [pred[0] for pred in string_predictions])
     processed_targets = post_processing_fn(created_datasets['test']['answers'])
-    metric_outputs = metric_function(processed_predictions, processed_targets)
+    predictions['processed_text_predictions'].extend(processed_predictions)
+
     # log metric result
-    # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
-    metric_results = {f"test/{metric_function.__name__}": metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs}
+    batch_metric_results = {}
+    for metric_name, metric_function in metrics.items():
+        metric_outputs = metric_function(processed_predictions, processed_targets)
+        metric_results[metric_name].extend([float(is_correct) for is_correct in metric_outputs[1]] if isinstance(metric_outputs, tuple) else metric_outputs)
+        # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
+        batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
 
-    print(metric_results)
     if wandb_logger is not None:
-        wandb_logger.log_metrics(metric_results)
-
-        predictions = [[pred, processed_predictions[i], sql] for i, pred, sql in enumerate(string_predictions)]
-        wandb_logger.log_text(key='predictions', columns=['text_predictions', 'post_processed_answer', 'sql'], data=predictions)
+        wandb_logger.log_metrics(batch_metric_results)
+        predictions.update(metric_results)  # put metric results in same table as predictions
+        wandb_logger.log_table(key='results', columns=list(predictions.keys()), data=list(zip(*predictions.values())))  # assumes wandb logger
+        predictions.clear()
     else:
         predictions_save_path = os.path.join(
             data_args.cache_dir,
@@ -257,8 +277,10 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
             )
         with open(predictions_save_path, 'a') as f:
             f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}\n")
-            f.write(f"Metric results: {metric_results}\n")
-            formated_predictions = [f"SQL: {sql}\nText Answer: {pred}\nPost-processed Answer: {processed_predictions[i]}" for i, pred, sql in enumerate(string_predictions)]
+            formatted_metrics = [f"{key}: {v}\n" for key, values in metric_results.items() for v in values]
+            metric_lines = ''.join(formatted_metrics)
+            f.write(f"Metric results:\n {metric_lines}\n")
+            formated_predictions = [f"SQL: {sql}\nText Answer: {pred}\nPost-processed Answer: {proc_pred}" for pred, proc_pred, sql in zip(string_predictions, processed_predictions, sql_predictions)]
             prediction_lines = '\n'.join(formated_predictions)
             f.write(f"Predictions:\n{prediction_lines}\n")
 
@@ -291,6 +313,10 @@ if __name__ == "__main__":
     #import os
     #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     args, misc_args, tokenizer_args, data_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs, DataProcessingArgs))
+    # new signature
+    evaluate_trained(eval_args=args, misc_args=misc_args, tokenizer_args=tokenizer_args, data_args=data_args)
+    # also possible like e.g. evaluate_trained(model_name='tapex', model_checkpoint_path='table-qa-debug/ywup1ksg/checkpoints/last_model_ckpt.ckpt')
+
     # old training data (agg count 1 a lot)
     #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
     # new training data (agg count 20%)
@@ -298,7 +324,7 @@ if __name__ == "__main__":
     # new training data (agg count 0%)
     #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
     # zero shot
-    evaluate_trained(args, misc_args, tokenizer_args, data_args)
+    #evaluate_trained(args, misc_args, tokenizer_args, data_args)
     # trained with lazy processing (e.g. truncating too long tables)
     #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
     # trained lazy diff
