@@ -230,8 +230,9 @@ class LightningWrapper(L.LightningModule):
         if not training_args.resume_training:
             self.register_buffer("samples_processed", torch.tensor(samples_processed))
             self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
-        self.predictions = []
-        self.is_correct_logits = []
+        self.predictions = {'text_predictions': [], 'processed_text_predictions': [], 'question_ids': []}
+        metric_results = {key: [] for key in self.generation_metrics.keys()}
+        self.predictions.update(metric_results)
 
     # TODO make custom metric class and each metric defines its own requirements -> get rid of dependency with data_loading
     def _get_metric_requirements(self, metric_name):
@@ -471,7 +472,10 @@ class LightningWrapper(L.LightningModule):
             print('model_device:', self.model.device, 'input_device: ', input_ids.device)
             print('max_target_len', max_target_len)
             string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, inputs, outputs, max_target_len=max_target_len, test_dataset=test_dataset)
-            self.predictions.extend(string_predictions)
+            self.predictions['text_predictions'].extend(string_predictions)
+            if isinstance(inputs, dict):
+                # keep track of question_ids for sorting in correct order (distributed setting or shuffeled dataloader)
+                self.predictions['question_ids'].extend(inputs['question_id'].tolist() if isinstance(inputs['question_id'], torch.Tensor) else inputs['question_id'])
 
             # apply post processing specified for metric to both, generated prediction and text targets
             batch_metric_results = dict()
@@ -494,11 +498,12 @@ class LightningWrapper(L.LightningModule):
                 # compute generation metric on postprocessed texts
                 metric_outputs = metric_function(processed_predictions, processed_targets, **metric_kwargs)
                 # log metric result
-                # TODO if metric_function.__name__ == exact_match_accuracy -> log additional information
-                self.is_correct_logits.extend(metric_outputs[1])
+                self.predictions[metric_name].extend([float(is_correct) for is_correct in metric_outputs[1]] if isinstance(metric_outputs, tuple) else metric_outputs)
                 # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
                 batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
                 # TODO handling of logging additional outputs, if neccesary for some metric
+            # TODO currently only last postprocessing is logged think of one postprocessing function for all metrics?
+            self.predictions['processed_text_predictions'].extend(processed_predictions)
 
             # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
             batch_metric_results = convert_type_and_device_for_lightning_module_log(batch_metric_results, self.device)
@@ -519,7 +524,6 @@ class LightningWrapper(L.LightningModule):
         # log and clear predictions
         # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
         # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
-        print("columns", list(self.predictions.keys()), "data", list(self.predictions.values()))
         self.logger.log_table(key='results', columns=list(self.predictions.keys()), data=list(zip(*self.predictions.values())))  # assumes wandb logger
         self.predictions.clear()
 
@@ -540,25 +544,34 @@ class SQLCoder(L.LightningModule):
         self.tokenizer = get_sqlcoder_tokenizer() if model_name_or_path.lower() == 'sqlcoder' else get_sqlcoder_tokenizer(model_name_or_path)
         self.pipeline = get_sqlcoder_inference_pipeline(self.model, self.tokenizer)
         self.model_specs = model_type_info or ModelTypeInfo(model_name_or_path)
-        self.predictions = []
         self.post_processing_fn = post_processing_fn
         self.metric_function = metric_function
         self.metric_name = metric_name
+        self.predictions = {'text_predictions': [], 'processed_text_predictions': [], 'sql': [], 'question_ids': []}
+        metric_results = {key: [] for key in self.generation_metrics.keys()}
+        self.predictions.update(metric_results)
 
     def test_step(self, batch, batch_idx):
         # generate predictions for batch contents
         questions = batch['questions']
         tables = batch['tables']
         text_targets = batch['answers']
-        string_predictions = sqlcoder_generation(questions, tables, self.model, self.tokenizer, self.pipeline)
-        self.predictions.extend(string_predictions)
-        # calculate metric
+        string_predictions, sql_predictions = sqlcoder_generation(questions, tables, self.model, self.tokenizer, self.pipeline)
+        self.predictions['text_predictions'].extend(string_predictions)
+        self.predictions['sql'].extend(sql_predictions)
+        self.predictions['question_ids'].extend(batch['question_id'])  # keep track of question_ids for sorting in correct order (distributed setting or shuffeled dataloader)
+        # process predictions and targets in the same way
         processed_predictions = self.post_processing_fn(string_predictions)
         processed_targets = self.post_processing_fn(text_targets)
-        metric_outputs = self.metric_function(processed_predictions, processed_targets)
-        # log metric result
-        # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
-        batch_metric_results = {f"test/{self.metric_name}": metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs}
+        self.predictions['processed_text_predictions'].extend(processed_predictions)
+        # calculate metrics
+        batch_metric_results = {}
+        for metric_name, metric_function in self.generation_metrics.items():
+            metric_outputs = metric_function(processed_predictions, processed_targets)
+            # log metric results
+            self.predictions[metric_name].extend([float(is_correct) for is_correct in metric_outputs[1]] if isinstance(metric_outputs, tuple) else metric_outputs)
+            # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
+            batch_metric_results[f"test/{self.metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
         self.log_dict(
                 batch_metric_results,
                 on_step=False,
@@ -569,8 +582,5 @@ class SQLCoder(L.LightningModule):
 
     def on_test_epoch_end(self):
         # log and clear predictions
-        # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
-        predictions = [[pred, sql] for pred, sql in self.predictions]
-        # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
-        self.logger.log_table(key='predictions', columns=['text_predictions', 'sql'], data=predictions)  # assumes wandb logger
+        self.logger.log_table(key='results', columns=list(self.predictions.keys()), data=list(zip(*self.predictions.values())))  # assumes wandb logger
         self.predictions.clear()
