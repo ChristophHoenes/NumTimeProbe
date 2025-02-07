@@ -50,7 +50,7 @@ def str_match_accuracy(predictions, targets):
     return sum(is_correct)/len(is_correct), is_correct
 
 
-def float_match_accoracy(predictions, targets, tolerance=1e-3):
+def float_match_accuracy(predictions, targets, tolerance=0.0):
     is_correct = []
     for pred, target in zip(predictions, targets):
         try:
@@ -63,19 +63,30 @@ def float_match_accoracy(predictions, targets, tolerance=1e-3):
     return sum(is_correct)/len(is_correct), is_correct
 
 
-def absolute_distance(predictions: List[str], targets: List[str], aggregation: Literal['mean', 'median'] = 'median', in_percent=False, nan_distance: Optional[float] = None):
-    if nan_distance is None:
-        target_values = [abs(float(target)) for target in targets]
-        nan_distance = sum(target_values)/len(target_values) if aggregation == 'mean' else sorted(target_values)[len(target_values)//2]
-    distances = []
-    for pred, target in zip(predictions, targets):
+def absolute_distance(predictions: List[str], targets: List[str], aggregation: Literal['mean', 'median'] = 'median', in_percent=True, nan_distance: Optional[float] = None):
+    target_values = [float(target) if target.lower() not in ['none', '', 'nan'] else float('-inf') for target in targets]
+    prediction_values = []
+    for pred in predictions:
         try:
-            if in_percent:
-                distances.append(abs(float(target) - float(pred)) / abs(float(target)))
-            else:
-                distances.append(abs(float(target) - float(pred)))
+            prediction_values.append(float(pred))
         except ValueError:
-            distances.append(1.0 if in_percent else nan_distance)
+            prediction_values.append(None)
+    # what distance/penalty to use for nan values in predictions
+    if nan_distance is None:
+        target_magnitude = [abs(v) for v in target_values]
+        nan_distance = sum(target_magnitude)/len(target_magnitude) if aggregation == 'mean' else sorted(target_values)[len(target_values)//2]
+    distances = []
+    for pred, target_value in zip(prediction_values, target_values):
+        if in_percent:
+            if pred is None:
+                distances.append(10.0)
+            else:
+                distances.append(min(10.0, abs(target_value - pred) / abs(target_value + 1e-7)))
+        else:
+            if pred is None:
+                distances.append(nan_distance)
+            else:
+                distances.append(abs(target_value - float(pred)))
     metric_result = sum(distances)/len(distances) if aggregation == 'mean' else sorted(distances)[len(distances)//2]
     return metric_result, distances
 
