@@ -425,7 +425,7 @@ class LightningWrapper(L.LightningModule):
                 loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
             else:
                 # retrieve loss
-                loss = outputs[self.model_specs.loss_out_id]
+                loss = outputs.get(self.model_specs.loss_out_id, torch.tensor(float('nan')))
 
             # update state of torchmetrics
             self.test_metrics.update(outputs, target)
