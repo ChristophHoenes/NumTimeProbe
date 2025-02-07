@@ -966,7 +966,7 @@ def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet]
                           save: bool = True,
                           dataset_name: Optional[str] = None,
                           num_proc: Optional[int] = 12,
-                          cache_path: str = './data/NumTabQA/.cache',
+                          cache_path: str = '/home/mamba/.cache',
                           ):
     if save and dataset_name is None:
         # TODO infer from cache files
