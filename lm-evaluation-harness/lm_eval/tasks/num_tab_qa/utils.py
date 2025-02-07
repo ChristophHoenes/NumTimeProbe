@@ -52,7 +52,7 @@ def is_question_table_index_style_sample(question_data) -> bool:
 def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_format=True, cot=False, col_sep=', ', row_sep='\n', table_index_path='tmp_table_index.pickle'):
     if is_question_table_index_style_sample(question_data):
         if 'table_dataset_path' in question_data.keys():
-            table_data = [datasets.Dataset.load_from_disk(question_data['table_dataset_path'])[question_data['table_idx']]]
+            table_data = [datasets.Dataset.load_from_disk(question_data['table_dataset_path'])[question_data['table_idx']]['table']]
             question_data = {'questions': [question_data['question']],
                              'answers': [question_data['answer']],
                              }
