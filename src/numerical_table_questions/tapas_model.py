@@ -115,18 +115,37 @@ def get_aggregator_string(predicted_aggregation_indices) -> List[str]:
 
 
 # from examples on https://huggingface.co/docs/transformers/v4.41.3/en/model_doc/tapas#usage-inference
-def get_answer_cell_values(table: pd.DataFrame, predicted_answer_coordinates) -> List[str]:
+def get_answer_cell_values(table: pd.DataFrame, predicted_answer_coordinates, is_coordinate_start_idx_zero=True) -> List[str]:
+    num_rows = table.shape[0]
+    num_cols = table.shape[1]
+
+    if not is_coordinate_start_idx_zero:
+        predicted_answer_coordinates = [[(coordinate[0] - 1, coordinate[1] - 1)
+                                         for coordinate in coordinates
+                                         ]
+                                        for coordinates in predicted_answer_coordinates
+                                        ]
     answers = []
     for coordinates in predicted_answer_coordinates:
         if len(coordinates) == 1:
             # only a single cell:
-            answers.append(table.iat[coordinates[0]])
+            if coordinates[0][0] >= num_rows or coordinates[0][1] >= num_cols or coordinates[0][0] < 0 or coordinates[0][1] < 0:
+                warnings.warn("Answer coordinates out of bounds. Skipping cell...")
+                answers.append("")
+            else:
+                answers.append(table.iat[coordinates[0]])
         else:
             # multiple cells
             cell_values = []
             for coordinate in coordinates:
-                cell_values.append(table.iat[coordinate])
-            answers.append(", ".join(cell_values))
+                if coordinate[0] >= num_rows or coordinate[1] >= num_cols or coordinate[0] < 0 or coordinate[1] < 0:
+                    warnings.warn("Answer coordinates out of bounds. Skipping cell...")
+                else:
+                    cell_values.append(table.iat[coordinate])
+            if len(cell_values) > 0:
+                answers.append(", ".join(cell_values))
+            else:
+                answers.append("")
     return answers
 
 
