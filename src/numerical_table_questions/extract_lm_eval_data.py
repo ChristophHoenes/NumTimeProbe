@@ -1,15 +1,18 @@
 import json
 from datetime import datetime
 from pathlib import PurePath
-from typing import List, Optional, Union
+from typing import Dict, List, Callable, Optional, Union
 
 import datasets
+
+from numerical_table_questions.utils.data_caching import save_version
 
 
 DUMMY_DATA_PATH = f'{__file__.replace(PurePath(__file__).name, '')}dummy_data_lm_eval_outout.jsonl'
 
 
 def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'question_number', 'answer', 'aggregator', 'aggregation_num_rows'], metric_names: List[str] = ['exact_match'], datasets_save_path: Optional[str] = None) -> List[dict]:
+    model_name = PurePath(file_path).parent.name
     with open(file_path, 'r') as json_file:
         jsons = list(json_file)
 
@@ -17,12 +20,22 @@ def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'ques
     for json_sample in jsons:
         data_dict = json.loads(json_sample)
         extracted_fields = {field: data_dict['doc'][field] for field in fields}
-        extracted_fields.update({'doc_id': data_dict['doc_id'], 'resps': data_dict['resps'], 'filtered_resps': data_dict['filtered_resps']})
+        extracted_fields.update({'doc_id': data_dict['doc_id'], 'resps': data_dict['resps'], 'filtered_resps': data_dict['filtered_resps'], 'model_name': model_name})
         extracted_fields.update({metric_name: data_dict[metric_name] for metric_name in metric_names})
         result_list.append(extracted_fields)
     if datasets_save_path is not None:
         return datasets.Dataset.from_list(result_list).save_to_disk(datasets_save_path)
     return result_list
+
+
+def calculate_posthoc_metrics(dataset: datasets.Dataset, metrics: List[Dict[str, Callable]], fn_kwargs: dict = {}, num_proc: int = 12):
+    new_dataset = dataset.map(lambda x: {metric_name: metric_func(x['filtered_resps'], [x['answer']])[0]
+                                         for metric_name, metric_func in metrics.items()},
+                              desc=f"Computing metrics {list(metrics.keys())} posthoc from responses...",
+                              fn_kwargs=fn_kwargs,
+                              num_proc=num_proc,
+                              )
+    save_version(new_dataset, str(PurePath(dataset.cache_files[0]['filename']).parent))
 
 
 def calculate_results(file_path: str, distinguish_field: str = 'aggregator', distinguish_values: Optional[Union[List[str], List[float]]] = None, metric_names: List[str] = ['exact_match'], distinguish_samples: Optional[int] = None, num_bins: int = 10) -> dict:
