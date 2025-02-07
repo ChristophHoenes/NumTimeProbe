@@ -619,8 +619,7 @@ class TableQuestionDataSet:
                 delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                 save_version(flattened_questions, str(template_cache))  # TODO include template_schema hash
                 template_datasets.append(template_cache)
-            # load template datasets and concatenate them
-            template_datasets = [caching(template_cache_path.name, cache_path=cache_path) for template_cache_path in template_datasets]
+            # concatenate template datasets
             flattened_questions = datasets.concatenate_datasets(template_datasets)
             for dataset in template_datasets:
                 delete_dataset(dataset) if delete_intermediate_cache else None
