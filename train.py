@@ -150,6 +150,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     if args.resume_training and args.checkpoint_path:  # load weights, optimizer states, scheduler state, ...\
         model = LightningWrapper.load_from_checkpoint(
             args.checkpoint_path,
+            model=get_model_module(args.model_name_or_path),
             effective_batch_size_per_step=effective_batch_size_per_step,
         )
         logger.info(f"Loded model with {model.samples_processed.item()} processed samples from checkpoint. "
