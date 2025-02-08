@@ -952,6 +952,7 @@ def apply_filter_condition(dataset: datasets.Dataset, num_proc: Optional[int] = 
                                              ]
                                   for col_name in x.keys()
                                   if isinstance(x[col_name], list)
+                                  and col_name != 'filter_condition'
                                   },
                        desc="Applying pre-computed filter condition...",
                        remove_columns=['filter_condition'],
