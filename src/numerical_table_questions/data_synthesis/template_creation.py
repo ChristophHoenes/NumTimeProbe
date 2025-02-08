@@ -985,6 +985,19 @@ def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet]
     else:
         dataset._remove_unanswered_questions()
 
+    # remove invalid ordinal comparison with empty string
+    if isinstance(dataset, datasets.Dataset):
+        # more exact condition? TODO/import is_numeric:
+        # any([ordinal_comparator in x['sql'][i] and is_numeric(x['sql'][i].split(ordinal_comparator)[-1].strip()) for ordinal_comparator in [' < ', ' > ', ' <= ', ' >= ']])
+        dataset = dataset.map(lambda x: {'filter_condition': ["than ''?" not in x['questions'][i]
+                                                              for i in range(len(x['questions']))
+                                                              ]
+                                         },
+                              desc="Prepare filter_condition: valid ordinal comparison...",
+                              num_proc=num_proc,
+                              )
+        dataset = apply_filter_condition(dataset, num_proc=num_proc)
+
     # remove multi-answer questions
     if remove_multi_answer:
         if isinstance(dataset, datasets.Dataset):
