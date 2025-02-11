@@ -1,5 +1,6 @@
 import random
 import re
+import statistics
 import wandb
 import warnings
 from collections.abc import Iterable
@@ -172,6 +173,8 @@ def extract_properties_posthoc(args: DataProcessingArgs, use_dummy_data=False):
 
 
 def infer_is_multi_answer_posthoc(sample: dict) -> dict:
+    # TODO Caution! apparently True/False are can be converted to 'true'/'false' by datasets 
+    # so str(sample['is_multy_row_answer'][i]) != 'True'/'False'
     return {'is_multy_row_answer': [sample['aggregators'][i] == '' and int(sample['aggregation_num_rows'][i] or -1) > 1
                                     for i in range(len(sample['questions']))
                                     ]
@@ -367,6 +370,79 @@ def get_table_by_id(table_dataset: datasets.Dataset, table_id: str, table_id_col
             else:
                 return Table.from_state_dict(table_dataset[t])
     raise ValueError(f"Table ID {table_id} could not be found in the provided table_dataset!")
+
+
+def extract_column_names_from_table(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
+    return {sample['table'][table_id_col_name]: sample['table']['deduplicated_column_names'] for sample in table_dataset}
+
+
+def consistent_quoting_map(sample: dict, nl_questions: bool = True, table_column_names_map=None) -> dict:
+    if isinstance(sample['table'], str):
+        if table_column_names_map is None:
+            raise ValueError("table_column_names_map must be provided when dataset only contains table_ids as tables!")
+        column_names = table_column_names_map[sample['table']]
+    else:
+        column_names = sample['table']['deduplicated_column_names']
+    queries = sample['sql']
+    for column_name in column_names:
+        new_queries = [(query
+                        .replace(f" '{column_name}' ", f" {column_name} ")  # remove single quotes
+                        .replace(f"column '{column_name}'?", f" {column_name}?")  # remove single quotes when column at end (no condition) also avoid gittables column_name = value
+                        .replace(f" {column_name} ", f' "{column_name}" ')  # add double quotes
+                        .replace(f" {column_name}?", f' "{column_name}"?')  # add double quotes when column at end (no condition)
+                        )
+                       for query in queries
+                       ]
+    if nl_questions:
+        questions = sample['questions']
+        for column_name in column_names:
+            new_questions = [(question
+                              .replace(f" '{column_name}' ", f" {column_name} ")  # remove single quotes
+                              .replace(f"column '{column_name}'?", f" {column_name}?")  # remove single quotes when column at end (no condition) also avoid gittables column_name = value
+                              .replace(f" {column_name} ", f' "{column_name}" ')  # add double quotes
+                              .replace(f" {column_name}?", f' "{column_name}"?')  # add double quotes when column at end (no condition)
+                              )
+                             for question in questions
+                             ]
+            questions = new_questions
+        return {'sql': new_queries, 'questions': new_questions}
+    return {'sql': new_queries}
+
+
+def gather_statistics_map(sample: dict, stat_fields: List[str] = ['aggregation_num_rows', 'num_conditions', 'question_lengths', 'answer_lengths'], hist_fields: List[Tuple[str, List[str]]] = [('aggregators', ['', 'avg', 'sum', 'min', 'max', 'count'])]) -> dict:
+    new_fields = {}
+    for stat_field in stat_fields:
+        stat_field_float = []
+        for x in sample[stat_field]:
+            try:
+                stat_field_float.append(float(x))
+            except ValueError:
+                warnings.warn(f"Could not convert value {x} to float for field {stat_field}! Skipping value...")
+                continue
+        if len(stat_field_float) == 0:
+            warnings.warn(f"No valid values found for field {stat_field}! Ignoring entire field...")
+            continue
+        new_fields[f'{stat_field}_mean'] = statistics.mean(stat_field_float)
+        if len(stat_field_float) > 2:
+            new_fields[f'{stat_field}_std'] = statistics.stdev(stat_field_float)
+        else:
+            warnings.warn(f"No standard deviation for field {stat_field} because less then two values!")
+        new_fields[f'{stat_field}_median'] = statistics.median(stat_field_float)
+    for hist_field in hist_fields:
+        new_fields[f'{stat_field}_hist'] = {val: sample[hist_field[0]].count(val) for val in hist_field[1]}
+    return new_fields
+
+
+def aggregate_statistics_map(dataset: datasets.Dataset) -> dict:
+    new_fields = {}
+    for column_name in dataset.column_names:
+        if '_hist' not in column_name:
+            new_fields[column_name + '_mean'] = statistics.mean(dataset[column_name])
+        if '_mean' in column_name and len(dataset[column_name]) > 2:
+            new_fields[column_name + '_std'] = statistics.stdev(dataset[column_name])
+        if '_hist' in column_name:
+            new_fields[column_name + '_hist'] = {val: sum(x[val] for x in dataset[column_name]) for val in dataset[column_name][0].keys()}
+    return new_fields
 
 
 def create_table_index(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
