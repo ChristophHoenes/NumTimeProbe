@@ -129,10 +129,11 @@ def get_sample_from_batch_dict(batch_dict: dict, idx: int, keep_dim: bool = True
             }
 
 
-def model_specific_generation(model_name, model, tokenizer, inputs, outputs=None, **kwargs) -> List[str]:
+def model_specific_generation(model_name_or_path: str, model, tokenizer, inputs, outputs=None, **kwargs) -> List[str]:
     """
         outputs are the outputs of a regular forward pass (some models e.g. tapas need it for generation).
     """
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
         case 'tapas':
             # current implementation only works with dict style batch
