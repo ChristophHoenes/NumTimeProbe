@@ -8,6 +8,7 @@ from transformers import AutoModel
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config, tapas_generation
 from numerical_table_questions.tapex_model import tapex_model_type_info, tapex_model, tapex_config
+from numerical_table_questions.reastap_model import reastap_model
 from numerical_table_questions.sqlcoder_model import get_sqlcoder_model
 
 
@@ -51,7 +52,7 @@ def extract_model_name(model_name_or_path: str) -> str:
 def get_model_type_info(model_name_or_path: str):
     model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
-        case 'tapex' | 'omnitab':
+        case 'tapex' | 'omnitab' | 'reastap':
             return ModelTypeInfo(**tapex_model_type_info())
         case 'tapas':
             return ModelTypeInfo(**tapas_model_type_info())
@@ -72,6 +73,8 @@ def get_model_module(model_name_or_path: str):
             model = tapas_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else tapas_model()
         case 'sqlcoder':
             model = get_sqlcoder_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else get_sqlcoder_model()
+        case 'reastap':
+            model = reastap_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else reastap_model()
         case _:
             # TODO use logger instead of print
             print(f"No model with the name {model_name} is explicitly implemented. Trying to load the model from Huggingface model hub...")
@@ -83,7 +86,7 @@ def get_model_specific_config(model_name_or_path: str) -> dict:
     model_name = extract_model_name(model_name_or_path)
     model_type_info = get_model_type_info(model_name)
     match model_name.lower():
-        case 'tapex' | 'omnitab':
+        case 'tapex' | 'omnitab' | 'restap':
             other_kwargs = tapex_config()
         case 'tapas':
             other_kwargs = tapas_config()

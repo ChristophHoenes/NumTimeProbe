@@ -29,6 +29,8 @@ def get_tokenizer(model_name_or_path: str, **kwargs):
             return TapasTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "google/tapas-base", **kwargs)
         case 'sqlcoder':
             return get_sqlcoder_tokenizer(model_name_or_path if '/' in model_name_or_path else "defog/sqlcoder-7b-2", **kwargs)
+        case 'restap':
+            return AutoTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "Yale-LILY/reastap-large", **kwargs)
         case _:
             # TODO proper logging
             print(f"No tokenizer explicitly implemented for model '{model_name_or_path}'. Trying to load tokenizer from Huggingface model hub...")
@@ -38,7 +40,7 @@ def get_tokenizer(model_name_or_path: str, **kwargs):
 def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name_or_path: str, lazy: bool = False, is_eval: bool = False, **kwargs):
     model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
-        case 'tapex' | 'omnitab':
+        case 'tapex' | 'omnitab' | 'restap':
             return tapex_tokenizer_format(data, lazy, **kwargs)
         case 'tapas':
             return tapas_tokenizer_format(data, lazy, is_eval, **kwargs)
