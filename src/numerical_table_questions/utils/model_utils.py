@@ -86,7 +86,7 @@ def get_model_specific_config(model_name_or_path: str) -> dict:
     model_name = extract_model_name(model_name_or_path)
     model_type_info = get_model_type_info(model_name)
     match model_name.lower():
-        case 'tapex' | 'omnitab' | 'restap':
+        case 'tapex' | 'omnitab' | 'reastap':
             other_kwargs = tapex_config()
         case 'tapas':
             other_kwargs = tapas_config()
