@@ -8,10 +8,10 @@ import datasets
 from numerical_table_questions.utils.data_caching import save_version
 
 
-DUMMY_DATA_PATH = f'{__file__.replace(PurePath(__file__).name, '')}dummy_data_lm_eval_outout.jsonl'
+DUMMY_DATA_PATH = f"{__file__.replace(PurePath(__file__).name, '')}dummy_data_lm_eval_outout.jsonl"
 
 
-def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'question_number', 'answer', 'aggregator', 'aggregation_num_rows'], metric_names: List[str] = ['exact_match'], datasets_save_path: Optional[str] = None) -> List[dict]:
+def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'question_number', 'question_id', 'answer', 'aggregator', 'aggregation_num_rows'], metric_names: List[str] = ['exact_match'], save_path: Optional[str] = None) -> datasets.Dataset:
     model_name = PurePath(file_path).parent.name
     with open(file_path, 'r') as json_file:
         jsons = list(json_file)
@@ -23,24 +23,47 @@ def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'ques
         extracted_fields.update({'doc_id': data_dict['doc_id'], 'resps': data_dict['resps'], 'filtered_resps': data_dict['filtered_resps'], 'model_name': model_name})
         extracted_fields.update({metric_name: data_dict[metric_name] for metric_name in metric_names})
         result_list.append(extracted_fields)
-    if datasets_save_path is not None:
-        return datasets.Dataset.from_list(result_list).save_to_disk(datasets_save_path)
-    return result_list
+    results_dataset = datasets.Dataset.from_list(result_list)
+    if save_path is not None:
+        return save_version(results_dataset, save_path)
+    return results_dataset
 
 
-def calculate_posthoc_metrics(dataset: datasets.Dataset, metrics: List[Dict[str, Callable]], fn_kwargs: dict = {}, num_proc: int = 12):
+def convert_jsonl_dataset_schema(file_path: str, rename_fields: Dict[str, str], remove_fields: Union[List[str], bool] = True , save_path: Optional[str] = None, num_proc: int = 12) -> datasets.Dataset:
+    """ Rename and select/remove certain columns from the schema of a jsonl file. Cannot access nested fields. """
+    jsonl_dataset = datasets.Dataset.from_list(file_path)
+    if remove_fields is False:
+        remove_fields = []
+    elif remove_fields is True:
+        remove_fields = list(jsonl_dataset.column_names)
+
+    results_dataset = jsonl_dataset.map(lambda x: {new: x[old] for old, new in rename_fields.items()},
+                                        remove_columns=list(set(remove_fields + list(rename_fields.keys()))),
+                                        desc="Changing schema of original jsonl...",
+                                        num_proc=num_proc,
+                                        )
+    if save_path is not None:
+        save_version(results_dataset, save_path)
+    return results_dataset
+
+
+def calculate_posthoc_metrics(dataset: datasets.Dataset, metrics: Dict[str, Callable], fn_kwargs: dict = {}, num_proc: int = 12, save_path: Optional[str] = None, infer_save_path: bool = False) -> datasets.Dataset:
     new_dataset = dataset.map(lambda x: {metric_name: metric_func(x['filtered_resps'], [x['answer']])[0]
                                          for metric_name, metric_func in metrics.items()},
                               desc=f"Computing metrics {list(metrics.keys())} posthoc from responses...",
                               fn_kwargs=fn_kwargs,
                               num_proc=num_proc,
                               )
-    save_version(new_dataset, str(PurePath(dataset.cache_files[0]['filename']).parent))
+    if save_path is not None:
+        save_version(new_dataset, save_path)
+    elif infer_save_path:
+        save_version(new_dataset, str(PurePath(dataset.cache_files[0]['filename']).parent.parent))
+    return new_dataset
 
 
 def calculate_results(file_path: str, distinguish_field: str = 'aggregator', distinguish_values: Optional[Union[List[str], List[float]]] = None, metric_names: List[str] = ['exact_match'], distinguish_samples: Optional[int] = None, num_bins: int = 10) -> dict:
     path_object = PurePath(file_path)
-    results_path = file_path.replace(path_object.name, '') + f'/{distinguish_field}_results_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}_' + path_object.name.replace('.jsonl', '.json')
+    results_path = file_path.replace(path_object.name, '') + f"/{distinguish_field}_results_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}_" + path_object.name.replace('.jsonl', '.json')
     try:
         data = datasets.load_from_disk(file_path)
     except FileNotFoundError:
