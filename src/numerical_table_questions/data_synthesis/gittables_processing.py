@@ -16,7 +16,7 @@ from tqdm import tqdm
 from numerical_table_questions.utils.data_caching import caching, save_version
 from numerical_table_questions.data_synthesis.table import Table, deduplicate_column_names
 from numerical_table_questions.data_synthesis.template_creation import apply_quality_filters
-from numerical_table_questions.data_utils import infer_is_multi_answer_posthoc
+from numerical_table_questions.utils.data_utils import infer_is_multi_answer_posthoc
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
