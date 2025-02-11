@@ -218,6 +218,7 @@ def is_value_in_condition_col(data_sample):
 
 
 def sample_questions(table_dataset_sample: dict, len_dataset: int = -1, min_num_questions: int = -1, cutoff: Optional[int] = None, seed: Optional[int] = None) -> dict:
+    """ Returns a subsample of the questions in the dataset with at most cutoff number of questions but at least one question per table."""
     if len_dataset < 0 or min_num_questions < 0:
         raise ValueError("Valid (true positive) values need to be passed as kwargs for len_dataset and min_num_questions!")
     if seed is not None:
@@ -225,7 +226,7 @@ def sample_questions(table_dataset_sample: dict, len_dataset: int = -1, min_num_
     # currently this seems to be a LazyRow object (see https://github.com/huggingface/datasets/blob/main/src/datasets/formatting/formatting.py)
     fields = list(table_dataset_sample.data.keys())
     # if there is a cutoff sample equal amounts of questions per table (else min_num_questions)
-    max_questions_per_table = (cutoff or len_dataset*min_num_questions) // len_dataset
+    max_questions_per_table = max((cutoff or len_dataset*min_num_questions) // len_dataset, 1)  # at least one question per table
     # draw sample ids at random
     num_questions = len(table_dataset_sample['questions'])
     sampled_ids = random.sample(range(num_questions), k=min(max_questions_per_table, num_questions))

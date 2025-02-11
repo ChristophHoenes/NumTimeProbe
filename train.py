@@ -137,6 +137,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         mode="min",
         auto_insert_metric_name=False,
         every_n_train_steps=args.model_log_frequency,
+        save_top_k=args.save_top_k,
     )
     if args.early_stopping_patience > 0:
         early_stop_callback = EarlyStopping(

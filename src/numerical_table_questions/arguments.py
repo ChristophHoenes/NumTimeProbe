@@ -140,6 +140,11 @@ class TrainingArgs:
         help="Period in training goal units between two model checkpoints. If <1, compute as fraction of training_goal",
         aliases="--mfq",
     )
+    save_top_k: int | None = dArg(
+        default=None,
+        help="Only keep the top k best checkpoints (based on smallest validation loss). If None, keep all checkpoints.",
+        aliases="--topk",
+    )
     val_before_training: bool = dArg(default=True, help="Run one validation epoch before training.")
     val_only: bool = dArg(default=False, help="Run one validation epoch before training.")
     early_stopping_patience: int = dArg(
