@@ -26,6 +26,7 @@ from numerical_table_questions.utils.dlib.frameworks.wandb import (
     check_checkpoint_path_for_wandb,
     check_for_wandb_checkpoint_and_download_if_necessary,
 )
+from numerical_table_questions.utils.lightning_utils import disambiguate_val_frequency_for_lightning
 from numerical_table_questions.data_loading import TableQADataModule
 from numerical_table_questions.utils.system_helpers import (
     handle_batch_size_logic_,
@@ -77,7 +78,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     )
 
     parse_auto_arguments(args)
-    effective_batch_size_per_step = handle_batch_size_logic_(args)
+    effective_batch_size_per_forward = handle_batch_size_logic_(args)
 
     ########### Log config ###########
     for arg_group in parsed_arg_groups:
@@ -102,22 +103,31 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
 
     if args.training_goal_unit == "samples":
         goal_units_per_optimizer_step = args.effective_batch_size
-        goal_units_per_forward_pass = effective_batch_size_per_step
+        goal_units_per_forward_pass = effective_batch_size_per_forward
     elif args.training_goal_unit == "tokens":
         goal_units_per_optimizer_step = args.effective_batch_size * args.max_sequence_length
-        goal_units_per_forward_pass = effective_batch_size_per_step * args.max_sequence_length
+        goal_units_per_forward_pass = effective_batch_size_per_forward * args.max_sequence_length
     elif args.training_goal_unit == "optimizer-steps":
         goal_units_per_optimizer_step = 1
         goal_units_per_forward_pass = 1 / args.gradient_accumulation_steps
     else:
         raise ValueError(f"Unknown training goal unit: {args.training_goal_unit}")
 
+    val_frequency_arguments = disambiguate_val_frequency_for_lightning(args)
+    val_frequency = val_frequency_arguments["val_check_interval"]
+    check_val_every_n_epoch = val_frequency_arguments["check_val_every_n_epoch"]
+
     # Lightning does `gradient_accumulation_steps` many forward passes per trainer step (step := optimization step)
     args.training_goal = int(args.training_goal / goal_units_per_optimizer_step)
-    val_frequency_in_optimization_steps = int(args.val_frequency / goal_units_per_optimizer_step)
+    if val_frequency > 1:
+        val_frequency_in_optimization_steps = int(val_frequency / goal_units_per_optimizer_step)
+    else:
+        val_frequency_in_optimization_steps = f"(val_steps_per_epoch := 1/{val_frequency}) * (optimizer_steps_per_epoch := len(train_loader) / args.effective_batch_size)"
 
-    # val_frequency in lightning is every forward pass NOT optimization step # NOTE: as of June 2023
-    args.val_frequency = int(args.val_frequency / goal_units_per_forward_pass)
+    # val_frequency in lightning is every forward pass/training batch NOT optimization step # NOTE: as of June 2023
+    if val_frequency > 1:
+        # convert goal_units to training batches
+        val_frequency = int(val_frequency / goal_units_per_forward_pass)
     args.model_log_frequency = int(args.model_log_frequency / goal_units_per_optimizer_step)
     args.lr_warmup = int(args.lr_warmup / goal_units_per_optimizer_step)
 
@@ -151,7 +161,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         model = LightningWrapper.load_from_checkpoint(
             args.checkpoint_path,
             model=get_model_module(args.model_name_or_path),
-            effective_batch_size_per_step=effective_batch_size_per_step,
+            effective_batch_size_per_step=args.effective_batch_size,
         )
         logger.info(f"Loded model with {model.samples_processed.item()} processed samples from checkpoint. "
                     " Also loaded all training states - ready to resume training."
@@ -159,7 +169,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     else:  # create new model
         model_module = get_model_module(args.model_name_or_path)
         model_config = get_model_specific_config(args.model_name_or_path)
-        model = LightningWrapper(model_module, args, **model_config, effective_batch_size_per_step=effective_batch_size_per_step)
+        model = LightningWrapper(model_module, args, **model_config, effective_batch_size_per_step=args.effective_batch_size)
 
     # initiallize from pretrained but do not resume training, instead fresh start (if condition is True)
     if args.checkpoint_path and not args.resume_training:
@@ -230,8 +240,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     # Initialize trainer
     trainer = Trainer(
         max_steps=args.training_goal,
-        val_check_interval=args.val_frequency,
-        check_val_every_n_epoch=None,  # validation based on steps instead of epochs
+        val_check_interval=val_frequency,
+        check_val_every_n_epoch=check_val_every_n_epoch,  # validation based either on steps (val_frequency) or epochs
         devices=args.cuda_device_ids or args.num_devices,
         accelerator=args.accelerator,
         strategy=distributed_strategy,

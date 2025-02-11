@@ -125,10 +125,15 @@ class TrainingArgs:
     training_goal_unit: Literal["samples", "tokens", "optimizer-steps"] = dArg(
         default="samples", help="Unit of training_goal."
     )
-    val_frequency: float = dArg(
+    val_frequency_goal_unit: float | None = dArg(
         default=0.05,
-        help="Period in training goal units between two validations. If <1, compute as fraction of training_goal",
+        help="Period in training goal units between two validations. If <1, compute as fraction of training_goal. Can only be set when val_frequency_per_epoch is None.",
         aliases="--vfq",
+    )
+    val_frequency_per_epoch: float | None = dArg(
+        default=None,
+        help="If >1 run val_frequency_epoch many validations every training epoch. If <1, compute one validation every val_frequency_per_epoch training epochs. Can only be set when val_frequency_goal_unit is None.",
+        aliases="--vfqe",
     )
     model_log_frequency: float = dArg(
         default=0.2,
@@ -213,8 +218,12 @@ class TrainingArgs:
     )
 
     def __post_init__(self):
-        if self.val_frequency < 1:
-            self.val_frequency = int(self.training_goal * self.val_frequency)
+        if self.val_frequency_goal_unit is None and self.val_frequency_per_epoch is None:
+            raise ValueError("Either val_frequency_goal_unit or val_frequency_per_epoch must be set.")
+        if self.val_frequency_goal_unit is not None and self.val_frequency_per_epoch is not None:
+            raise ValueError("Only one of val_frequency_goal_unit or val_frequency_per_epoch can be set.")
+        if self.val_frequency_goal_unit < 1:
+            self.val_frequency_goal_unit = int(self.training_goal * self.val_frequency_goal_unit)
         if self.model_log_frequency < 1:
             self.model_log_frequency = int(self.training_goal * self.model_log_frequency)
         if self.lr_warmup < 1:
