@@ -82,7 +82,7 @@ def handle_batch_size_logic_(args: "TrainingArgs"):
         (
             args.batch_size_per_device,
             args.gradient_accumulation_steps,
-            effective_batch_size_per_step,
+            effective_batch_size_per_forward,
         ) = infer_batch_size_per_device(
             args.num_devices, args.effective_batch_size, args.batch_size_per_device
         )
@@ -94,15 +94,15 @@ def handle_batch_size_logic_(args: "TrainingArgs"):
             f"{args.gradient_accumulation_steps} gradient accumulation steps."
         )
     else:
-        effective_batch_size_per_step = args.num_devices * args.batch_size_per_device
-        args.effective_batch_size = effective_batch_size_per_step * args.gradient_accumulation_steps
+        effective_batch_size_per_forward = args.num_devices * args.batch_size_per_device
+        args.effective_batch_size = effective_batch_size_per_forward * args.gradient_accumulation_steps
         logger.info(
             f"Effective batch size {args.effective_batch_size} based on specified args "
             f"{args.num_devices} {ACCELERATOR}s, "
             f"{args.batch_size_per_device} batch size per {ACCELERATOR} and "
             f"{args.gradient_accumulation_steps} gradient accumulation steps."
         )
-    return effective_batch_size_per_step
+    return effective_batch_size_per_forward
 
 
 def log_slurm_info():
