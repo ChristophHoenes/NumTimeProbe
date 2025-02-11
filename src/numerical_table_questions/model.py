@@ -246,7 +246,7 @@ class LightningWrapper(L.LightningModule):
                 warnings.warn(f"Unknown generation_metric {metric_name}! No specific preparation is executed.")
 
     def forward(self, inputs, target=None, is_eval=False):
-        print('in_forward', 'input_type: ', type(inputs), 'len_inputs: ', len(inputs))
+        #print('in_forward', 'input_type: ', type(inputs), 'len_inputs: ', len(inputs))
         if not is_eval and self.model_specs.input_targets and target is None:
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
@@ -257,7 +257,7 @@ class LightningWrapper(L.LightningModule):
             forward_kwargs = {key: convert_to_long_tensor_if_int_tensor(value)
                               for key, value in forward_kwargs.items()
                               }
-            print(forward_kwargs['input_ids'].shape, forward_kwargs['input_ids'].device)
+            #print(forward_kwargs['input_ids'].shape, forward_kwargs['input_ids'].device)
             outputs = self.model(**forward_kwargs)
         else:
             # always wrap inputs in tuple
@@ -400,7 +400,7 @@ class LightningWrapper(L.LightningModule):
         self.valid_metrics.reset()
 
     def test_step(self, batch, batch_idx):
-        print('in_test_step', 'batch_size: ', len(batch['input_ids']), 'type: ', type(batch))
+        #print('in_test_step', 'batch_size: ', len(batch['input_ids']), 'type: ', type(batch))
         # TODO log model predictions token and text
         if isinstance(batch, dict):
             target = batch.get('targets')
@@ -469,8 +469,8 @@ class LightningWrapper(L.LightningModule):
             # TODO test if this leaks to much information (e.g are results worse if this is hard coded to 20)
             max_target_len = max([len(sample) for sample in text_targets])
             test_dataset = self.trainer.test_dataloaders.dataset
-            print('model_device:', self.model.device, 'input_device: ', input_ids.device)
-            print('max_target_len', max_target_len)
+            #print('model_device:', self.model.device, 'input_device: ', input_ids.device)
+            #print('max_target_len', max_target_len)
             string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, inputs, outputs, max_target_len=max_target_len, test_dataset=test_dataset)
             self.predictions['text_predictions'].extend(string_predictions)
             if isinstance(inputs, dict):
