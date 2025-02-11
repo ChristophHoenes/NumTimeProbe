@@ -181,14 +181,6 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         torch.nn.init.xavier_uniform_(model.model.get_input_embeddings().weight)
         # torch.nn.init.normal_(model.model.get_input_embeddings().weight) # alternative
 
-    if current_process_rank == 0:
-        model.on_train_start = lambda: logger.info(
-            f"Total optimizer steps: {args.training_goal} | "
-            f"LR warmup steps: {args.lr_warmup} | "
-            f"Validation Frequency: {val_frequency_in_optimization_steps} | "
-            f"Model Log Frequencey: {args.model_log_frequency} | "
-            f"Effective batch size: {args.effective_batch_size}"
-        )
     wandb_logger.watch(model, log="gradients", log_freq=500, log_graph=False)
 
     # https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
@@ -268,6 +260,16 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         if args.val_only:
             exit(0)
 
+    if current_process_rank == 0:
+        logger.info(
+            f"\nTotal optimizer steps: {args.training_goal} | "
+            f"\nLR warmup steps: {args.lr_warmup} | "
+            f"\nValidation Frequency (in optimizer steps): {val_frequency_in_optimization_steps} | "
+            f"\nValidation Frequency (passed to trainer): {val_frequency} | "
+            f"\nModel Log Frequencey: {args.model_log_frequency} | "
+            f"\nEffective batch size (per optimizer step): {args.effective_batch_size} | "
+            f"\nEffective batch size (per forward pass): {effective_batch_size_per_forward}"
+            )
     logger.info(f"Rank {current_process_rank} | Starting training...")
     trainer.fit(model, datamodule=dm, ckpt_path=args.checkpoint_path if args.resume_training else None)
     if trainer.interrupted and IS_ON_SLURM:
