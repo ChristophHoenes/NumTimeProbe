@@ -281,12 +281,11 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         # Validate after training has finished
         trainer.validate(model, datamodule=dm)
 
+        logger.info(f"Trying to save checkpoint (rank={current_process_rank})...")
+        save_path = str(Path(checkpoint_callback.dirpath) / "last_model_ckpt.ckpt")
+        trainer.save_checkpoint(save_path)
+
         if current_process_rank == 0:
-            logger.info("Trying to save checkpoint....")
-
-            save_path = str(Path(checkpoint_callback.dirpath) / "last_model_ckpt.ckpt")
-            trainer.save_checkpoint(save_path)
-
             logger.info("Collecting PL checkpoint for wandb...")
             artifact = wandb.Artifact(name=f"model-{wandb_logger.experiment.id}", type="model")
             artifact.add_file(save_path, name="model.ckpt")
