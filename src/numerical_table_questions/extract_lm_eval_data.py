@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from pathlib import PurePath
+from pathlib import PurePath, Path
 from typing import Dict, List, Callable, Optional, Union
 
 import datasets
@@ -11,7 +11,7 @@ from numerical_table_questions.utils.data_caching import save_version
 DUMMY_DATA_PATH = f"{__file__.replace(PurePath(__file__).name, '')}dummy_data_lm_eval_outout.jsonl"
 
 
-def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'question_number', 'question_id', 'answer', 'aggregator', 'aggregation_num_rows'], metric_names: List[str] = ['exact_match'], save_path: Optional[str] = None) -> datasets.Dataset:
+def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'question_number', 'question', 'answer', 'aggregator', 'aggregation_num_rows'], metric_names: List[str] = ['exact_match'], save_path: Optional[str] = None) -> datasets.Dataset:
     model_name = PurePath(file_path).parent.name
     with open(file_path, 'r') as json_file:
         jsons = list(json_file)
@@ -27,6 +27,58 @@ def extract_jsonl_fields(file_path: str, fields: List[str] = ['table_idx', 'ques
     if save_path is not None:
         return save_version(results_dataset, save_path)
     return results_dataset
+
+
+def add_table_length():
+    # index_dataset = QuestionTableIndexDataset(table_question_dataset_path)
+    #lm_results.map(lambda x: {'table_length': len(index_dataset[x['table_idx']]['data_dict']['rows']}), num_proc=12)
+    pass
+
+
+def question_to_main_expression(question: str) -> str:
+    if 'of the difference between column' in question:
+        return 'difference'
+    if 'of the ratio of row' in question:
+        return 'ratio'
+    if 'of the expression' in question:
+        return 'expression'
+    return 'single_column'
+
+
+def question_to_condition(question: str) -> str:
+    if 'has a value equal to' in question:
+        return '='
+    if 'has a value different from' in question:
+        return '!='
+    if 'has a value greater than' in question:
+        return '>'
+    if 'has a value greater or equal than' in question:
+        return '>='
+    if 'has a value lesser than' in question:
+        return '<'
+    if 'has a value lesser or equal than' in question:
+        return '<='
+    return ''
+
+
+def add_template_classes(dataset: datasets.Dataset) -> datasets.Dataset:
+    dataset = dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question']),
+                                     'condition': question_to_condition(x['question'])},
+                          desc="Adding template class fields to dataset...",
+                          num_proc=12)
+    return dataset
+
+
+def extract_all_from_dir(dir_path: str) -> datasets.Dataset:
+    results_datasets = []
+    for model_results in Path(dir_path).iterdir():
+        if model_results.is_dir():
+            for file in model_results.iterdir():
+                if file.suffix == '.jsonl':
+                    model_data = extract_jsonl_fields(str(file))
+                    model_data = add_template_classes(model_data)
+                    results_datasets.append(model_data)
+    return datasets.concatenate_datasets(results_datasets)
 
 
 def convert_jsonl_dataset_schema(file_path: str, rename_fields: Dict[str, str], remove_fields: Union[List[str], bool] = True , save_path: Optional[str] = None, num_proc: int = 12) -> datasets.Dataset:
