@@ -12,6 +12,7 @@ from numerical_table_questions.data_loading import path_from_components
 from numerical_table_questions.metrics import float_match_accuracy, absolute_distance
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 from numerical_table_questions.utils.data_caching import save_version, caching
+from numerical_table_questions.utils.plots import grouped_plot
 from numerical_table_questions.utils.wandb_utils import get_artifact, get_run
 
 
@@ -268,8 +269,79 @@ def grouped_results(dataset: datasets.Dataset, group_by_cols: List[str], row_fil
         #arrays = [df[col].values for col in group_by_cols]
         #index = pd.MultiIndex.from_arrays(arrays, names=group_by_cols)
         df.set_index(group_by_cols, inplace=True)
-    df = df.groupby(level=group_by_cols)[select_cols].mean()
+    #df = df.groupby(level=group_by_cols)[select_cols].mean()
+    aggregations = {col: ['mean', 'count'] for col in select_cols}
+    df = df.groupby(level=group_by_cols).agg(aggregations)
     return df
+
+
+# filter the one invalid sample from the dataset lambda x: int(x['aggregation_num_rows']) > 0
+def filter_results(dataset: datasets.Dataset, filters: Dict[str, Callable]) -> datasets.Dataset:
+    return dataset.filter(lambda x: all([condition(x[col]) for col, condition in filters.items()]), num_proc=12)
+
+
+def decide_bin(sample, bin_col: str, ranges: Union[List[int], List[float]]):
+    for i, boundary in enumerate(ranges):
+        if float(sample[bin_col]) >= boundary:
+            last_boundary = (i, boundary)
+            continue
+    return {'bin': last_boundary[0], 'boundary': f"{ranges[last_boundary[0]+1]}-{ranges[last_boundary[0]+1]}" if last_boundary[0] < len(ranges) - 1 else f">{ranges[last_boundary[0]]}"}
+
+
+# good value for bin_ranges=[0,3,10,25,50] on wikitablequestions
+def create_bins(dataset: datasets.Dataset, bin_col: str, num_bins: int = 5, bin_ranges: Optional[Union[List[int], List[float]]] = None, mode: str = 'equal_count') -> datasets.Dataset:
+    if bin_ranges is None:
+        if mode == 'equal_step':
+            min_val = min([float(val) for val in dataset[bin_col]])
+            max_val = max([float(val) for val in dataset[bin_col]])
+            step = int((max_val - min_val) / num_bins)
+            bin_ranges = list(range(int(min_val), int(max_val), step))
+        elif mode == 'equal_count':
+            sorted_values = list(sorted([float(val) for val in dataset[bin_col]]))
+            step = len(sorted_values) // num_bins
+            bin_ranges = []
+            for i in range(0, len(sorted_values), step):
+                # if a value occurs so often that it would span more than one bin search for the next unique value
+                if sorted_values[i] not in bin_ranges:
+                    bin_ranges.append(sorted_values[i])
+                else:
+                    found_unique = False
+                    for j in range(i, len(sorted_values)):
+                        if sorted_values[j] not in bin_ranges:
+                            bin_ranges.append(sorted_values[i])
+                            found_unique = True
+                            break
+                    if not found_unique:
+                        raise ValueError(f"Could not find unique value for bin {len(bin_ranges)}. Not enough unique values.")
+        else:
+            raise ValueError(f"Mode {mode} is not implemented. Please use 'equal_step' or 'equal_count'.")
+    dataset = dataset.map(decide_bin, fn_kwargs={'bin_col': bin_col, 'ranges': bin_ranges}, desc="Deciding bins...", num_proc=12)
+    return dataset
+
+
+def dat_to_line(dat, x_col='aggregation_num_rows', y_col='exact_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, num_bins=5, bin_mode='equal_count', bin_ranges=[0, 3, 10, 50, 100]):
+    dat_bin = create_bins(dat, bin_col=x_col, num_bins=num_bins, mode=bin_mode, bin_ranges=bin_ranges)
+    df = grouped_results(dat_bin, group_by_cols=['model_name', 'boundary'], row_filters=row_filters, select_cols=['exact_match'])
+    df_long_form = df.reset_index()
+    df_long_form.columns = ['_'.join([c for c in col if c != '']) for col in df_long_form.columns]
+    grouped_plot(df_long_form, y=y_col, kind='line')
+
+
+def dat_to_bar(dat, category='aggregator', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}):
+    df = grouped_results(dat, group_by_cols=['model_name', category], row_filters=row_filters, select_cols=['exact_match'])
+    df_long_form = df.reset_index()
+    df_long_form.columns = ['_'.join([c for c in col if c != '']) for col in df_long_form.columns]
+    grouped_plot(df_long_form, x=category, y='exact_match_mean', kind='bar')
+
+
+def debug_expression_answers(dat_expr):
+    hist = {}
+    for i in range(len(dat_expr)):
+        if hist.get(dat_expr[i]['answer']) is None:
+            hist[dat_expr[i]['answer']] = 1
+        else:
+            hist[dat_expr[i]['answer']] += 1
+    print(hist)
 
 
 if __name__ == '__main__':
