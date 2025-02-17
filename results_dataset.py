@@ -223,6 +223,9 @@ def results_datasets_from_wandb(wandb_run_id: str,
     #except Exception as e:
     #    raise e
     # TODO check what happens to latest version vs. run version is caching used?
+    # for runs on KISZ node the training args are saved as string representation of the TrainingArgs class -> need to parse them
+    if isinstance(run_arguments['training_args'], str):
+        run_arguments['training_args'] = eval(run_arguments['training_args'].replace('TrainingArgs', 'dict'))
     dataset_path = path_from_components(run_arguments['training_args']['table_corpus_name'], run_arguments['training_args']['dataset_suffix'], 'test', data_dir=run_arguments['training_args']['data_dir'])
     artifact_shard_datasets = []
     for artifact_shard_id, file_path in enumerate(results_table):
