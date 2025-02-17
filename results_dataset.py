@@ -45,7 +45,7 @@ def add_table_length():
 def question_to_main_expression(question: str) -> str:
     if 'of the difference between column' in question:
         return 'difference'
-    if 'of the ratio of row' in question:
+    if 'of the ratio of column' in question:
         return 'ratio'
     if 'of the expression' in question:
         return 'expression'
@@ -121,6 +121,9 @@ def calculate_posthoc_metrics(dataset: datasets.Dataset, metrics: Dict[str, Call
 
 
 def calculate_results(file_path: str, distinguish_field: str = 'aggregator', distinguish_values: Optional[Union[List[str], List[float]]] = None, metric_names: List[str] = ['exact_match'], distinguish_samples: Optional[int] = None, num_bins: int = 10) -> dict:
+    """ Calculates metrics for every distinguish_value in distinguish_field of the dataset. Or creates a histogram if continous values.
+        Kind of similar to create_bins but code is maybe harder to understand -> compare results.
+    """
     path_object = PurePath(file_path)
     results_path = file_path.replace(path_object.name, '') + f"/{distinguish_field}_results_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}_" + path_object.name.replace('.jsonl', '.json')
     try:
@@ -205,7 +208,7 @@ def add_results(new_results: datasets.Dataset, old_dataset: datasets.Dataset, sa
 
 def results_datasets_from_wandb(wandb_run_id: str,
                                 results_table_name: str = 'results',
-                                dataset_fields: List[str] = ['table_idx', 'question_number', 'answer', 'aggregator', 'aggregation_num_rows'],
+                                dataset_fields: List[str] = ['table_idx', 'question_number', 'question_id', 'question', 'answer', 'aggregator', 'aggregation_num_rows'],
                                 metric_name_map: Dict[str, str] = {'exact_match': 'str_match_accuracy', 'float_match': 'float_match_accuracy', 'absolute_distance': 'absolute_distance'},
                                 save_path: Optional[str] = None,
                                 infer_save_path: bool = False,
@@ -253,7 +256,7 @@ def results_datasets_from_wandb(wandb_run_id: str,
     return artifact_shard_datasets
 
 
-def grouped_results(dataset: datasets.Dataset, group_by_cols: List[str], row_filters: Dict[str, Callable], select_cols: List[str] = ['exact_match', 'float_match', 'absolute_distance']) -> datasets.Dataset:
+def grouped_results(dataset: datasets.Dataset, group_by_cols: List[str], row_filters: Dict[str, Callable] = {}, select_cols: List[str] = ['exact_match', 'float_match', 'absolute_distance']) -> datasets.Dataset:
     if len(row_filters) > 0:
         dataset = dataset.filter(lambda x: all([condition(x[col]) for col, condition in row_filters.items()]), num_proc=12)
     df = dataset.to_pandas()
