@@ -129,7 +129,7 @@ def run_inference(question: Union[str, List[str]], table: Union[dict, List[dict]
     return generated_queries
 
 
-def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table: Optional[Union[dict, List[dict]]] = None, model=None, tokenizer=None, pipe=None, batch_size: Optional[int] = None) -> Tuple[Union[str, List[str]], Union[str, List[str]]]:
+def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table: Optional[Union[dict, List[dict]]] = None, model=None, tokenizer=None, pipe=None, batch_size: Optional[int] = None, data_dir='/home/mamba/.cache') -> Tuple[Union[str, List[str]], Union[str, List[str]]]:
     is_single_query = False
     if pipe is None:
         pipe = get_sqlcoder_inference_pipeline(model, tokenizer)
@@ -143,10 +143,16 @@ def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table
             raise ValueError(f"Table must be provided for every question but question has length {question_length} and table {table_length}!")
         generated_query = run_inference(question, table, pipe)
 
+    unique_timestamp = datetime.now().strftime('%y%m%d_%H%M_%S_%f')
+    with open(data_dir + '/' + f"sqlcoder_queries_{unique_timestamp}.txt", 'a+') as f:
+        for q in generated_query:
+            f.write(q + '\n')
+
     if isinstance(generated_query, str):
         generated_query = [generated_query]
         is_single_query = True
     string_results = []
+    # execute queries to obtain text answers
     for q, query in enumerate(generated_query):
         tab = table[q] if isinstance(table, list) else table
         if tab is None:
@@ -160,9 +166,18 @@ def sqlcoder_generation(question: Union[str, List[str], datasets.Dataset], table
         query_result = execute_sql(query, tab.pandas_dataframe)
         # if error or no rows return empty string else retrieve first cell from answer (single-number answers expected)
         if query_result is not None and len(query_result) > 0:  # at least one row
-            string_results.append(str(query_result.iloc[0, 0]))
+            query_result = str(query_result.iloc[0, 0])
         else:
-            string_results.append('')
+            query_result = ''
+        # save answer as soon as possible
+        with open(data_dir + '/' + f"sqlcoder_text_answer_{unique_timestamp}.txt", 'a+') as f:
+            f.write(query_result + '\n')
+        string_results.append(query_result)
+    if isinstance(question, datasets.Dataset) and 'question_id' in question.column_names:
+        for q in question:
+            # save original question_ids
+            with open(data_dir + '/' + f"sqlcoder_question_ids_{unique_timestamp}.txt", 'a+') as f:
+                f.write(str(q['question_id']) + '\n')
     if is_single_query:
         return string_results[0], generated_query[0]
     return string_results, generated_query
