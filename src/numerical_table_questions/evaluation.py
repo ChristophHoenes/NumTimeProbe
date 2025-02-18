@@ -212,7 +212,7 @@ def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_
 
     created_datasets = {}
     for split in data_args.splits:
-        cache_file_name = f"sqlcoder_{data_args.table_corpus}_{data_args.dataset_name or '-'.join(data_args.template_names)}_{split}"
+        cache_file_name = f"sqlcoder_{data_args.table_corpus}_{split}_{data_args.dataset_name or '-'.join(data_args.template_names)}"
         save_path = os.path.join(data_args.cache_dir,
                                  cache_file_name
                                  )

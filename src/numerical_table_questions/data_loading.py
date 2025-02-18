@@ -372,10 +372,13 @@ class TableQADataModule(L.LightningDataModule):
 
 def batch_samples_collate(index_dataset_samples):
     # get table and question from dataset
-    prepared_batch = {'tables': [], 'questions': [], 'answers': []}
+    prepared_batch = {'table_idx': [], 'question_number': [], 'question_id': [], 'tables': [], 'questions': [], 'answers': []}
     for sample in index_dataset_samples:
         data = sample['data'][0]  # data is always a list of one element
         question_number = sample['question_number']
+        prepared_batch['table_idx'].append(sample['table_idx'])
+        prepared_batch['question_number'].append(question_number)
+        prepared_batch['question_id'].append(sample['question_id'])
         prepared_batch['tables'].append(data['table'])
         prepared_batch['questions'].append(data['questions'][question_number])
         prepared_batch['answers'].append(data['answers'][question_number])
