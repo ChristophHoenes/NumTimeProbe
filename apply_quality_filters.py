@@ -3,7 +3,7 @@ import sys
 import datasets
 
 from numerical_table_questions.data_synthesis.template_creation import apply_quality_filters
-from numerical_table_questions.data_utils import consistent_quoting_map, cutoff_num_questions
+from numerical_table_questions.utils.data_utils import consistent_quoting_map, cutoff_num_questions
 from numerical_table_questions.utils.data_caching import caching, save_version
 
 
