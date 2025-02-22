@@ -1,6 +1,7 @@
 import builtins
-import warnings
 import json
+import sys
+import warnings
 from datetime import datetime
 from pathlib import PurePath, Path
 from typing import Callable, Dict, List, Optional, Union
@@ -50,7 +51,7 @@ def question_to_main_expression(question: str) -> str:
         return 'ratio'
     if 'of the expression' in question:
         return 'expression'
-    return 'single_column'
+    return 'single column'
 
 
 def question_to_condition(question: str) -> str:
@@ -69,24 +70,42 @@ def question_to_condition(question: str) -> str:
     return ''
 
 
-def add_template_classes(dataset: datasets.Dataset) -> datasets.Dataset:
+def add_template_classes(dataset: datasets.Dataset, num_proc: int = 12) -> datasets.Dataset:
     dataset = dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question']),
                                      'condition': question_to_condition(x['question'])},
                           desc="Adding template class fields to dataset...",
-                          num_proc=12)
+                          num_proc=num_proc)
     return dataset
 
 
-def extract_all_from_dir(dir_path: str) -> datasets.Dataset:
+def combine_datasets(dataset_list: List[datasets.Dataset], save_path: Optional[str] = None) -> datasets.Dataset:
+    try:
+        combined = datasets.concatenate_datasets([dataset for dataset in dataset_list])
+    except ValueError:
+        first_dataset = dataset_list[0]
+        combined = first_dataset
+        for dataset in dataset_list[1:]:
+            combined = add_results(combined, dataset)
+    if save_path is not None:
+        save_version(combined, cache_path=save_path)
+    return combined
+
+
+def extract_all_from_dir(dir_path: str, metrics: Dict[str, Callable] = {'float_match': float_match_accuracy, 'absolute_distance': absolute_distance}, num_proc: int = 12, save_path: Optional[str] = None) -> datasets.Dataset:
     results_datasets = []
     for model_results in Path(dir_path).iterdir():
         if model_results.is_dir():
+            model_id = model_results.name
             for file in model_results.iterdir():
                 if file.suffix == '.jsonl':
                     model_data = extract_jsonl_fields(str(file))
-                    model_data = add_template_classes(model_data)
+                    model_data = add_template_classes(model_data, num_proc=num_proc)
+                    metadata = extract_metadata(file)
+                    model_data = model_data.map(lambda x: {'model_id': model_id, **metadata}, desc="Adding metadata...", num_proc=num_proc)
+                    model_data = calculate_posthoc_metrics(model_data, metrics=metrics, num_proc=num_proc)
                     results_datasets.append(model_data)
-    return datasets.concatenate_datasets(results_datasets)
+    results_dataset = combine_datasets(results_datasets, save_path=save_path)
+    return results_dataset
 
 
 def convert_jsonl_dataset_schema(file_path: str, rename_fields: Dict[str, str], remove_fields: Union[List[str], bool] = True , save_path: Optional[str] = None, num_proc: int = 12) -> datasets.Dataset:
@@ -186,12 +205,31 @@ def get_suitable_dummy_value(value):
             return None
 
 
+def seq_to_item(sequence, recursion_depth=0, max_recursion_depth: int = 5):
+    if recursion_depth >= max_recursion_depth:
+        raise ValueError(f"Maximum recursion depth of {max_recursion_depth} is reached. Cannot flatten lists nested deeper than max_recursion_depth.")
+    if isinstance(sequence, (list, tuple)):
+        sequence = seq_to_item(sequence[0], recursion_depth=recursion_depth+1)
+    return sequence
+
+
+def flatten_nested_list_features(dataset: datasets.Dataset, fields: List[str], num_proc: int = 12, max_recursion_depth: int = 5) -> datasets.Dataset:
+    dataset = dataset.map(lambda x: {field: seq_to_item(x[field], max_recursion_depth=max_recursion_depth) for field in fields},
+                          desc="Flattening nested list features...",
+                          num_proc=num_proc,
+                          load_from_cache_file=False,  # recursion prevents hashing and causes warnings and performance decrease
+                          )
+    return dataset
+
+
 def add_results(new_results: datasets.Dataset, old_dataset: datasets.Dataset, save_path: Optional[str] = None, infer_save_path: bool = False) -> datasets.Dataset:
     missing_columns = list(set(old_dataset.column_names) - set(new_results.column_names))
     if len(missing_columns) > 0:
         warnings.warn(f"Columns {missing_columns} are missing in the new_results! Adding empty values...")
         dummy_values = {col: get_suitable_dummy_value(old_dataset[0][col]) for col in missing_columns}
         new_results = new_results.map(lambda _: dummy_values)
+    old_dataset = flatten_nested_list_features(old_dataset, fields=['filtered_resps', 'resps'])
+    new_results = flatten_nested_list_features(new_results, fields=['filtered_resps', 'resps'])
     updated_dataset = datasets.concatenate_datasets([old_dataset, new_results])
     if save_path is None:
         if infer_save_path:
@@ -283,9 +321,11 @@ def filter_results(dataset: datasets.Dataset, filters: Dict[str, Callable]) -> d
 def decide_bin(sample, bin_col: str, ranges: Union[List[int], List[float]]):
     for i, boundary in enumerate(ranges):
         if float(sample[bin_col]) >= boundary:
-            last_boundary = (i, boundary)
+            last_boundary = (str(i), boundary)
             continue
-    return {'bin': last_boundary[0], 'boundary': f"{ranges[last_boundary[0]+1]}-{ranges[last_boundary[0]+1]}" if last_boundary[0] < len(ranges) - 1 else f">{ranges[last_boundary[0]]}"}
+    # string boundary leads to plot formating issues
+    # 'boundary': f"{ranges[last_boundary[0]+1]}-{ranges[last_boundary[0]+1]}" if last_boundary[0] < len(ranges) - 1 else f">{ranges[last_boundary[0]]}"
+    return {'bin': last_boundary[0], 'boundary': last_boundary[1]}
 
 
 # good value for bin_ranges=[0,3,10,25,50] on wikitablequestions
@@ -319,19 +359,58 @@ def create_bins(dataset: datasets.Dataset, bin_col: str, num_bins: int = 5, bin_
     return dataset
 
 
-def dat_to_line(dat, x_col='aggregation_num_rows', y_col='exact_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, num_bins=5, bin_mode='equal_count', bin_ranges=[0, 3, 10, 50, 100]):
+def parse_axes_labels(x_col: Optional[str] = None, y_col: Optional[str] = None):
+    axes_args = {}
+
+    def _match_column(col_name: str):
+        match col_name:
+            case s if 'aggregation_num_rows' in s:
+                return 'Number of rows before aggregation'
+            case s if 'exact_match' in s:
+                return 'Exact match accuracy'
+            case s if 'float_match' in s:
+                return 'Float match accuracy'
+            case s if 'absolute_distance' in s:
+                return 'Average Relative Distance Truncated @ 10'
+            case s if 'aggregator' in s:
+                return 'Aggregator'
+            case s if 'main_expression' in s:
+                return 'Main Expression Type'
+            case s if 'condition' in s:
+                return 'Condition Type'
+            case _:
+                pass
+
+    if x_col is not None:
+        axes_args.update({'xlabel': _match_column(x_col)})
+        #axes_args.update({'xticklabels': _process_xtick_labels(x_col, data)})
+    if y_col is not None:
+        axes_args.update({'ylabel': _match_column(y_col)})
+    return axes_args
+
+
+def dat_to_line(dat, x_col='aggregation_num_rows', y_col='float_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, num_bins=5, bin_mode='equal_count', bin_ranges=[0, 3, 10, 50, 100]):
     dat_bin = create_bins(dat, bin_col=x_col, num_bins=num_bins, mode=bin_mode, bin_ranges=bin_ranges)
-    df = grouped_results(dat_bin, group_by_cols=['model_name', 'boundary'], row_filters=row_filters, select_cols=['exact_match'])
+    df = grouped_results(dat_bin, group_by_cols=['model_name', 'boundary'], row_filters=row_filters, select_cols=[y_col.replace('_mean', '').replace('_count', '')])
     df_long_form = df.reset_index()
     df_long_form.columns = ['_'.join([c for c in col if c != '']) for col in df_long_form.columns]
-    grouped_plot(df_long_form, y=y_col, kind='line')
+    axes_args = parse_axes_labels(x_col=x_col, y_col=y_col)
+    grouped_plot(df_long_form, x='boundary', y=y_col, kind='line', axes_args=axes_args)
 
 
-def dat_to_bar(dat, category='aggregator', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}):
-    df = grouped_results(dat, group_by_cols=['model_name', category], row_filters=row_filters, select_cols=['exact_match'])
+def dat_to_bar(dat, category='aggregator', y_col='float_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}):
+    df = grouped_results(dat, group_by_cols=['model_name', category], row_filters=row_filters, select_cols=[y_col.replace('_mean', '').replace('_count', '')])
     df_long_form = df.reset_index()
     df_long_form.columns = ['_'.join([c for c in col if c != '']) for col in df_long_form.columns]
-    grouped_plot(df_long_form, x=category, y='exact_match_mean', kind='bar')
+    axes_args = parse_axes_labels(x_col=category, y_col=y_col)
+    grouped_plot(df_long_form, x=category, y=y_col, kind='bar', axes_args=axes_args)
+
+
+def dat_to_hist(dat, x_col='main_expression', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}):
+    df = grouped_results(dat, group_by_cols=['model_name', x_col], row_filters=row_filters, select_cols=['doc_id'])
+    df_long_form = df.reset_index()
+    axes_args = parse_axes_labels(x_col=x_col)
+    grouped_plot(df_long_form, x=x_col, kind='hist', axes_args=axes_args)
 
 
 def debug_expression_answers(dat_expr):
@@ -344,54 +423,82 @@ def debug_expression_answers(dat_expr):
     print(hist)
 
 
+def standard_plots(dataset: datasets.Dataset):
+    dat_to_bar(dataset, category='aggregator')
+    dat_to_bar(dataset, category='main_expression')
+    dat_to_bar(dataset, category='condition')
+    dat_to_line(dataset)
+
+
+def extract_metadata(jsonl_file: PurePath) -> dict:
+    model_id = str(jsonl_file.parent.name)
+    time_stamp = jsonl_file.name.split('_')[-1].strip('.jsonl').replace('.', '_')
+    save_path = PurePath(f'{lm_eval_results_path}/{model_id}_{time_stamp}_results_dataset')
+    results_path = (jsonl_file.parent / f"results_{time_stamp}.json")
+    if results_path.exists():
+        with open(results_path, 'r') as results_path:
+            results_json = json.load(results_path)
+        system_instruction = results_json['system_instruction']
+        chat_template = results_json['chat_template']
+        num_fewshot = results_json['configs']['num_tab_qa_gittables_100k']['num_fewshot']
+        fewshot_as_multiturn = results_json['fewshot_as_multiturn']
+        max_length = results_json['max_length']
+        eval_time = results_json['total_evaluation_time_seconds']
+        metadata = {'model_id': model_id, 'system_instruction': system_instruction, 'chat_template': chat_template,
+                    'num_fewshot': num_fewshot, 'fewshot_as_multiturn': fewshot_as_multiturn, 'max_length': max_length, 'eval_time': eval_time
+                    }
+        with open(save_path.parent / model_id / 'metadata.json', 'w+') as f:
+            json.dump(metadata, f)
+    else:
+        metadata = {}
+    return metadata
+
+
 if __name__ == '__main__':
+    arguments = sys.argv[1:]
+    lm_eval_results_path = arguments[0]
+    wandb_run_ids = arguments[1:]
+    cache_path = '/home/mamba/.cache'
+
     # lm_eval results
-    lm_eval_results_path = '/home/mamba/.cache/results/wikitablequestions/250209'
-    dummy_path = '/home/mamba/.cache/results/dummy'
-    lm_eval_results_path = dummy_path
-    is_first_dataset = True
-    for dir in Path(lm_eval_results_path).iterdir():
-        if dir.is_dir():
-            model_id = dir.name
-            for file in dir.iterdir():
-                if file.name.endswith('.jsonl'):
-                    time_stamp = file.name.split('_')[-1].strip('.jsonl').replace('.', '_')
-                    save_path = PurePath(f'{lm_eval_results_path}/{model_id}_{time_stamp}_results_dataset')
-                    results_path = (file.parent / f"results_{time_stamp}.json")
-                    if results_path.exists():
-                        with open(results_path, 'r') as results_path:
-                            results_json = json.load(results_path)
-                        system_instruction = results_json['system_instruction']
-                        chat_template = results_json['chat_template']
-                        num_fewshot = results_json['configs']['num_tab_qa_gittables_100k']['num_fewshot']
-                        fewshot_as_multiturn = results_json['fewshot_as_multiturn']
-                        max_length = results_json['max_length']
-                        eval_time = results_json['total_evaluation_time_seconds']
-                        metadata = {'model_id': model_id, 'system_instruction': system_instruction, 'chat_template': chat_template,
-                                    'num_fewshot': num_fewshot, 'fewshot_as_multiturn': fewshot_as_multiturn, 'max_length': max_length, 'eval_time': eval_time
-                                    }
-                        with open(save_path.parent / model_id / 'metadata.json', 'w+') as f:
-                            json.dump(metadata, f)
-                    else:
-                        metadata = {}
-                    results_dataset = extract_jsonl_fields(str(file))
-                    #results_dataset = caching(save_path.name, cache_path=str(save_path.parent))
-                    results_dataset = results_dataset.map(lambda x: {'model_id': model_id, **metadata, **x}, desc="Adding metadata...", num_proc=12)
-                    results_dataset = calculate_posthoc_metrics(results_dataset, metrics={'float_match': float_match_accuracy, 'absolute_distance': absolute_distance}, num_proc=12)
-                    if is_first_dataset:
-                        extended_results = results_dataset
-                        is_first_dataset = False
-                    else:
-                        extended_results = add_results(extended_results, results_dataset)
+    #lm_eval_results_path = '/home/mamba/.cache/results/wikitablequestions/250209'
+    #dummy_path = '/home/mamba/.cache/results/dummy'
+    #lm_eval_results_path = dummy_path
+    lm_eval_combined_name = 'combined'
+    lm_eval_combined_path = Path(lm_eval_results_path) / lm_eval_combined_name
+    if lm_eval_combined_path.is_dir():
+        lm_eval_results = caching(str(lm_eval_combined_path.name), cache_path=str(lm_eval_combined_path.parent))
+    else:
+        lm_eval_results = extract_all_from_dir(lm_eval_results_path, save_path=str(lm_eval_combined_path))
+    standard_plots(lm_eval_results)
 
     # wandb datasets
-    wandb_run_ids = []
-    for run_id in wandb_run_ids:
-        wandb_dataset_shards = results_datasets_from_wandb(run_id)
-        for wandb_dataset_shard in wandb_dataset_shards:
-            extended_results = add_results(extended_results, wandb_dataset_shard)
+    if Path(wandb_run_ids[0]).is_dir():
+        wandb_run_datasets = [caching(str(PurePath(wandb_run_ids[i]).name), cache_path=str(PurePath(wandb_run_ids[i]).parent)) for i in range(len(wandb_run_ids))]
+    else:
+        wandb_run_datasets = []
+        for run_id in wandb_run_ids:
+            wandb_dataset_shards = results_datasets_from_wandb(run_id, save_path=str(PurePath(lm_eval_results_path).parent / 'wandb' / run_id / 'shards'))
+            run_dataset = combine_datasets(wandb_dataset_shards, save_path=str(PurePath(lm_eval_results_path).parent / 'wandb' / run_id))
+            wandb_run_datasets.append(run_dataset)
 
-    save_version(extended_results, cache_path=lm_eval_results_path, cache_file_name='joined_results_dataset')
+    # if wandb_results available first join them among each other and then join them with lm_eval results
+    if len(wandb_run_datasets) > 0:
+        if len(wandb_run_datasets) > 1:
+            wandb_results = combine_datasets(wandb_run_datasets, save_path=str(PurePath(lm_eval_results_path).parent / 'wandb' / 'combined'))
+            standard_plots(wandb_results)
+        else:
+            wandb_results = wandb_run_datasets[0]
+        # all results combined
+        all_combined_name = 'combined'
+        all_combined_path = Path(lm_eval_results_path).parent / all_combined_name
+        if all_combined_path.is_dir():
+            combined_results = caching(str(all_combined_path.name), cache_path=str(all_combined_path.parent))
+        else:
+            combined_results = combine_datasets([lm_eval_results, wandb_results], save_path=str(all_combined_path))
+        standard_plots(combined_results)
+    else:
+        combined_results = lm_eval_results
 
-    grouped_df = grouped_results(extended_results, group_by_cols=['model_id', 'aggregator'], row_filters={})
+    grouped_df = grouped_results(combined_results, group_by_cols=['model_id', 'aggregator'], row_filters={})
     print(grouped_df)
