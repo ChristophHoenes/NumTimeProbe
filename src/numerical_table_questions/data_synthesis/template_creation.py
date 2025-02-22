@@ -173,6 +173,7 @@ def get_template_by_name(template_name: Union[str, List[str]]) -> Optional[Union
             case 'ratio_no_filter': template_list.append(RATIO_NO_FILTER_TEMPLATE)
             case 'expression' | 'expr': template_list.append(EXPRESSION_TEMPLATE)
             case 'standard_templates': template_list.extend(get_standard_templates())
+            case 'expression2': template_list.extend(get_expression2_templates())
             case _:
                 warnings.warn(f"No template(s) could be found for the name {name}! Trying to find template dataset at this path...")
                 try:
@@ -414,6 +415,31 @@ def get_standard_templates(save_path: Optional[str] = None, cache_dir: str = '/h
             dataset = datasets.Dataset.from_list([template.to_state_dict() for template in templates])
             dataset.save_to_disk(save_path)
         return templates
+
+
+def get_expression2_templates(save_path: Optional[str] = None, cache_dir: str = '/home/mamba/.cache') -> List[QuestionTemplate]:
+    try:
+        coalesce_save_path = save_path or cache_dir + '/templates/expression2'
+        # TODO implement logging instead of print
+        #logger.info(f"Try Loading standard templates from {save_path}...")
+        print(f"Try Loading standard templates from {coalesce_save_path} ...")
+        return template_list_from_dataset(coalesce_save_path)
+    except FileNotFoundError:
+        # TODO implement logging instead of print
+        #logger.info("No saved version was found. Creating standard templates...")
+        print("No saved version was found. Creating standard templates...")
+        expression2_templates = create_templates(
+                SQLColumnExpression(
+                    (SQLColumnExpression((SQLColumnExpression(("{col1}", "{col2}"), operand='+'), 0.1), operand='-'),
+                     SQLColumnExpression((0.5, SQLColumnExpression(("{col2}", "{col1}"), operand='*')), operand='+')
+                     ),
+                    operand='/',
+                    )
+                )
+        if save_path:
+            dataset = datasets.Dataset.from_list([template.to_state_dict() for template in expression2_templates])
+            dataset.save_to_disk(save_path)
+        return expression2_templates
 
 
 def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
