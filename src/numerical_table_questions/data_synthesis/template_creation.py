@@ -15,7 +15,7 @@ from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSe
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import create_table_dataset, load_table_dataset
-from numerical_table_questions.utils.data_utils import get_cache_path
+from numerical_table_questions.utils.data_utils import get_cache_path, apply_filter_condition
 from numerical_table_questions.data_synthesis.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
@@ -961,29 +961,6 @@ def create_postprocessed_versions(data_version_function: Callable[..., TableQues
                               dataset_name=base_name,
                               cache_path=cache_path
                               )
-
-
-def apply_filter_condition(dataset: datasets.Dataset, num_proc: Optional[int] = 4) -> datasets.Dataset:
-    """ Applies a precomputed filter condition to a dataset that has equal length sequences as fields.
-        filter_condition already needs to be a field in dataset and contain a list of booleans (True is kept False is filtered).
-        The length of the list must be equivalent to every sequence field in the dataset.
-        Only sequence entries where the corresponding filter_condition is True are kept for each field.
-        The field filter_condition is removed from the dataset during the process.
-    """
-    if 'filter_condition' not in dataset.column_names:
-        raise ValueError("Dataset must contain a 'filter_condition' field with a list of booleans!")
-    return dataset.map(lambda x: {col_name: [x[col_name][i]
-                                             for i, is_kept in enumerate(x['filter_condition'])
-                                             if is_kept
-                                             ]
-                                  for col_name in x.keys()
-                                  if isinstance(x[col_name], list)
-                                  and col_name != 'filter_condition'
-                                  },
-                       desc="Applying pre-computed filter condition...",
-                       remove_columns=['filter_condition'],
-                       num_proc=num_proc,
-                       )
 
 
 def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet],

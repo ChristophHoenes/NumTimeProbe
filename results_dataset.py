@@ -13,6 +13,7 @@ from numerical_table_questions.data_loading import path_from_components
 from numerical_table_questions.metrics import float_match_accuracy, absolute_distance
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 from numerical_table_questions.utils.data_caching import save_version, caching
+from numerical_table_questions.utils.data_utils import add_template_classes
 from numerical_table_questions.utils.plots import grouped_plot
 from numerical_table_questions.utils.wandb_utils import get_artifact, get_run
 
@@ -42,40 +43,6 @@ def add_table_length():
     # index_dataset = QuestionTableIndexDataset(table_question_dataset_path)
     #lm_results.map(lambda x: {'table_length': len(index_dataset[x['table_idx']]['data_dict']['rows']}), num_proc=12)
     pass
-
-
-def question_to_main_expression(question: str) -> str:
-    if 'of the difference between column' in question:
-        return 'difference'
-    if 'of the ratio of column' in question:
-        return 'ratio'
-    if 'of the expression' in question:
-        return 'expression'
-    return 'single column'
-
-
-def question_to_condition(question: str) -> str:
-    if 'has a value equal to' in question:
-        return '='
-    if 'has a value different from' in question:
-        return '!='
-    if 'has a value greater than' in question:
-        return '>'
-    if 'has a value greater or equal than' in question:
-        return '>='
-    if 'has a value lesser than' in question:
-        return '<'
-    if 'has a value lesser or equal than' in question:
-        return '<='
-    return ''
-
-
-def add_template_classes(dataset: datasets.Dataset, num_proc: int = 12) -> datasets.Dataset:
-    dataset = dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question']),
-                                     'condition': question_to_condition(x['question'])},
-                          desc="Adding template class fields to dataset...",
-                          num_proc=num_proc)
-    return dataset
 
 
 def combine_datasets(dataset_list: List[datasets.Dataset], save_path: Optional[str] = None) -> datasets.Dataset:

@@ -20,7 +20,7 @@ from tqdm import tqdm
 from numerical_table_questions.arguments import DataProcessingArgs
 from numerical_table_questions.utils.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 #from src.numerical_table_questions.data_caching import caching
-from numerical_table_questions.utils.data_caching import caching, delete_dataset
+from numerical_table_questions.utils.data_caching import caching, delete_dataset, save_version
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import remove_duplicate_qa_pairs
 
@@ -494,6 +494,132 @@ def infer_python_type_from_str(string: str) -> Union[int, float, str]:
             return float(string)
         except ValueError:
             return string
+
+
+def apply_filter_condition(dataset: datasets.Dataset, num_proc: Optional[int] = 4) -> datasets.Dataset:
+    """ Applies a precomputed filter condition to a dataset that has equal length sequences as fields.
+        filter_condition already needs to be a field in dataset and contain a list of booleans (True is kept False is filtered).
+        The length of the list must be equivalent to every sequence field in the dataset.
+        Only sequence entries where the corresponding filter_condition is True are kept for each field.
+        The field filter_condition is removed from the dataset during the process.
+    """
+    if 'filter_condition' not in dataset.column_names:
+        raise ValueError("Dataset must contain a 'filter_condition' field with a list of booleans!")
+    return dataset.map(lambda x: {col_name: [x[col_name][i]
+                                             for i, is_kept in enumerate(x['filter_condition'])
+                                             if is_kept
+                                             ]
+                                  for col_name in x.keys()
+                                  if isinstance(x[col_name], list)
+                                  and col_name != 'filter_condition'
+                                  },
+                       desc="Applying pre-computed filter condition...",
+                       remove_columns=['filter_condition'],
+                       num_proc=num_proc,
+                       )
+
+
+def question_to_main_expression(question: str) -> str:
+    if 'of the difference between column' in question:
+        return 'difference'
+    if 'of the ratio of column' in question:
+        return 'ratio'
+    if 'of the expression' in question:
+        return 'expression'
+    return 'single column'
+
+
+def question_to_condition(question: str) -> str:
+    if 'has a value equal to' in question:
+        return '='
+    if 'has a value different from' in question:
+        return '!='
+    if 'has a value greater than' in question:
+        return '>'
+    if 'has a value greater or equal than' in question:
+        return '>='
+    if 'has a value lesser than' in question:
+        return '<'
+    if 'has a value lesser or equal than' in question:
+        return '<='
+    return ''
+
+
+def add_template_classes(dataset: datasets.Dataset, num_proc: int = 12) -> datasets.Dataset:
+    dataset = dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question']),
+                                     'condition': question_to_condition(x['question'])},
+                          desc="Adding template class fields to dataset...",
+                          num_proc=num_proc)
+    return dataset
+
+
+def patch_expression_dataset(original_dataset: datasets.Dataset, new_expression_dataset: datasets.Dataset, num_proc: int = 12, save_path: Optional[str] = None) -> datasets.Dataset:
+    # filter all expression questions from original dataset
+    original_dataset = original_dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question'])}, desc="Prepare main_expression...", num_proc=num_proc)
+    original_dataset = original_dataset.map(lambda x: {'expression_count': sum([i == 'expression' for i in x['main_expression']])}, desc="Count expression_questions...", num_proc=num_proc)
+    original_dataset = original_dataset.map(
+        lambda x: {'filter_condition': [x['main_expression'][i].lower() != 'expression'
+                                        for i in range(len(x['questions']))
+                                        ]
+                   },
+        desc="Prepare filter_condition: not expression question...",
+        num_proc=num_proc,
+        )
+    original_dataset = apply_filter_condition(original_dataset, num_proc=num_proc)
+    # try filling the new expression questions into exact the same the original dataset
+    index = create_table_index(new_expression_dataset)
+    excess_in_new_cnt = {}
+    not_available_in_new_cnt = {}
+    for s, sample in enumerate(original_dataset):
+        # only if expression questions were deleted
+        if sample['expression_count'] > 0:
+            table_id = sample['table']['table_id']
+            new_sample_idx = index.get(table_id)
+            # if new expression questions are not available for this table mark the missed samples and skip
+            if new_sample_idx is None:
+                not_available_in_new_cnt[s] = sample['expression_count']
+                continue
+            else:
+                # calculate if new expression questions are available in excess or too few
+                new_sample = new_expression_dataset[new_sample_idx]
+                expression_sample_difference = sample['expression_count'] - len(new_sample['questions'])
+                if expression_sample_difference < 0:
+                    excess_in_new_cnt[s] = abs(expression_sample_difference)
+                elif expression_sample_difference > 0:
+                    not_available_in_new_cnt[s] = expression_sample_difference
+                # add new expression questions to original dataset
+                for col in original_dataset.column_names:
+                    if isinstance(sample[col], list) and len(sample[col]) == len(sample['questions']):
+                        for i in range(min(sample['expression_count'], len(new_sample['questions']))):
+                            sample[col].append(new_sample[col][i])
+    # if new expression questions are not available for some questions try to replace with excess questions from other tables
+    if sum(not_available_in_new_cnt.values()) > 0:
+        warnings.warn(f"New expression questions are not available for {len(not_available_in_new_cnt)} questions in the original dataset!"
+                      "Trying to replace with up to {sum(excess_in_new_cnt.values())} excess questions from other tables of the the new expression dataset..."
+                      )
+        remaining_shortage = sum(not_available_in_new_cnt.values())
+        while remaining_shortage > 0:
+            if sum(excess_in_new_cnt.values()) == 0:
+                warnings.warn(f"No more excess questions available to replace {remaining_shortage} missing expression questions!")
+                break
+            # recompute for correct select index of exess example
+            sorted_ids_by_num_excess = sorted(excess_in_new_cnt.items(), key=lambda x: x[1], reverse=True)
+            for table_idx, num_excess in sorted_ids_by_num_excess:
+                if excess_in_new_cnt[table_idx] <= 0:
+                    continue
+                # add new expression questions to original dataset from excess questions
+                for col in original_dataset.column_names:
+                    if isinstance(sample[col], list) and len(sample[col]) == len(sample['questions']):
+                        table_id = original_dataset[table_idx]['table']['table_td']
+                        new_sample_table_idx = index[table_id]
+                        original_dataset[table_idx][col].append(new_sample[new_sample_table_idx][col][-num_excess])
+                        remaining_shortage -= 1
+                        excess_in_new_cnt[table_idx] -= 1  # reduce excess count for stop condition
+
+    original_dataset = original_dataset.remove_columns(['main_expression', 'expression_count'])
+    if save_path is not None:
+        save_version(original_dataset, save_path)
+    return original_dataset
 
 
 def main(args):
