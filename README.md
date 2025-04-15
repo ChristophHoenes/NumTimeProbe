@@ -185,3 +185,20 @@ When using docker you also have to provide your `WANDB_API_KEY`. You can find yo
 
 </p>
 </details>
+
+### Dataset Files
+
+The dataset files can be downloaded from following link:
+
+https://drive.google.com/drive/folders/1YvgNTUbFoV6SVxKcb47fUh2gYtopbQAS?usp=drive_link
+
+There is one folder for every table corpus (WTQ and GitTales) and data split (train, validation, test). The table data is stored separately from the question data, respectively (e.g. wikitablequestions_test_tables) to save memory.
+
+To inspect the question data simply load the arrow file with the datasets library:
+
+```python
+import datasets
+dataset = datasets.Dataset.load_from_disk('/my/local/path/wikitablequestions_test/250205_2114_47_349337/data-00000-of-00001.arrow')
+```
+
+We plan to make our benchmark available through the Hugging Face Hub with the datasets API after publishing our paper.
