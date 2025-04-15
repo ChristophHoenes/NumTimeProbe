@@ -14,7 +14,7 @@ To inspect the question data simply load the arrow file with the datasets librar
 
 ```python
 import datasets
-dataset = datasets.Dataset.load_from_disk('/my/local/path/wikitablequestions_test/250205_2114_47_349337/data-00000-of-00001.arrow')
+dataset = datasets.Dataset.load_from_disk('/my/local/path/wikitablequestions_test/250205_2114_47_349337')
 ```
 
 We plan to make our benchmark available through the Hugging Face Hub with the datasets API after publishing our paper.
