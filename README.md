@@ -17,9 +17,60 @@ import datasets
 dataset = datasets.Dataset.load_from_disk('/my/local/path/wikitablequestions_test/250205_2114_47_349337')
 ```
 
-We plan to make our benchmark available through the Hugging Face Hub with the datasets API after publishing our paper.
+We plan to make our benchmark available through the [Hugging Face Hub](https://huggingface.co/docs/hub/index) with the [datasets API](https://huggingface.co/docs/datasets/load_hub) after publishing our paper.
 
-## Setup
+## Fine-Tuning and Evaluation Models
+To fine-tune one of the smaller table models (e.g. TAPEX) go to `scripts/console.sh` specify the GPU IDs of your machine you want to use (e.g. `DEVICES="0,1"`) for cuda:0 and cuda:1. Then start the container by running 
+```bash
+bash scripts/console.sh
+```
+The environment within the container is already setup for you so you can simply run the following command in the container:
+```python
+python train.py
+```
+You can add arguments (e.g. `--model tapex`) to change the configuration. See a full list with explanation for each argument by running `python train.py —-help` or check out the file `src/numerical_table_questions/arguments.py`.
+The defaults correspond to the values used in our experiments.
+
+If you need guidance on how to setup Docker please read the section [Setup](#setup) below.
+
+For testing one of the smaller table models (e.g. TAPEX) including your custom fine-tuned models run:
+```python
+python src/numerical_table_questions/evaluation.py
+```
+Use the same configuration as during training. Specify the checkpoint of your fine-tuned model with `--checkpoint path/to/saved/checkpoint.ckpt`.
+
+### Evaluating LLMs with lm_eval and vLLM
+For evaluating one of the LLMs we make use of the well-established [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) framework. We have implemented our task in this repository (`lm-evaluation-harness/lm-eval/tasks/num_tab_qa`). After publishing our paper we plan contribute our benchmark as a task in the lm-evaluation-harness package for ease of use.
+
+In our experiments we used a modified container for lm_eval. To build the container image run: 
+```bash
+bash docker_build_image.sh
+```
+To start an container instance run (and press any key when prompted):
+```
+bash docker_lm_eval_container.sh 0,1
+```
+**Note:** 0,1 selects GPUs 0 and 1 of your machine. If you do not specify any GPU IDs the job will run on CPU which is likely to be very slow (not recommended).
+
+Attach to the container you just created:
+```bash
+docker attach CONTAINER_ID
+```
+You can see all containers and lookup the CONTAINER_ID with:
+```bash
+docker ls -—all
+```
+Then within the container install some dependencies by running:
+```bash
+.  docker_lm_eval_environment.sh
+```
+Everything is setup now and you can use the same container for multiple evaluation runs (one after the other). Simply run:
+```bash
+bash test_vllm_model.sh
+```
+You can change the configuration by editing `test_vllm_model.sh`. For an explanation of the arguments see the documentation of [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) and [vLLM](https://docs.vllm.ai/en/latest/).
+
+## <a name="setup"></a> Setup
 
 ### Preliminaries
 
