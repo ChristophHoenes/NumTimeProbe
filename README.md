@@ -30,6 +30,14 @@ python train.py
 ```
 You can add arguments (e.g. `--model tapex`) to change the configuration. See a full list with explanation for each argument by running `python train.py —-help` or check out the file `src/numerical_table_questions/arguments.py`.
 The defaults correspond to the values used in our experiments.
+<details><summary>Using GPUs for hardware acceleration</summary>
+
+<p>
+
+By default, `train.py` already detects all available CUDA GPUs and uses `DistributedDataParallel` training in case multiple GPUs are found. You can manually select specific GPUs with `--cuda_device_ids`. To use different hardware accelerators, use the `--accelerator` flag. You can use advanced parallel training strategies with `--distributed_strategy`.
+
+</p>
+</details>
 
 If you need guidance on how to setup Docker please read the section [Setup](#setup) below.
 
@@ -96,7 +104,7 @@ bash Mambaforge-$(uname)-$(uname -m).sh
 The preferred method is to install `conda-lock` using `pipx install conda-lock`. For other options, visit the [conda-lock repo](https://github.com/conda/conda-lock). For basic usage, have a look at the commands below:
 
 ```bash
-conda-lock install --name gpt5 conda-lock.yml # create environment with name gpt5 based on lockfile
+conda-lock install --name myenv conda-lock.yml # create environment with name myenv based on lockfile
 conda-lock # create new lockfile based on environment.yml
 conda-lock --update <package-name> # update specific packages in lockfile
 ```
@@ -107,16 +115,16 @@ conda-lock --update <package-name> # update specific packages in lockfile
 
 Lockfiles are an easy way to **exactly** reproduce an environment.
 
-After having installed `mamba` and `conda-lock`, you can create a `mamba` environment named `gpt5` from a lockfile with all necessary dependencies installed like this:
+After having installed `mamba` and `conda-lock`, you can create a `mamba` environment named `myenv` from a lockfile with all necessary dependencies installed like this:
 
 ```bash
-conda-lock install --name gpt5 conda-lock.yml
+conda-lock install --name myenv conda-lock.yml
 ```
 
 You can then activate your environment with
 
 ```bash
-mamba activate gpt5
+mamba activate myenv
 ```
 
 To generate new lockfiles after updating the `environment.yml` file, simply run `conda-lock` in the directory with your `environment.yml` file.
@@ -133,7 +141,7 @@ Whenever you create an environment for a different processor architecture, some 
 Setting up the environment <code>ppc64le</code> is a bit tricky because the official channels do not provide packages compiled for <code>ppc64le</code>. However, we can use the amazing [Open-CE channel](https://ftp.osuosl.org/pub/open-ce/current/) instead. A lockfile containing the relevant dependencies is already prepared in <code>ppc64le.conda-lock.yml</code> and the environment again can be simply installed with:
 
 ```bash
-conda-lock install --name gpt5-ppc64le ppc64le.conda-lock.yml
+conda-lock install --name myenv-ppc64le ppc64le.conda-lock.yml
 ```
 
 Dependencies for <code>ppce64le</code> should go into the seperate <code>ppc64le.environment.yml</code> file. Use the following command to generate a new lockfile after updating the dependencies:
@@ -147,7 +155,7 @@ conda-lock --file ppc64le.environment.yml --lockfile ppc64le.conda-lock.yml
 
 ### Docker
 
-For fully reproducible environments and running on HPC clusters, we provide pre-built docker images at [konstantinjdobler/nlp-research-template](https://hub.docker.com/r/konstantinjdobler/nlp-research-template/tags). We also provide a `Dockerfile` that allows you to build new docker images with updated dependencies:
+For fully reproducible environments and running on compute clusters, we provide pre-built docker images at [konstantinjdobler/nlp-research-template](https://hub.docker.com/r/konstantinjdobler/nlp-research-template/tags). We also provide a `Dockerfile` that allows you to build new docker images with updated dependencies:
 
 ```bash
 docker build --tag <username>/<imagename>:<tag> --platform=linux/amd64 .
@@ -177,32 +185,13 @@ Additionally, you can set the `WANDB_API_KEY` in your remote environment; it wil
 </p>
 </details>
 
-## Training
-
-After all of this setup you are finally ready for some training. First of all, you need to create your data directory with a `train.txt` and `dev.txt`. Then you can start a training run in your environment with:
-
-```bash
-python train.py -n <run-name> -d /path/to/data --model roberta-base --offline
-```
-
-To see an overview over all options and their defaults, run `python train.py --help`. We have disabled Weights & Biases syncing with the `--offline` flag. If you want to log your results, enable W&B as described [here](#weights--biases) and omit the `--offline` flag.
-
-<details><summary>Using GPUs for hardware acceleration</summary>
-
-<p>
-
-By default, `train.py` already detects all available CUDA GPUs and uses `DistributedDataParallel` training in case multiple GPUs are found. You can manually select specific GPUs with `--cuda_device_ids`. To use different hardware accelerators, use the `--accelerator` flag. You can use advanced parallel training strategies with `--distributed_strategy`.
-
-</p>
-</details>
-
 ### Using the Docker environment for training
 
 To run the training code inside the docker environment, start your container by executing the [console.sh](./scripts/console.sh) script. Inside the container you can now execute your training script as before.
 
 ```bash
 bash ./scripts/console.sh   # use this to start the container
-python train.py -n <run-name> -d /path/to/data/ --model roberta-base --offline # execute the training inside your container
+python train.py -n <run-name> -d /path/to/data/ --model tapex --offline # execute the training inside your container
 ```
 
 Like when using a [`Dev Container`](#development), by default no GPUs are available inside the container and caches written to `~/.cache` inside the container will not be persistent. You can modify the [console.sh](./scripts/console.sh) script to select GPUs for training, a persistent cache directory and the docker image for the container. Also, make sure to mount the data directory into the container.
@@ -228,7 +217,7 @@ docker run -it --user $(id -u):$(id -g) --ipc host -v "$(pwd)":/workspace -w /wo
 
 <p>
 
-For security reasons, `docker` might be disabled on your HPC cluster. You might be able to use the SLURM plugin `pyxis` instead like this:
+For security reasons, `docker` might be disabled on your cluster. You might be able to use the SLURM plugin `pyxis` instead like this:
 
 ```bash
 srun ... --container-image konstantinjdobler/nlp-research-template:latest python train.py ...
