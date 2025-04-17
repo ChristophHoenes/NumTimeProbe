@@ -68,10 +68,8 @@ def process_xtick_labels(x_col: str, current_labels: List[str]) -> List[str]:
             return current_labels
 
 
-def grouped_plot(data, x="boundary", y="exact_match", hue="model_name", kind='bar', sve_path: Optional[str] = None, axes_args: dict = {}, color_palette: str = 'colorblind', style: str = 'whitegrid', context: str = 'paper'):
-    sns.set_palette(color_palette)
-    sns.set_style(style)
-    sns.set_context(context)
+def grouped_plot(data, x="boundary", y="exact_match", hue="model_name", kind='bar', sve_path: Optional[str] = None, axes_args: dict = {}, color_palette: str = 'colorblind', style: str = 'whitegrid', context: str = 'paper', font_scale: float = 1.5):
+    sns.set_theme(context=context, style=style, palette=color_palette, font_scale=font_scale)
     if kind == 'line':
         ax = sns.lineplot(data, x=x, y=y, hue=hue)
         legend = ax.get_legend() or ax.legend()
