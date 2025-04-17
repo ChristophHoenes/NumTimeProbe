@@ -11,26 +11,36 @@ from transformers import TapexTokenizer, TapasTokenizer
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
-from numerical_table_questions.data_utils import cast_to_reduced_int
+from numerical_table_questions.utils.data_utils import cast_to_reduced_int
+from numerical_table_questions.utils.model_utils import extract_model_name
+from numerical_table_questions.sqlcoder_model import get_sqlcoder_tokenizer
 from numerical_table_questions.tapex_model import tapex_tokenizer_format, tapex_tokenize
 from numerical_table_questions.tapas_model import tapas_tokenizer_format, reduce_answer_coordinates
 
 
-def get_tokenizer(model_name, **kwargs):
+def get_tokenizer(model_name_or_path: str, **kwargs):
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
         case 'tapex':
-            return TapexTokenizer.from_pretrained("microsoft/tapex-base-finetuned-wtq")
+            return TapexTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "microsoft/tapex-base-finetuned-wtq", **kwargs)
         case 'omnitab':
-            return AutoTokenizer.from_pretrained("neulab/omnitab-large-finetuned-wtq")
+            return AutoTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "neulab/omnitab-large-finetuned-wtq", **kwargs)
         case 'tapas':
-            return TapasTokenizer.from_pretrained("google/tapas-base")
+            return TapasTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "google/tapas-base", **kwargs)
+        case 'sqlcoder':
+            return get_sqlcoder_tokenizer(model_name_or_path if '/' in model_name_or_path else "defog/sqlcoder-7b-2", **kwargs)
+        case 'reastap':
+            return AutoTokenizer.from_pretrained(model_name_or_path if '/' in model_name_or_path else "Yale-LILY/reastap-large", **kwargs)
         case _:
-            raise NotImplementedError(f"No tokenizer getter implemented for model '{model_name}'!")
+            # TODO proper logging
+            print(f"No tokenizer explicitly implemented for model '{model_name_or_path}'. Trying to load tokenizer from Huggingface model hub...")
+            return AutoTokenizer.from_pretrained(model_name_or_path, **kwargs)
 
 
-def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name, lazy: bool = False, is_eval: bool = False, **kwargs):
+def prepare_for_tokenizer(data: Union[TableQuestionDataSet, Iterable[dict]], model_name_or_path: str, lazy: bool = False, is_eval: bool = False, **kwargs):
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
-        case 'tapex' | 'omnitab':
+        case 'tapex' | 'omnitab' | 'reastap':
             return tapex_tokenizer_format(data, lazy, **kwargs)
         case 'tapas':
             return tapas_tokenizer_format(data, lazy, is_eval, **kwargs)
@@ -93,7 +103,7 @@ def default_tokenize(tokenizer, tokenizer_inputs, model_name, verbose, **kwargs)
 
 
 def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dict],
-                              model_name: str,
+                              model_name_or_path: str,
                               # TODO maybe infer from model type info but maybe better instance-wise -> more direct/safe
                               pad_token_id: int,
                               mask_token_id: int,
@@ -105,9 +115,9 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
         single_example = True
     else:
         single_example = False
-
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
-        case 'tapex':
+        case 'tapex' | 'omnitab':
             tokenized = tapex_tokenize(tokenizer, tokenizer_inputs, pad_token_id, mask_token_id, verbose, **kwargs)
         case 'tapas':
             # reduce answer coorndinates for tables that do not fit into the model
@@ -129,10 +139,15 @@ def model_specific_tokenizing(tokenizer, tokenizer_inputs: Union[List[dict], dic
             tokenized = default_tokenize(tokenizer, tokenizer_inputs, pad_token_id, verbose, **kwargs)
             # add float answer (required for weak supervision)
             for encoding, tok_input in zip(tokenized, tokenizer_inputs):
-                if tok_input['answer_text'] is not None:
-                    encoding['float_answer'] = torch.tensor(float(tok_input['answer_text'][0])).unsqueeze(dim=0)
-                else:
-                    encoding['float_answer'] = None
+                try:
+                    float_answer = float(tok_input['answer_text'][0])
+                    encoding['float_answer'] = torch.tensor(float_answer).unsqueeze(dim=0)
+                except (TypeError, ValueError):
+                    if tok_input['answer_text'] is None:
+                        warnings.warn("Answer text is None! The float answer will be None.")
+                    else:
+                        warnings.warn(f"Could not convert answer text '{tok_input['answer_text']}' to float! The float answer will be None.")
+                    encoding['float_answer'] = torch.tensor(float('nan')).unsqueeze(dim=0)
                 if token_type_size := kwargs.get('token_type_size'):
                     token_type_tensor = encoding['token_type_ids']
                     # replace token_type_ids that are out of range of the embedding matrix with the highest possible index

@@ -3,11 +3,11 @@ from typing import Dict, List, Optional, Tuple, Type, Union
 
 import datasets
 
-from numerical_table_questions.data_caching import delete_dataset
+from numerical_table_questions.utils.data_caching import delete_dataset
 from numerical_table_questions.data_synthesis.question import TableQuestion
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
-from numerical_table_questions.sql_templates import SQLTemplate, SQLOperatorTemplate, SQLOverClauseTemplate
+from numerical_table_questions.data_synthesis.sql_templates import SQLTemplate, SQLOperatorTemplate, SQLOverClauseTemplate
 
 
 def create_all_question_fields(sample,
@@ -102,8 +102,8 @@ def create_all_question_fields(sample,
                 count_configurations, count_var_assignments = zip(*unique_count_configurations.items())
 
             compiled_count_sql_statements = [count_template.format(**assignment)
-                                            for assignment in count_var_assignments
-                                            ]
+                                             for assignment in count_var_assignments
+                                             ]
 
             # consider natural language questions and alternatives thereof only if count operator is specified explicitly
             # (e.g. real questions should be genereted; count is not only used for statistical property determination)
@@ -145,7 +145,12 @@ def create_all_question_fields(sample,
                     ]
                 generated_count_questions.extend(count_questions)
             else:
-                count_questions = [TableQuestion('', table, sql, 'count', _template_hash=template_obj._template_hash, _count_hash=count_config)
+                count_questions = [TableQuestion('_IMPLICIT_COUNT_NL', table, sql, 'count',
+                                                 aggregation_column='_IMPLICIT_COUNT_AGG_COL',
+                                                 condition_assignments=[('_IMPLICIT_COUNT_CONDITION_COL', '_IMPLICIT_COUNT_CONDITION_VAL')],
+                                                 _template_hash=template_obj._template_hash,
+                                                 _count_hash=count_config,
+                                                 )
                                    for sql, count_config in zip(compiled_count_sql_statements, count_configurations)
                                    ]
                 generated_count_questions.extend(count_questions)
@@ -340,7 +345,12 @@ def create_table_batch_questions(sample,  # sample of dataset if used with datas
                         )
                     ]
             else:
-                count_questions = [TableQuestion('', table, sql, 'count', _template_hash=template_obj._template_hash, _count_hash=count_config)
+                count_questions = [TableQuestion('_IMPLICIT_COUNT_NL', table, sql, 'count',
+                                                 aggregation_column='_IMPLICIT_COUNT_AGG_COL',
+                                                 condition_assignments=[('_IMPLICIT_COUNT_CONDITION_COL', '_IMPLICIT_COUNT_CONDITION_VAL')],
+                                                 _template_hash=template_obj._template_hash,
+                                                 _count_hash=count_config,
+                                                 )
                                    for sql, count_config in zip(compiled_count_sql_statements, count_configurations)
                                    ]
             # prepare for serialization if memory mapped

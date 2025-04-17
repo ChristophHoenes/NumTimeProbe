@@ -13,6 +13,16 @@
             "justMyCode": false,
         },
         {
+            "name": "Python: Debug Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "stopOnEntry": true,
+            "justMyCode": false,
+            "pythonArgs": ["-Xfrozen_modules=off"]
+        },
+        {
             "name": "Train",
             "type": "python",
             "request": "launch",

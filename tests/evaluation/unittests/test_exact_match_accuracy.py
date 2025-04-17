@@ -3,7 +3,7 @@ import pytest
 import torch
 
 from numerical_table_questions.evaluation import exact_match_accuracy
-from numerical_table_questions.tokenizer_utils import get_tokenizer
+from numerical_table_questions.utils.tokenizer_utils import get_tokenizer
 
 
 DEFAULT_TOKENIZER = get_tokenizer('tapex')

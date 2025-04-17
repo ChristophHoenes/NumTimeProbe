@@ -6,7 +6,7 @@ import torch
 import wandb
 from dargparser import dargparse
 from lightning import Trainer, seed_everything
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.plugins.environments import (
     LightningEnvironment,
@@ -17,24 +17,24 @@ from loguru import logger
 from transformers import PreTrainedModel
 
 from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
-from numerical_table_questions.dlib.frameworks.lightning import CUDAMetricsCallback
-from numerical_table_questions.dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
-from numerical_table_questions.dlib.frameworks.wandb import (
+from numerical_table_questions.utils.dlib.frameworks.lightning import CUDAMetricsCallback
+from numerical_table_questions.utils.dlib.frameworks.pytorch import get_rank, set_torch_file_sharing_strategy_to_system
+from numerical_table_questions.utils.dlib.frameworks.wandb import (
     WANDB_ENTITY,
     WANDB_PROJECT,
     WandbCleanupDiskAndCloudSpaceCallback,
     check_checkpoint_path_for_wandb,
     check_for_wandb_checkpoint_and_download_if_necessary,
 )
+from numerical_table_questions.utils.lightning_utils import disambiguate_val_frequency_for_lightning
 from numerical_table_questions.data_loading import TableQADataModule
-from numerical_table_questions.system_helpers import (
-    choose_auto_accelerator,
-    choose_auto_devices,
+from numerical_table_questions.utils.system_helpers import (
     handle_batch_size_logic_,
     log_slurm_info,
+    parse_auto_arguments,
 )
 from numerical_table_questions.model import LightningWrapper
-from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
+from numerical_table_questions.utils.model_utils import get_model_module, get_model_specific_config
 
 
 @logger.catch(reraise=True)
@@ -77,18 +77,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         **wandb_extra_args,
     )
 
-    ########### Specifiy auto arguments ###########
-    if args.accelerator == "auto":
-        args.accelerator = choose_auto_accelerator()
-    if args.num_devices == -1:
-        args.num_devices = choose_auto_devices(args.accelerator)
-    if args.cuda_device_ids:
-        cuda_device_count = torch.cuda.device_count()
-        if cuda_device_count < len(args.cuda_device_ids):
-            raise ValueError(
-                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
-            )
-    effective_batch_size_per_step = handle_batch_size_logic_(args)
+    parse_auto_arguments(args)
+    effective_batch_size_per_forward = handle_batch_size_logic_(args)
 
     ########### Log config ###########
     for arg_group in parsed_arg_groups:
@@ -113,22 +103,31 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
 
     if args.training_goal_unit == "samples":
         goal_units_per_optimizer_step = args.effective_batch_size
-        goal_units_per_forward_pass = effective_batch_size_per_step
+        goal_units_per_forward_pass = effective_batch_size_per_forward
     elif args.training_goal_unit == "tokens":
         goal_units_per_optimizer_step = args.effective_batch_size * args.max_sequence_length
-        goal_units_per_forward_pass = effective_batch_size_per_step * args.max_sequence_length
+        goal_units_per_forward_pass = effective_batch_size_per_forward * args.max_sequence_length
     elif args.training_goal_unit == "optimizer-steps":
         goal_units_per_optimizer_step = 1
         goal_units_per_forward_pass = 1 / args.gradient_accumulation_steps
     else:
         raise ValueError(f"Unknown training goal unit: {args.training_goal_unit}")
 
+    val_frequency_arguments = disambiguate_val_frequency_for_lightning(args)
+    val_frequency = val_frequency_arguments["val_check_interval"]
+    check_val_every_n_epoch = val_frequency_arguments["check_val_every_n_epoch"]
+
     # Lightning does `gradient_accumulation_steps` many forward passes per trainer step (step := optimization step)
     args.training_goal = int(args.training_goal / goal_units_per_optimizer_step)
-    val_frequency_in_optimization_steps = int(args.val_frequency / goal_units_per_optimizer_step)
+    if val_frequency > 1:
+        val_frequency_in_optimization_steps = int(val_frequency / goal_units_per_optimizer_step)
+    else:
+        val_frequency_in_optimization_steps = f"(val_steps_per_epoch := 1/{val_frequency}) * (optimizer_steps_per_epoch := len(train_loader) / args.effective_batch_size)"
 
-    # val_frequency in lightning is every forward pass NOT optimization step # NOTE: as of June 2023
-    args.val_frequency = int(args.val_frequency / goal_units_per_forward_pass)
+    # val_frequency in lightning is every forward pass/training batch NOT optimization step # NOTE: as of June 2023
+    if val_frequency > 1:
+        # convert goal_units to training batches
+        val_frequency = int(val_frequency / goal_units_per_forward_pass)
     args.model_log_frequency = int(args.model_log_frequency / goal_units_per_optimizer_step)
     args.lr_warmup = int(args.lr_warmup / goal_units_per_optimizer_step)
 
@@ -138,7 +137,15 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         mode="min",
         auto_insert_metric_name=False,
         every_n_train_steps=args.model_log_frequency,
+        save_top_k=args.save_top_k,
     )
+    if args.early_stopping_patience > 0:
+        early_stop_callback = EarlyStopping(
+            monitor="val/loss",
+            min_delta=0.00,
+            patience=args.early_stopping_patience,
+            mode="min",
+            )
     wandb_disk_cleanup_callback = WandbCleanupDiskAndCloudSpaceCallback(
         cleanup_local=True, cleanup_online=False, size_limit=20
     )
@@ -154,7 +161,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     if args.resume_training and args.checkpoint_path:  # load weights, optimizer states, scheduler state, ...\
         model = LightningWrapper.load_from_checkpoint(
             args.checkpoint_path,
-            effective_batch_size_per_step=effective_batch_size_per_step,
+            model=get_model_module(args.model_name_or_path),
+            effective_batch_size_per_step=args.effective_batch_size,
         )
         logger.info(f"Loded model with {model.samples_processed.item()} processed samples from checkpoint. "
                     " Also loaded all training states - ready to resume training."
@@ -162,7 +170,7 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     else:  # create new model
         model_module = get_model_module(args.model_name_or_path)
         model_config = get_model_specific_config(args.model_name_or_path)
-        model = LightningWrapper(model_module, args, **model_config, effective_batch_size_per_step=effective_batch_size_per_step)
+        model = LightningWrapper(model_module, args, **model_config, effective_batch_size_per_step=args.effective_batch_size)
 
     # initiallize from pretrained but do not resume training, instead fresh start (if condition is True)
     if args.checkpoint_path and not args.resume_training:
@@ -184,14 +192,6 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         torch.nn.init.xavier_uniform_(model.model.get_input_embeddings().weight)
         # torch.nn.init.normal_(model.model.get_input_embeddings().weight) # alternative
 
-    if current_process_rank == 0:
-        model.on_train_start = lambda: logger.info(
-            f"Total optimizer steps: {args.training_goal} | "
-            f"LR warmup steps: {args.lr_warmup} | "
-            f"Validation Frequency: {val_frequency_in_optimization_steps} | "
-            f"Model Log Frequencey: {args.model_log_frequency} | "
-            f"Effective batch size: {args.effective_batch_size}"
-        )
     wandb_logger.watch(model, log="gradients", log_freq=500, log_graph=False)
 
     # https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
@@ -208,8 +208,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
 
     #################### Construct dataloaders & trainer #################
     dm = TableQADataModule(model.model_specs,
-                           table_corpus=args.table_corpus,
-                           dataset_name=args.dataset_name,
+                           table_corpus=args.table_corpus_name,
+                           dataset_name=args.dataset_suffix,
                            train_batch_size=args.batch_size_per_device,
                            eval_batch_size=args.eval_batch_size_per_device,
                            lazy_data_processing=args.lazy_data_processing,
@@ -221,6 +221,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
                            )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks = [checkpoint_callback, wandb_disk_cleanup_callback, lr_monitor]
+    if args.early_stopping_patience > 0:
+        callbacks.append(early_stop_callback)
     if args.accelerator == "cuda":
         callbacks.append(CUDAMetricsCallback())
 
@@ -239,8 +241,8 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
     # Initialize trainer
     trainer = Trainer(
         max_steps=args.training_goal,
-        val_check_interval=args.val_frequency,
-        check_val_every_n_epoch=None,  # validation based on steps instead of epochs
+        val_check_interval=val_frequency,
+        check_val_every_n_epoch=check_val_every_n_epoch,  # validation based either on steps (val_frequency) or epochs
         devices=args.cuda_device_ids or args.num_devices,
         accelerator=args.accelerator,
         strategy=distributed_strategy,
@@ -269,6 +271,16 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         if args.val_only:
             exit(0)
 
+    if current_process_rank == 0:
+        logger.info(
+            f"\nTotal optimizer steps: {args.training_goal} | "
+            f"\nLR warmup steps: {args.lr_warmup} | "
+            f"\nValidation Frequency (in optimizer steps): {val_frequency_in_optimization_steps} | "
+            f"\nValidation Frequency (passed to trainer): {val_frequency} | "
+            f"\nModel Log Frequencey: {args.model_log_frequency} | "
+            f"\nEffective batch size (per optimizer step): {args.effective_batch_size} | "
+            f"\nEffective batch size (per forward pass): {effective_batch_size_per_forward}"
+            )
     logger.info(f"Rank {current_process_rank} | Starting training...")
     trainer.fit(model, datamodule=dm, ckpt_path=args.checkpoint_path if args.resume_training else None)
     if trainer.interrupted and IS_ON_SLURM:
@@ -280,12 +292,11 @@ def main(parsed_arg_groups: tuple[TrainingArgs, MiscArgs, TokenizationArgs]):
         # Validate after training has finished
         trainer.validate(model, datamodule=dm)
 
+        logger.info(f"Trying to save checkpoint (rank={current_process_rank})...")
+        save_path = str(Path(checkpoint_callback.dirpath) / "last_model_ckpt.ckpt")
+        trainer.save_checkpoint(save_path)
+
         if current_process_rank == 0:
-            logger.info("Trying to save checkpoint....")
-
-            save_path = str(Path(checkpoint_callback.dirpath) / "last_model_ckpt.ckpt")
-            trainer.save_checkpoint(save_path)
-
             logger.info("Collecting PL checkpoint for wandb...")
             artifact = wandb.Artifact(name=f"model-{wandb_logger.experiment.id}", type="model")
             artifact.add_file(save_path, name="model.ckpt")

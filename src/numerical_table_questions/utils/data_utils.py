@@ -1,12 +1,13 @@
 import random
 import re
+import statistics
 import wandb
 import warnings
 from collections.abc import Iterable
 from dargparser import dargparse
 from multiprocessing import Pool
 from pathlib import Path, PurePath
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
 
 import datasets
 import torch
@@ -17,9 +18,9 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from numerical_table_questions.arguments import DataProcessingArgs
-from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
+from numerical_table_questions.utils.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT
 #from src.numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_caching import caching, delete_dataset
+from numerical_table_questions.utils.data_caching import caching, delete_dataset, save_version
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import remove_duplicate_qa_pairs
 
@@ -163,12 +164,21 @@ def extract_properties_posthoc(args: DataProcessingArgs, use_dummy_data=False):
         data_split = DUMMY_DATA
     else:
         base_filename = f"{args.table_corpus}_{args.splits[0]}_{args.dataset_name}"
-        data_split = caching(base_filename, cache_path=args.data_dir)
+        data_split = caching(base_filename, cache_path=args.cache_dir)
 
     deduplicated = data_split.map(remove_duplicate_qa_pairs)
     output = extract_template_fields_from_query(deduplicated)
-    output.save_to_disk(Path(args.data_dir) / ("stats_" + base_filename)), delete_dataset(output)
+    output.save_to_disk(Path(args.cache_dir) / ("stats_" + base_filename)), delete_dataset(output)
     return output
+
+
+def infer_is_multi_answer_posthoc(sample: dict) -> dict:
+    # TODO Caution! apparently True/False are can be converted to 'true'/'false' by datasets 
+    # so str(sample['is_multy_row_answer'][i]) != 'True'/'False'
+    return {'is_multy_row_answer': [sample['aggregators'][i] == '' and int(sample['aggregation_num_rows'][i] or -1) > 1
+                                    for i in range(len(sample['questions']))
+                                    ]
+            }
 
 
 def load_artifact_from_wandb(run_id, artifact_name='text_predictions', version='latest', wandb_entity=WANDB_ENTITY, wandb_project=WANDB_PROJECT):
@@ -208,6 +218,7 @@ def is_value_in_condition_col(data_sample):
 
 
 def sample_questions(table_dataset_sample: dict, len_dataset: int = -1, min_num_questions: int = -1, cutoff: Optional[int] = None, seed: Optional[int] = None) -> dict:
+    """ Returns a subsample of the questions in the dataset with at most cutoff number of questions but at least one question per table."""
     if len_dataset < 0 or min_num_questions < 0:
         raise ValueError("Valid (true positive) values need to be passed as kwargs for len_dataset and min_num_questions!")
     if seed is not None:
@@ -215,7 +226,7 @@ def sample_questions(table_dataset_sample: dict, len_dataset: int = -1, min_num_
     # currently this seems to be a LazyRow object (see https://github.com/huggingface/datasets/blob/main/src/datasets/formatting/formatting.py)
     fields = list(table_dataset_sample.data.keys())
     # if there is a cutoff sample equal amounts of questions per table (else min_num_questions)
-    max_questions_per_table = (cutoff or len_dataset*min_num_questions) // len_dataset
+    max_questions_per_table = max((cutoff or len_dataset*min_num_questions) // len_dataset, 1)  # at least one question per table
     # draw sample ids at random
     num_questions = len(table_dataset_sample['questions'])
     sampled_ids = random.sample(range(num_questions), k=min(max_questions_per_table, num_questions))
@@ -248,6 +259,35 @@ def cutoff_num_questions(dataset: datasets.Dataset, cutoff: Optional[int] = None
                        )
 
 
+def count_num_questions_dataset(dataset: datasets.Dataset) -> int:
+    total_num_questions = 0
+    for table_sample in dataset:
+        total_num_questions += len(table_sample['questions'])
+    return total_num_questions
+
+
+def aggregator_counts(dataset: datasets.Dataset,
+                      aggregators: List[str] = ('min', 'max', 'avg', 'sum', 'count', ''),
+                      ) -> Tuple[Dict[str, int], Dict[str, float]]:
+    total_counts = {}  # total counts for all aggregators
+    table_counts = []  # counts for each table (for mean and standard deviation)
+    for table_sample in dataset:
+        table_counts.append({agg: 0 for agg in aggregators})  # only consider standard aggregators
+        for agg in table_sample['aggregators']:
+            total_counts[agg] = total_counts.get(agg, 0) + 1
+            # if standard aggregator then add counts to current table dict (for mean and standard deviation)
+            if agg in aggregators:
+                table_counts[-1][agg] += 1
+    # calculate mean and standard deviation
+    means = {agg + '_mean': np.mean([table_count[agg] for table_count in table_counts])
+             for agg in aggregators
+             }
+    stds = {agg + '_std': np.std([table_count[agg] for table_count in table_counts])
+            for agg in aggregators
+            }
+    return total_counts, means | stds
+
+
 def apply_table_dataset_path_changes(example, path_change_mapping: dict = {}, key_name: str = 'table_dataset_path'):
     if len(path_change_mapping) == 0:
         warnings.warn("Expected a dictionary with at least one path key (old_path: new_path) but no mapping was provided! No action will be performed")
@@ -269,6 +309,7 @@ def add_hierarchy_level(dataset: datasets.Dataset,
                         columns: Optional[List[str]] = None,
                         save_path: Optional[str] = None,
                         delete_old: bool = True,
+                        num_proc: Optional[int] = 12,
                         ) -> datasets.Dataset:
     if not columns:
         columns = dataset.column_names
@@ -279,6 +320,7 @@ def add_hierarchy_level(dataset: datasets.Dataset,
         lambda x: {hierarchy_level: {col: x[col] for col in columns}},
         remove_columns=columns,
         desc=f"Transfering all data to field {hierarchy_level}...",
+        num_proc=num_proc,
         ), delete_dataset(dataset) if delete_old else None
     if save_path or old_path:
         dataset.save_to_disk(str(PurePath(save_path or old_path) / datetime.now().strftime('%y%m%d_%H%M_%S_%f')))
@@ -331,9 +373,83 @@ def get_table_by_id(table_dataset: datasets.Dataset, table_id: str, table_id_col
     raise ValueError(f"Table ID {table_id} could not be found in the provided table_dataset!")
 
 
+def extract_column_names_from_table(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
+    return {sample['table'][table_id_col_name]: sample['table']['deduplicated_column_names'] for sample in table_dataset}
+
+
+def consistent_quoting_map(sample: dict, nl_questions: bool = True, table_column_names_map=None) -> dict:
+    if isinstance(sample['table'], str):
+        if table_column_names_map is None:
+            raise ValueError("table_column_names_map must be provided when dataset only contains table_ids as tables!")
+        column_names = table_column_names_map[sample['table']]
+    else:
+        column_names = sample['table']['deduplicated_column_names']
+    queries = sample['sql']
+    for column_name in column_names:
+        new_queries = [(query
+                        .replace(f" '{column_name}' ", f" {column_name} ")  # remove single quotes
+                        .replace(f"column '{column_name}'?", f" {column_name}?")  # remove single quotes when column at end (no condition) also avoid gittables column_name = value
+                        .replace(f" {column_name} ", f' "{column_name}" ')  # add double quotes
+                        .replace(f" {column_name}?", f' "{column_name}"?')  # add double quotes when column at end (no condition)
+                        )
+                       for query in queries
+                       ]
+    if nl_questions:
+        questions = sample['questions']
+        for column_name in column_names:
+            new_questions = [(question
+                              .replace(f" '{column_name}' ", f" {column_name} ")  # remove single quotes
+                              .replace(f"column '{column_name}'?", f" {column_name}?")  # remove single quotes when column at end (no condition) also avoid gittables column_name = value
+                              .replace(f" {column_name} ", f' "{column_name}" ')  # add double quotes
+                              .replace(f" {column_name}?", f' "{column_name}"?')  # add double quotes when column at end (no condition)
+                              )
+                             for question in questions
+                             ]
+            questions = new_questions
+        return {'sql': new_queries, 'questions': new_questions}
+    return {'sql': new_queries}
+
+
+def gather_statistics_map(sample: dict, stat_fields: List[str] = ['aggregation_num_rows', 'num_conditions', 'question_lengths', 'answer_lengths'], hist_fields: List[Tuple[str, List[str]]] = [('aggregators', ['', 'avg', 'sum', 'min', 'max', 'count'])]) -> dict:
+    new_fields = {}
+    for stat_field in stat_fields:
+        stat_field_float = []
+        for x in sample[stat_field]:
+            try:
+                stat_field_float.append(float(x))
+            except ValueError:
+                warnings.warn(f"Could not convert value {x} to float for field {stat_field}! Skipping value...")
+                continue
+        if len(stat_field_float) == 0:
+            warnings.warn(f"No valid values found for field {stat_field}! Ignoring entire field...")
+            continue
+        new_fields[f'{stat_field}_mean'] = statistics.mean(stat_field_float)
+        if len(stat_field_float) > 2:
+            new_fields[f'{stat_field}_std'] = statistics.stdev(stat_field_float)
+        else:
+            warnings.warn(f"No standard deviation for field {stat_field} because less then two values!")
+        new_fields[f'{stat_field}_median'] = statistics.median(stat_field_float)
+    for hist_field in hist_fields:
+        new_fields[f'{stat_field}_hist'] = {val: sample[hist_field[0]].count(val) for val in hist_field[1]}
+    return new_fields
+
+
+def aggregate_statistics_map(dataset: datasets.Dataset) -> dict:
+    new_fields = {}
+    for column_name in dataset.column_names:
+        if '_hist' not in column_name:
+            new_fields[column_name + '_mean'] = statistics.mean(dataset[column_name])
+        if '_mean' in column_name and len(dataset[column_name]) > 2:
+            new_fields[column_name + '_std'] = statistics.stdev(dataset[column_name])
+        if '_hist' in column_name:
+            new_fields[column_name + '_hist'] = {val: sum(x[val] for x in dataset[column_name]) for val in dataset[column_name][0].keys()}
+    return new_fields
+
+
 def create_table_index(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
-    index = {}
-    if 'table' in table_dataset.column_names and table_dataset[0]['table'].get(table_id_col_name) is not None:
+    if 'table' in table_dataset.column_names and isinstance(table_dataset[0]['table'], str):
+        index = {table_dataset[i]['table']: i for i in range(len(table_dataset))}
+    elif 'table' in table_dataset.column_names and table_dataset[0]['table'].get(table_id_col_name) is not None:
         index = {table_dataset[i]['table'][table_id_col_name]: i for i in range(len(table_dataset))}
     elif table_dataset.get(table_id_col_name) is not None:
         index = {table_dataset[i][table_id_col_name]: i for i in range(len(table_dataset))}
@@ -371,6 +487,169 @@ def plot_histogram(dataset: datasets.Dataset, field='answers', bins=10, cast_flo
     plt.savefig(f"dat{len(dataset)}_{field}_removed{removed if cast_float else ''}_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}.pdf")
 
 
+def infer_python_type_from_str(string: str) -> Union[int, float, str]:
+    try:
+        return int(string)
+    except ValueError:
+        try:
+            return float(string)
+        except ValueError:
+            return string
+
+
+def apply_filter_condition(dataset: datasets.Dataset, num_proc: Optional[int] = 4) -> datasets.Dataset:
+    """ Applies a precomputed filter condition to a dataset that has equal length sequences as fields.
+        filter_condition already needs to be a field in dataset and contain a list of booleans (True is kept False is filtered).
+        The length of the list must be equivalent to every sequence field in the dataset.
+        Only sequence entries where the corresponding filter_condition is True are kept for each field.
+        The field filter_condition is removed from the dataset during the process.
+    """
+    if 'filter_condition' not in dataset.column_names:
+        raise ValueError("Dataset must contain a 'filter_condition' field with a list of booleans!")
+    return dataset.map(lambda x: {col_name: [x[col_name][i]
+                                             for i, is_kept in enumerate(x['filter_condition'])
+                                             if is_kept
+                                             ]
+                                  for col_name in x.keys()
+                                  if isinstance(x[col_name], list)
+                                  and col_name != 'filter_condition'
+                                  },
+                       desc="Applying pre-computed filter condition...",
+                       remove_columns=['filter_condition'],
+                       num_proc=num_proc,
+                       )
+
+
+def question_to_main_expression(question: str) -> str:
+    if 'of the difference between column' in question:
+        return 'difference'
+    if 'of the ratio of column' in question:
+        return 'ratio'
+    if 'of the expression' in question:
+        return 'expression'
+    return 'single column'
+
+
+def question_to_condition(question: str) -> str:
+    if 'has a value equal to' in question:
+        return '='
+    if 'has a value different from' in question:
+        return '!='
+    if 'has a value greater than' in question:
+        return '>'
+    if 'has a value greater or equal than' in question:
+        return '>='
+    if 'has a value lesser than' in question:
+        return '<'
+    if 'has a value lesser or equal than' in question:
+        return '<='
+    return ''
+
+
+def add_template_classes(dataset: datasets.Dataset, num_proc: int = 12) -> datasets.Dataset:
+    dataset = dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question']),
+                                     'condition': question_to_condition(x['question'])},
+                          desc="Adding template class fields to dataset...",
+                          num_proc=num_proc)
+    return dataset
+
+
+def added_questions(sample : dict, update_dicts={}, replace_columns=[]) -> dict:
+    """ Adds question instances to the dataset that are specified in update_dicts.
+        update_dicts contains all questions that should be added grouped by table id
+    """
+    if len(update_dicts) == 0 or len(replace_columns) == 0:
+        warnings.warn("update_dicts and replace_columns must be provided otherwise this map will have no effect!")
+    table_id = sample['table'] if isinstance(sample['table'], str) else sample['table']['table_id']
+    update_data = update_dicts.get(table_id)
+    if update_data is None:
+        return {}
+    return {col: sample[col] + update_data[col] for col in replace_columns}
+
+
+def patch_expression_dataset(original_dataset: datasets.Dataset, new_expression_dataset: datasets.Dataset, num_proc: int = 12, save_path: Optional[str] = None) -> datasets.Dataset:
+    # filter all expression questions from original dataset
+    original_dataset = original_dataset.map(lambda x: {'main_expression': [question_to_main_expression(q) for q in x['questions']]}, desc="Prepare main_expression...", num_proc=num_proc)
+    original_dataset = original_dataset.map(lambda x: {'expression_count': sum([i == 'expression' for i in x['main_expression']])}, desc="Count expression_questions...", num_proc=num_proc)
+    original_dataset = original_dataset.map(
+        lambda x: {'filter_condition': [x['main_expression'][i].lower() != 'expression'
+                                        for i in range(len(x['questions']))
+                                        ]
+                   },
+        desc="Prepare filter_condition: not expression question...",
+        num_proc=num_proc,
+        )
+    original_dataset = apply_filter_condition(original_dataset, num_proc=num_proc)
+    # try filling the new expression questions into exact the same the original dataset
+    index = create_table_index(new_expression_dataset)
+    excess_in_new_cnt = {}
+    not_available_in_new_cnt = {}
+    update_dicts = {}
+    replace_columns = [col for col in original_dataset.column_names
+                       if isinstance(original_dataset[0][col], list)
+                       and len(original_dataset[0][col]) == len(original_dataset[0]['questions'])
+                       and col not in ['main_expression', 'expression_count']  # because new_expression_dataset does not have them
+                       ]
+    for s, sample in enumerate(original_dataset):
+        # only if expression questions were deleted
+        if sample['expression_count'] > 0:
+            if isinstance(sample['table'], str):
+                table_id = sample['table']
+            else:
+                table_id = sample['table']['table_id']
+            new_sample_idx = index.get(table_id)
+            # if new expression questions are not available for this table mark the missed samples and skip
+            if new_sample_idx is None:
+                not_available_in_new_cnt[s] = sample['expression_count']
+                continue
+            else:
+                # calculate if new expression questions are available in excess or too few
+                new_sample = new_expression_dataset[new_sample_idx]
+                expression_sample_difference = sample['expression_count'] - len(new_sample['questions'])
+                if expression_sample_difference < 0:
+                    excess_in_new_cnt[s] = abs(expression_sample_difference)
+                elif expression_sample_difference > 0:
+                    not_available_in_new_cnt[s] = expression_sample_difference
+                # add new expression questions to original dataset
+                update_dict = {}
+                for col in replace_columns:
+                    update_dict[col] = new_sample[col][:min(sample['expression_count'], len(new_sample['questions']))]
+            update_dicts[table_id] = update_dict
+    original_dataset = original_dataset.map(added_questions,
+                                            fn_kwargs={'update_dicts': update_dicts, 'replace_columns': replace_columns},
+                                            desc="Add new expression questions to original dataset...",
+                                            num_proc=num_proc,
+                                            )
+    # if new expression questions are not available for some questions try to replace with excess questions from other tables
+    if sum(not_available_in_new_cnt.values()) > 0:
+        warnings.warn(f"New expression questions are not available for {len(not_available_in_new_cnt)} questions in the original dataset!"
+                      "Trying to replace with up to {sum(excess_in_new_cnt.values())} excess questions from other tables of the the new expression dataset..."
+                      )
+        remaining_shortage = sum(not_available_in_new_cnt.values())
+        while remaining_shortage > 0:
+            if sum(excess_in_new_cnt.values()) == 0:
+                warnings.warn(f"No more excess questions available to replace {remaining_shortage} missing expression questions!")
+                break
+            # recompute for correct select index of exess example
+            sorted_ids_by_num_excess = sorted(excess_in_new_cnt.items(), key=lambda x: x[1], reverse=True)
+            for table_idx, num_excess in sorted_ids_by_num_excess:
+                if excess_in_new_cnt[table_idx] <= 0:
+                    continue
+                # add new expression questions to original dataset from excess questions
+                for col in original_dataset.column_names:
+                    if isinstance(sample[col], list) and len(sample[col]) == len(sample['questions']):
+                        table_id = original_dataset[table_idx]['table']['table_td']
+                        new_sample_table_idx = index[table_id]
+                        original_dataset[table_idx][col].append(new_sample[new_sample_table_idx][col][-num_excess])
+                        remaining_shortage -= 1
+                        excess_in_new_cnt[table_idx] -= 1  # reduce excess count for stop condition
+
+    original_dataset = original_dataset.remove_columns(['main_expression', 'expression_count'])
+    if save_path is not None:
+        save_version(original_dataset, save_path)
+    return original_dataset
+
+
 def main(args):
     # TODO if else for deciding whether to postproces or not (properties already created during synthesis?)
     # extract_properties_posthoc(args)
@@ -378,7 +657,7 @@ def main(args):
 
     # load tokenized data with properties
     base_filename = f"stats_{args.table_corpus}_{args.dataset_name}_tapex_tokenized"
-    data_split = caching(base_filename, cache_path=args.data_dir + '/viable_tensors')
+    data_split = caching(base_filename, cache_path=args.cache_dir + '/viable_tensors')
     data_split = data_split.map(extract_table_id)
     artifact = load_artifact_from_wandb('ne0ljo4e', wandb_entity='aiis-nlp')
     extended_predictions = add_column_from_artifact(data_split, artifact, {'text_prediction': 'text_predictions'})
@@ -434,7 +713,7 @@ if __name__ == '__main__':
 
     main(args)
     #base_filename = f"stats_{args.table_corpus}_{args.dataset_name}_tapex_tokenized"
-    #data_split = caching(base_filename, cache_path=args.data_dir + '/viable_tensors')
+    #data_split = caching(base_filename, cache_path=args.cache_dir + '/viable_tensors')
     #artifact = load_artifact_from_wandb('ne0ljo4e', wandb_entity='aiis-nlp')
     #extended_data = add_column_from_artifact(data_split, artifact, 'text_predictions')
     #print(artifact[0])

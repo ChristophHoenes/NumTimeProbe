@@ -1,31 +1,34 @@
+import os
 import logging
 import logging.config
-import pickle
-import traceback
-from mock import Mock
+import warnings
+from datetime import datetime
 from pathlib import PurePath
-from typing import List, Type, Union
+from typing import List, Type, Union, Optional
 
+import datasets
 import torch
-import wandb
+from accelerate import PartialState
 from dargparser import dargparse
-from lightning import Trainer
-from lightning.pytorch.loggers import WandbLogger
-from transformers import AutoTokenizer, TapexTokenizer, BartForConditionalGeneration, AutoModelForSeq2SeqLM
+from transformers import TapexTokenizer, BartForConditionalGeneration
 
-from numerical_table_questions.dlib.frameworks.wandb import WANDB_ENTITY, WANDB_PROJECT, check_for_wandb_checkpoint_and_download_if_necessary
-from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs
-from numerical_table_questions.data_loading import TableQADataModule
+from numerical_table_questions.arguments import TrainingArgs, MiscArgs, TokenizationArgs, DataProcessingArgs
+from numerical_table_questions.data_loading import TableQADataModule, SQLCoderDataModule, create_sqlcoder_dataset, path_from_components
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
-from numerical_table_questions.data_synthesis.question import TableQuestion
-from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
-from numerical_table_questions.metrics import token_accuracy
-from numerical_table_questions.model import LightningWrapper
-from numerical_table_questions.model_utils import get_model_module, get_model_specific_config
-from numerical_table_questions.sql_templates import SQLColumnExpression, SQLOperator, SQLConditionTemplate
-from numerical_table_questions.sql_utils import execute_sql
-from numerical_table_questions.system_helpers import choose_auto_accelerator, choose_auto_devices
+from numerical_table_questions.utils.lightning_utils import get_lightning_trainer
+from numerical_table_questions.metrics import token_accuracy, str_match_accuracy, float_match_accuracy, absolute_distance
+from numerical_table_questions.model import LightningWrapper, SQLCoder
+from numerical_table_questions.sqlcoder_model import (
+    sqlcoder_generation,
+    get_sqlcoder_inference_pipeline
+    )
+from numerical_table_questions.utils.data_utils import caching
+from numerical_table_questions.utils.model_utils import get_model_module, get_model_specific_config, extract_model_name
+from numerical_table_questions.utils.sql_utils import execute_sql
+from numerical_table_questions.utils.tokenizer_utils import get_tokenizer
+from numerical_table_questions.utils.system_helpers import parse_auto_arguments
+from numerical_table_questions.utils.wandb_utils import try_load_local_then_wandb_checkpoint, get_wandb_logger
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
@@ -144,71 +147,142 @@ def evaluate(model: Type[TableQaModel],
     return metric_result, predictions, ground_truth, eval_results
 
 
-def evaluate_trained(eval_args, misc_args, tokenizer_args, model_checkpoint_path=None):
+def evaluate_trained(model_name: Optional[str] = None, model_checkpoint_path: str = None, eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_args=TokenizationArgs(), data_args=DataProcessingArgs()):
     resolved_checkpoint_path = model_checkpoint_path or eval_args.checkpoint_path
+    extracted_model_name = extract_model_name(eval_args.model_name_or_path)
+    if model_name is not None and model_name != extracted_model_name:
+        warnings.warn("Provided model name does not match the model name in the configuration arguments! Trying the provided model name...")
+        eval_args.model_name_or_path = model_name
+    else:
+        model_name = extracted_model_name
     # Initiallize Weights&Biases logger to log artefacts
-    wandb_logger = WandbLogger(
-        project=misc_args.wandb_project or WANDB_PROJECT,
-        entity=WANDB_ENTITY,
-        log_model="all",
-        tags=['eval', *misc_args.wandb_tags],
-        name=misc_args.wandb_run_name,
-    )
-
-    # process (download) checkpoint_path to enable remote wandb checkpoint paths
-    if args.checkpoint_path:
-        args.checkpoint_path = check_for_wandb_checkpoint_and_download_if_necessary(
-            args.checkpoint_path, wandb_logger.experiment
-        )
-
-    ########### Specifiy auto arguments ###########
-    if args.accelerator == "auto":
-        args.accelerator = choose_auto_accelerator()
-    if args.num_devices == -1:
-        args.num_devices = choose_auto_devices(args.accelerator)
-    if args.cuda_device_ids:
-        cuda_device_count = torch.cuda.device_count()
-        if cuda_device_count < len(args.cuda_device_ids):
-            raise ValueError(
-                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
-            )
+    tags = ['eval', model_name]
+    wandb_logger = get_wandb_logger(misc_args, tags=tags)
+    parse_auto_arguments(eval_args)
     # Initialize trainer
-    trainer = Trainer(
-        max_steps=eval_args.training_goal,
-        val_check_interval=eval_args.val_frequency,
-        check_val_every_n_epoch=None,  # validation based on steps instead of epochs
-        devices=eval_args.cuda_device_ids or eval_args.num_devices,
-        accelerator=eval_args.accelerator,
-        logger=wandb_logger,
-        deterministic=True,
-        precision=eval_args.precision,
-        gradient_clip_val=eval_args.gradient_clipping,
-        accumulate_grad_batches=eval_args.gradient_accumulation_steps,
-        inference_mode=not eval_args.compile,  # inference_mode for val/test and PyTorch 2.0 compiler don't like each other  # noqa: E501
-    )
-    # for this to work the hyperparameters need to be saved and no positional arguments in LightningWrapper are allowed
-    # alternatively overwrite load_from_checkpoint but not recommended since some other side effects from super() might be lost and model is still needed
-    # model = LightningWrapper.load_from_checkpoint(checkpoint_path=resolved_checkpoint_path)
-    model_module = get_model_module(eval_args.model_name_or_path)
-    model_kwargs = get_model_specific_config(eval_args.model_name_or_path)
-    model = LightningWrapper(model_module, eval_args, **model_kwargs)
-    # TODO check local first then wandb
+    trainer = get_lightning_trainer(eval_args, wandb_logger=wandb_logger)
+
+    if model_name == 'sqlcoder':
+        if eval_args.optimize_inference_pipeline:
+            evaluate_sqlcoder(eval_args, misc_args, tokenizer_args, data_args, wandb_logger=wandb_logger)
+            return
+        else:
+            model = SQLCoder(eval_args.model_name_or_path)
+    else:
+        # for this to work the hyperparameters need to be saved and no positional arguments in LightningWrapper are allowed
+        # alternatively overwrite load_from_checkpoint but not recommended since some other side effects from super() might be lost and model is still needed
+        # model = LightningWrapper.load_from_checkpoint(checkpoint_path=resolved_checkpoint_path)
+        model_module = get_model_module(eval_args.model_name_or_path)
+        model_kwargs = get_model_specific_config(eval_args.model_name_or_path)
+        model = LightningWrapper(model_module, eval_args, **model_kwargs)
+
+    # try load a checkpoint if provided
     if resolved_checkpoint_path:
-        checkpoint_content = torch.load(resolved_checkpoint_path)
-        model.load_state_dict(checkpoint_content["state_dict"])
-    dm = TableQADataModule(model.model_specs,
-                           table_corpus=eval_args.table_corpus,
-                           dataset_name=eval_args.dataset_name,
+        try_load_local_then_wandb_checkpoint(model, wandb_logger, resolved_checkpoint_path, map_location=eval_args.accelerator)
+
+    if model_name == 'sqlcoder':
+        data_module_class = SQLCoderDataModule
+    else:
+        data_module_class = TableQADataModule
+    # Initialize the data module that is appropriate for the model
+    dm = data_module_class(model.model_specs,
+                           table_corpus=eval_args.table_corpus_name,
+                           dataset_name=eval_args.dataset_suffix,
                            train_batch_size=eval_args.batch_size_per_device,
                            eval_batch_size=eval_args.eval_batch_size_per_device,
-                           lazy_data_processing=args.lazy_data_processing,
-                           is_batch_dict=args.is_batch_dict,
-                           data_dir=args.data_dir,
+                           lazy_data_processing=eval_args.lazy_data_processing,
+                           is_batch_dict=eval_args.is_batch_dict,
+                           data_dir=eval_args.data_dir,
                            tokenizing_args=tokenizer_args,
                            num_dataloader_workers=eval_args.workers,
                            too_many_open_files_fix=misc_args.too_many_open_files_fix,
                            )
+    wandb_logger.log_text(key='eval_dataset_path', columns=['eval_dataset_path'], data=[[path_from_components(dm.table_corpus, dm.dataset_name, 'test')]])
     trainer.test(model, datamodule=dm)
+
+
+def evaluate_sqlcoder(eval_args=TrainingArgs(), misc_args=MiscArgs(), tokenizer_args=TokenizationArgs(), data_args=DataProcessingArgs(),
+                      metrics: dict = {'str_match_accuracy': str_match_accuracy, 'float_match_accuracy': float_match_accuracy, 'absolute_distance': absolute_distance},
+                      post_processing_fn=lambda x: [item.strip() for item in x],
+                      wandb_logger=None,
+                      ):
+    parse_auto_arguments(eval_args)  # maybe not needed because accelerate determines gpus
+    if wandb_logger is None:
+        wandb_logger = get_wandb_logger(misc_args, tags=['sqlcoder', 'eval'])
+
+    created_datasets = {}
+    for split in data_args.splits:
+        cache_file_name = f"sqlcoder_{data_args.table_corpus}_{split}_{data_args.dataset_name or '-'.join(data_args.template_names)}"
+        save_path = os.path.join(data_args.cache_dir,
+                                 cache_file_name
+                                 )
+        if split == 'test':
+            wandb_logger.log_text(key='eval_dataset_path', columns=['eval_dataset_path'], data=[[save_path]])
+        if os.path.exists(save_path):
+            created_datasets[split] = caching(cache_file_name=cache_file_name, cache_path=data_args.cache_dir)
+        else:
+            created_datasets[split] = create_sqlcoder_dataset(eval_args, tokenizer_args, split=split, save_path=save_path)
+
+    model = get_model_module(eval_args.model_name_or_path)
+    tokenizer = get_tokenizer(eval_args.model_name_or_path)
+
+    distributed_state = PartialState()
+    pipe = get_sqlcoder_inference_pipeline(model, tokenizer)
+    step_size = len(created_datasets['test']) // distributed_state.num_processes
+    data_shards = [
+        created_datasets['test'].select(range(
+            i * step_size,
+            # last shard includes all remaining samples
+            (i + 1) * step_size if i < (distributed_state.num_processes-1) else len(created_datasets['test'])
+            ))
+        for i in range(distributed_state.num_processes)
+        ]
+    predictions = {'text_predictions': [], 'processed_text_predictions': [], 'sql': [], 'question_ids': []}
+    metric_results = {key: [] for key in metrics.keys()}
+    predictions.update(metric_results)
+    with distributed_state.split_between_processes(data_shards) as dataset_shard:
+        if isinstance(dataset_shard, list) and len(dataset_shard) > 1:
+            dataset_shard = datasets.concatenate_datasets(dataset_shard)
+        else:
+            dataset_shard = dataset_shard[0]
+        if not isinstance(dataset_shard, datasets.Dataset):
+            raise TypeError(f"Expected dataset shard to be of type datasets.Dataset but encountered {type(dataset_shard)}!")
+        string_predictions, sql_predictions = sqlcoder_generation(dataset_shard, pipe=pipe, batch_size=eval_args.eval_batch_size_per_device)
+        predictions['text_predictions'].extend(string_predictions)
+        predictions['sql'].extend(sql_predictions)
+        predictions['question_ids'].extend(dataset_shard['question_id'])
+
+    # postprocess generation
+    processed_predictions = post_processing_fn(string_predictions if isinstance(string_predictions[0], str) else [pred[0] for pred in string_predictions])
+    processed_targets = post_processing_fn(created_datasets['test']['answers'])
+    predictions['processed_text_predictions'].extend(processed_predictions)
+
+    # log metric result
+    batch_metric_results = {}
+    for metric_name, metric_function in metrics.items():
+        metric_outputs = metric_function(processed_predictions, processed_targets)
+        metric_results[metric_name].extend([float(is_correct) for is_correct in metric_outputs[1]] if isinstance(metric_outputs, tuple) else metric_outputs)
+        # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
+        batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
+
+    if wandb_logger is not None:
+        wandb_logger.log_metrics(batch_metric_results)
+        predictions.update(metric_results)  # put metric results in same table as predictions
+        wandb_logger.log_table(key='results', columns=list(predictions.keys()), data=list(zip(*predictions.values())))  # assumes wandb logger
+        predictions.clear()
+    else:
+        predictions_save_path = os.path.join(
+            data_args.cache_dir,
+            f"sqlcoder_{data_args.table_corpus}_{data_args.dataset_name or '-'.join(data_args.template_names)}_test_predictions.txt"
+            )
+        with open(predictions_save_path, 'a') as f:
+            f.write(f"{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}\n")
+            formatted_metrics = [f"{key}: {v}\n" for key, values in metric_results.items() for v in values]
+            metric_lines = ''.join(formatted_metrics)
+            f.write(f"Metric results:\n {metric_lines}\n")
+            formated_predictions = [f"SQL: {sql}\nText Answer: {pred}\nPost-processed Answer: {proc_pred}" for pred, proc_pred, sql in zip(string_predictions, processed_predictions, sql_predictions)]
+            prediction_lines = '\n'.join(formated_predictions)
+            f.write(f"Predictions:\n{prediction_lines}\n")
 
 
 def main(model_name, dataset_version, **kwargs):
@@ -236,29 +310,30 @@ def main(model_name, dataset_version, **kwargs):
 
 
 if __name__ == "__main__":
-    import os
-    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    args, misc_args, tokenizer_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs))
-    try:
-        # old training data (agg count 1 a lot)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
-        # new training data (agg count 20%)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/2kix9c4k/checkpoints/last_model_ckpt.ckpt')
-        # new training data (agg count 0%)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
-        # zero shot
-        evaluate_trained(args, misc_args, tokenizer_args)
-        # trained with lazy processing (e.g. truncating too long tables)
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
-        # trained lazy diff
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
-        # fine-tuned TAPAS
-        #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/9n4lmvw1/checkpoints/last_model_ckpt.ckpt')
-        wandb.finish()
-    except:
-        logger.error("Uncaught exception: %s", traceback.format_exc())
-        raise SystemExit
-    finally:
-        artifact = wandb.Artifact("run.log", type="logfile")
-        wandb.log_artifact(artifact)
-        wandb.finish()
+    #import os
+    #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    args, misc_args, tokenizer_args, data_args = dargparse(dataclasses=(TrainingArgs, MiscArgs, TokenizationArgs, DataProcessingArgs))
+    # new signature
+    evaluate_trained(eval_args=args, misc_args=misc_args, tokenizer_args=tokenizer_args, data_args=data_args)
+    # also possible like e.g. evaluate_trained(model_name='tapex', model_checkpoint_path='table-qa-debug/ywup1ksg/checkpoints/last_model_ckpt.ckpt')
+
+    # old training data (agg count 1 a lot)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/7425bh3s/checkpoints/snap-1040-samples-199616.0-204406784.0-loss-0.05.ckpt')
+    # new training data (agg count 20%)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/2kix9c4k/checkpoints/last_model_ckpt.ckpt')
+    # new training data (agg count 0%)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0keck68y/checkpoints/last_model_ckpt.ckpt')
+    # zero shot
+    #evaluate_trained(args, misc_args, tokenizer_args, data_args)
+    # trained with lazy processing (e.g. truncating too long tables)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/v6o1yucb/checkpoints/last_model_ckpt.ckpt')
+    # trained lazy diff
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/0w076ku1/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned TAPAS
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/9n4lmvw1/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned Tapex all standard templates larger batch size (gas)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/sjwf0hff/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned Tapex all standard templates smaller batch size (gas)
+    #evaluate_trained(args, misc_args, tokenizer_args, 'table-qa-debug/ywup1ksg/checkpoints/last_model_ckpt.ckpt')
+    # fine-tuned OmniTab
+    #evaluate_trained(args, misc_args, tokenizer_args, model_checkpoint_path='table-qa-debug/izc1diit/checkpoints/last_model_ckpt.ckpt')

@@ -13,11 +13,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from numerical_table_questions.data_caching import caching, save_version
+from numerical_table_questions.utils.data_caching import caching, save_version
 from numerical_table_questions.data_synthesis.table import Table, deduplicate_column_names
+from numerical_table_questions.data_synthesis.template_creation import apply_quality_filters
+from numerical_table_questions.utils.data_utils import infer_is_multi_answer_posthoc
 
 
-log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
+log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
@@ -342,6 +344,20 @@ def main():
     train = caching(cache_file_name=f'gittables_{dataset_name}_validation_tables', cache_path=cache_path)
     train = train.map(load_and_process_parquet_to_table, num_proc=24, desc="Processing Tables...")
     save_version(train, cache_path, cache_file_name=f'gittables_{dataset_name}_validation_tables')
+
+
+def quality_filtering(data_version_name='gittables_group_filtered_standard_templates_test', cache_path='/home/mamba/.cache/', num_proc: int = 12):
+    latest_data = caching(data_version_name, cache_path=cache_path)
+    latest_data = latest_data.map(infer_is_multi_answer_posthoc, num_proc=num_proc, desc="set is_multy_row post-hoc...")
+    apply_quality_filters(latest_data,
+                          remove_multi_answer=True,
+                          single_row_agg_tolerances=(0.0,),
+                          threshold=2,
+                          save=True,
+                          dataset_name=data_version_name,
+                          num_proc=num_proc,
+                          cache_path=cache_path,
+                          )
 
 
 if __name__ == "__main__":

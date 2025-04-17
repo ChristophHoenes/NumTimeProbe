@@ -10,7 +10,7 @@ from torch import multiprocessing
 @dataclass
 class TrainingArgs:
     model_name_or_path: str = dArg(
-        default="tapex",
+        default="microsoft/tapex-large-finetuned-wtq",
         help="HuggingFace model identifier. This is used to construct the model architecture and load pretrained weights if not specified otherwise.",  # noqa: E501
         aliases="--model",
     )
@@ -69,7 +69,7 @@ class TrainingArgs:
               "are more interesting than the loss and the time of computing forward can be saved."),
     )
     test_after_train_end: bool = dArg(
-        default=True,
+        default=False,
         help=("Whether to run a test epoch directly after training or not."),
     )
 
@@ -84,6 +84,10 @@ class TrainingArgs:
         default="auto",
         help="Distributed training strategy to use. If `auto`, will select automatically (no distributed strategy is used when using a single device).",
         aliases="--ds",
+    )
+    optimize_inference_pipeline: bool = dArg(
+        default=True,
+        help=("Only relevant for models that use transformers inference pipeline for evaluation (e.g SQLCoder). Performance will be optimized by passing a datasets.Dataset and sharding pipelines across devices."),
     )
     num_devices: int = dArg(
         default=-1,
@@ -116,23 +120,38 @@ class TrainingArgs:
 
     ####### General training ###########
     training_goal: int = dArg(
-        default=200_000, help="Number training goal units to train for.", aliases="--tg"
+        default=500_000, help="Number training goal units to train for.", aliases="--tg"
     )
     training_goal_unit: Literal["samples", "tokens", "optimizer-steps"] = dArg(
         default="samples", help="Unit of training_goal."
     )
-    val_frequency: float = dArg(
+    val_frequency_goal_unit: float | None = dArg(
         default=0.05,
-        help="Period in training goal units between two validations. If <1, compute as fraction of training_goal",
+        help="Period in training goal units between two validations. If <1, compute as fraction of training_goal. Can only be set when val_frequency_per_epoch is None.",
         aliases="--vfq",
+    )
+    val_frequency_per_epoch: float | None = dArg(
+        default=None,
+        help="If >1 run val_frequency_epoch many validations every training epoch. If <1, compute one validation every val_frequency_per_epoch training epochs. Can only be set when val_frequency_goal_unit is None.",
+        aliases="--vfqe",
     )
     model_log_frequency: float = dArg(
         default=0.2,
         help="Period in training goal units between two model checkpoints. If <1, compute as fraction of training_goal",
         aliases="--mfq",
     )
+    save_top_k: int | None = dArg(
+        default=None,
+        help="Only keep the top k best checkpoints (based on smallest validation loss). If None, keep all checkpoints.",
+        aliases="--topk",
+    )
     val_before_training: bool = dArg(default=True, help="Run one validation epoch before training.")
     val_only: bool = dArg(default=False, help="Run one validation epoch before training.")
+    early_stopping_patience: int = dArg(
+        default=6,
+        help="The number of validation runs without improvement before training is stopped. If 0 or smaller no early stopping is performed.",
+        aliases=["--early_stopping"],
+        )
     batch_size_per_device: int = dArg(
         default=16,
         help="Batch size per device. If effective_batch_size is specified, this is the maximum batch size per device (you should then increase this in powers of two until you get CUDA OOM errors).",  # noqa: E501
@@ -184,11 +203,11 @@ class TrainingArgs:
     from_scratch_embeddings: bool = dArg(
         default=False, help="Do not use pre-trained weights to intialize the token embeddings."
     )
-    table_corpus: str = dArg(
-        default="gittables_group_filtered_standard_templates", help="Name of the table corpus the dataset is based on."
+    table_corpus_name: str = dArg(
+        default="wikitablequestions", help="Name of the table corpus the dataset is based on.",
     )
-    dataset_name: str = dArg(
-        default="100k", help="Name of the dataset to use."
+    dataset_suffix: str = dArg(
+        default="final", help="Name of the dataset to use."
     )
     dummy_ipykernel_fix: str = dArg(
         default='',
@@ -204,8 +223,12 @@ class TrainingArgs:
     )
 
     def __post_init__(self):
-        if self.val_frequency < 1:
-            self.val_frequency = int(self.training_goal * self.val_frequency)
+        if self.val_frequency_goal_unit is None and self.val_frequency_per_epoch is None:
+            raise ValueError("Either val_frequency_goal_unit or val_frequency_per_epoch must be set.")
+        if self.val_frequency_goal_unit is not None and self.val_frequency_per_epoch is not None:
+            raise ValueError("Only one of val_frequency_goal_unit or val_frequency_per_epoch can be set.")
+        if self.val_frequency_goal_unit < 1:
+            self.val_frequency_goal_unit = int(self.training_goal * self.val_frequency_goal_unit)
         if self.model_log_frequency < 1:
             self.model_log_frequency = int(self.training_goal * self.model_log_frequency)
         if self.lr_warmup < 1:
@@ -315,63 +338,48 @@ class TokenizationArgs:
 
 @dataclass
 class DataProcessingArgs:
-    data_dir: str = dArg(
-        default="./data/NumTabQA/.cache", help="File path to the location in the file system where the data is stored."
+    cache_dir: str = dArg(
+        default="/home/mamba/.cache", help="File path to the location in the file system where the data is stored."
     )
     table_corpus: str = dArg(
         default="wikitablequestions", help="Name of the table corpus the dataset is based on."
     )
-    dataset_name: str = dArg(
-        default="basic_dataset", help="Name of the dataset to use."
+    dataset_name: Optional[str] = dArg(
+        default="final", help="Name of the dataset to use. If None the name will be determined from template_names when using generate_questions_from_templates."
     )
     splits: List[str] = dArg(
-        default=["test", "train", "validation"], help="Name of the split(s) to use. Can be a single split or a list of splits."
+        default=["test"], help="Name of the split(s) to use. Can be a single split or a list of splits."
     )
     #/home/mamba/.cache/templates/standard_templates
-    template_name: str = dArg(
-        default="/home/mamba/.cache/templates/standard_templates", help="Name of the template to use for question generation."
+    template_names: List[str] = dArg(
+        default=["standard_templates"], help="Name of the template to use for question generation."
     )
     num_proc: int = dArg(
         default=36, help="Number of processes to use in datasets map functions (multi processing). Highly system dependent. Might require 1 in some cases."
     )
     max_num_value_samples: int = dArg(
-        default=10, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
-                          "A higher value increases the number of generated questions at cost of diversity."
-                          "The same question type about the same columns will be generated max_num_value_samples times "
-                          "with just the value asked for in a condition differing among those questions.")
+        default=1, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
+                         "A higher value increases the number of generated questions at cost of diversity."
+                         "The same question type about the same columns will be generated max_num_value_samples times "
+                         "with just the value asked for in a condition differing among those questions.")
     )
     max_value_length: Optional[int] = dArg(
         default=256, help="Maximum number of characters allowed for values sampled from the table that occur in the questions."
     )
     max_questions_per_table: Optional[int] = dArg(
-        default=100, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
+        default=None, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
     )
+    load_from_cache: bool = dArg(
+        default=True, help="If True (default) tries to load all dataset.Dataset .map operations from cache instead of recomputing them."
+    )
+    delete_intermediate_cache: bool = dArg(
+        default=False, help=("If False (default) the datasets.Dataset cache is not managed actively which accumulates intermediate processing results that can be reused for caching."
+                             "If True deletes all intermediate dataset.Dataset objects to conserve disk space."
+                             )
+    )
+    # This argument seems to not be used in the code -> TODO investigate and use or remove
     question_only: bool = dArg(
-        default="True", help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
-                              "Conserves disk space but requires more complicated and slower collate during data loading."
-                              )
-    )
-    #/home/mamba/.cache/templates/standard_templates
-    template_name: str = dArg(
-        default="/home/mamba/.cache/templates/standard_templates", help="Name of the template to use for question generation."
-    )
-    num_proc: int = dArg(
-        default=36, help="Number of processes to use in datasets map functions (multi processing). Highly system dependent. Might require 1 in some cases."
-    )
-    max_num_value_samples: int = dArg(
-        default=10, help=("Maximum number of values that are drawn for the same template-variable-assignment. "
-                          "A higher value increases the number of generated questions at cost of diversity."
-                          "The same question type about the same columns will be generated max_num_value_samples times "
-                          "with just the value asked for in a condition differing among those questions.")
-    )
-    max_value_length: Optional[int] = dArg(
-        default=256, help="Maximum number of characters allowed for values sampled from the table that occur in the questions."
-    )
-    max_questions_per_table: Optional[int] = dArg(
-        default=100, help="Maximum number of questions that are generated based on the same underlying table. Sampling uniformly from all candidates."
-    )
-    question_only: bool = dArg(
-        default="True", help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
-                              "Conserves disk space but requires more complicated and slower collate during data loading."
-                              )
+        default=True, help=("If True the tables are stored separately and only the path to the table dataset is stored along with the questions. "
+                            "Conserves disk space but requires more complicated and slower collate during data loading."
+                            )
     )

@@ -1,6 +1,6 @@
 import warnings
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Union, Dict, Callable, Tuple, List
+from dataclasses import dataclass, field, asdict
+from typing import TYPE_CHECKING, Optional, Union, Dict, Callable, Tuple, Literal
 
 import lightning as L
 import torch
@@ -10,8 +10,10 @@ from torchmetrics import MetricCollection
 from transformers.optimization import get_scheduler
 from warmup_scheduler import GradualWarmupScheduler
 
-from numerical_table_questions.model_utils import ModelTypeInfo, model_specific_generation, map_batch_keys_to_model_kwarg
-from numerical_table_questions.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
+from numerical_table_questions.metrics import str_match_accuracy
+from numerical_table_questions.sqlcoder_model import get_sqlcoder_model, get_sqlcoder_tokenizer, get_sqlcoder_inference_pipeline, sqlcoder_generation
+from numerical_table_questions.utils.model_utils import ModelTypeInfo, model_specific_generation, map_batch_keys_to_model_kwarg
+from numerical_table_questions.utils.tokenizer_utils import get_tokenizer, convert_to_long_tensor_if_int_tensor
 
 if TYPE_CHECKING:
     from train import TrainingArgs
@@ -21,7 +23,7 @@ if TYPE_CHECKING:
 class OptimizerArgs:
     learning_rate: float
     optimizer_class: torch.optim.Optimizer = AdamW
-    kwargs: dict = field(
+    optimizer_kwargs: dict = field(
         default_factory=lambda: {
             'betas': (0.9, 0.999),
             'eps': 1e-8
@@ -30,7 +32,7 @@ class OptimizerArgs:
 
     def __post_init__(self):
         # pass learning rate as kwarg to the optimizer_class
-        self.kwargs['lr'] = self.learning_rate
+        self.optimizer_kwargs['lr'] = self.learning_rate
 
 
 def order_positional_arguments(inputs, target, input_map: dict) -> tuple:
@@ -98,6 +100,73 @@ def convert_type_and_device_for_lightning_module_log(metric_collection_output, d
     return log_safe_metric_output
 
 
+def get_default_optimizer(model_parameters,
+                          optimizer_class=AdamW,
+                          optimizer_kwargs: dict = {},
+                          learning_rate: float = 5e-5,
+                          weight_decay: float = 0.0,
+                          lr_warmup: float = 0.1,
+                          lr_schedule: Literal["cosine", "linear", "reduce_on_plateau", "constant", "cosine_with_restarts", "polynomial"] = "cosine",
+                          num_training_steps: Optional[int] = None,
+                          val_frequency: int = 1,
+                          rank: Optional[int] = None,
+                          **kwargs,
+                          ) -> dict:
+    if rank == 0:
+        logger.info(
+            f"Using lr: {learning_rate}, weight decay: {weight_decay} and warmup steps: {lr_warmup}"
+        )
+
+    named_parameters = list(model_parameters)
+
+    ### Filter out parameters that are not optimized (requires_grad == False)
+    named_parameters = list(
+        filter(lambda named_param: named_param[1].requires_grad, named_parameters)
+    )
+
+    ### Do not include LayerNorm and bias terms for weight decay https://forums.fast.ai/t/is-weight-decay-applied-to-the-bias-term/73212/6
+    no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
+    optimizer_parameters = [
+        {
+            "params": [p for n, p in named_parameters if not any(nd in n for nd in no_decay)],
+            "weight_decay": weight_decay,
+        },
+        {
+            "params": [p for n, p in named_parameters if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer = optimizer_class(optimizer_parameters, **optimizer_kwargs)
+    if lr_schedule == "reduce_on_plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=5, verbose=True
+        )
+        if lr_warmup > 0:  # Wrap ReduceLROnPlateau to enable LR warmup
+            scheduler = GradualWarmupScheduler(
+                optimizer,
+                multiplier=1,
+                total_epoch=lr_warmup,
+                after_scheduler=scheduler,
+            )
+        scheduler_config = {"frequency": val_frequency, "monitor": "train/loss"}
+    else:
+        scheduler_name = lr_schedule
+        if scheduler_name == "constant" and lr_warmup > 0:
+            scheduler_name += "_with_warmup"
+        scheduler = get_scheduler(
+            scheduler_name,
+            optimizer,
+            num_warmup_steps=lr_warmup,
+            num_training_steps=num_training_steps,
+        )
+        scheduler_config = {"frequency": 1}
+
+    return {
+        "optimizer": optimizer,
+        "lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},
+    }
+
+
 class LightningWrapper(L.LightningModule):
     def __init__(self,
                  model,
@@ -161,7 +230,9 @@ class LightningWrapper(L.LightningModule):
         if not training_args.resume_training:
             self.register_buffer("samples_processed", torch.tensor(samples_processed))
             self.register_buffer("tokens_processed", torch.tensor(tokens_processed))
-        self.predictions = []
+        self.predictions = {'text_predictions': [], 'processed_text_predictions': [], 'question_ids': []}
+        metric_results = {key: [] for key in self.generation_metrics.keys()}
+        self.predictions.update(metric_results)
 
     # TODO make custom metric class and each metric defines its own requirements -> get rid of dependency with data_loading
     def _get_metric_requirements(self, metric_name):
@@ -175,7 +246,7 @@ class LightningWrapper(L.LightningModule):
                 warnings.warn(f"Unknown generation_metric {metric_name}! No specific preparation is executed.")
 
     def forward(self, inputs, target=None, is_eval=False):
-        print('in_forward', 'input_type: ', type(inputs), 'len_inputs: ', len(inputs))
+        #print('in_forward', 'input_type: ', type(inputs), 'len_inputs: ', len(inputs))
         if not is_eval and self.model_specs.input_targets and target is None:
             raise ValueError("Configuration argument 'input_targets' is set to True but no targets were provided as argument! "
                              "Please call the model forward pass with inputs and tragets.")
@@ -186,7 +257,7 @@ class LightningWrapper(L.LightningModule):
             forward_kwargs = {key: convert_to_long_tensor_if_int_tensor(value)
                               for key, value in forward_kwargs.items()
                               }
-            print(forward_kwargs['input_ids'].shape, forward_kwargs['input_ids'].device)
+            #print(forward_kwargs['input_ids'].shape, forward_kwargs['input_ids'].device)
             outputs = self.model(**forward_kwargs)
         else:
             # always wrap inputs in tuple
@@ -245,7 +316,7 @@ class LightningWrapper(L.LightningModule):
             # retrieve loss
             loss = outputs[self.model_specs.loss_out_id]
 
-        self.log("train/loss", loss.item(), on_step=True, on_epoch=True)
+        self.log("train/loss", loss.item(), on_step=True, on_epoch=True, sync_dist=True)
         # compute and log torchmetrics at every step
         self.train_metrics(outputs, target)
         self.log_dict(self.train_metrics)
@@ -325,11 +396,11 @@ class LightningWrapper(L.LightningModule):
         metric_output = self.valid_metrics.compute()
         # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
         metric_output = convert_type_and_device_for_lightning_module_log(metric_output, self.device)
-        self.log_dict(metric_output)
+        self.log_dict(metric_output, sync_dist=True)
         self.valid_metrics.reset()
 
     def test_step(self, batch, batch_idx):
-        print('in_test_step', 'batch_size: ', len(batch['input_ids']), 'type: ', type(batch))
+        #print('in_test_step', 'batch_size: ', len(batch['input_ids']), 'type: ', type(batch))
         # TODO log model predictions token and text
         if isinstance(batch, dict):
             target = batch.get('targets')
@@ -354,7 +425,7 @@ class LightningWrapper(L.LightningModule):
                 loss = self.loss_fn(outputs[self.model_specs.prediction_scores_out_id], target.view(-1))
             else:
                 # retrieve loss
-                loss = outputs[self.model_specs.loss_out_id]
+                loss = outputs.get(self.model_specs.loss_out_id, torch.tensor(float('nan')))
 
             # update state of torchmetrics
             self.test_metrics.update(outputs, target)
@@ -398,10 +469,13 @@ class LightningWrapper(L.LightningModule):
             # TODO test if this leaks to much information (e.g are results worse if this is hard coded to 20)
             max_target_len = max([len(sample) for sample in text_targets])
             test_dataset = self.trainer.test_dataloaders.dataset
-            print('model_device:', self.model.device, 'input_device: ', input_ids.device)
-            print('max_target_len', max_target_len)
+            #print('model_device:', self.model.device, 'input_device: ', input_ids.device)
+            #print('max_target_len', max_target_len)
             string_predictions = model_specific_generation(self.args.model_name_or_path, self.model, self.tokenizer, inputs, outputs, max_target_len=max_target_len, test_dataset=test_dataset)
-            self.predictions.extend(string_predictions)
+            self.predictions['text_predictions'].extend(string_predictions)
+            if isinstance(inputs, dict):
+                # keep track of question_ids for sorting in correct order (distributed setting or shuffeled dataloader)
+                self.predictions['question_ids'].extend(inputs['question_id'].tolist() if isinstance(inputs['question_id'], torch.Tensor) else inputs['question_id'])
 
             # apply post processing specified for metric to both, generated prediction and text targets
             batch_metric_results = dict()
@@ -424,9 +498,12 @@ class LightningWrapper(L.LightningModule):
                 # compute generation metric on postprocessed texts
                 metric_outputs = metric_function(processed_predictions, processed_targets, **metric_kwargs)
                 # log metric result
+                self.predictions[metric_name].extend([float(is_correct) for is_correct in metric_outputs[1]] if isinstance(metric_outputs, tuple) else metric_outputs)
                 # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
                 batch_metric_results[f"test/{metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
                 # TODO handling of logging additional outputs, if neccesary for some metric
+            # TODO currently only last postprocessing is logged think of one postprocessing function for all metrics?
+            self.predictions['processed_text_predictions'].extend(processed_predictions)
 
             # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
             batch_metric_results = convert_type_and_device_for_lightning_module_log(batch_metric_results, self.device)
@@ -442,67 +519,68 @@ class LightningWrapper(L.LightningModule):
         metric_output = self.test_metrics.compute()
         # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
         metric_output = convert_type_and_device_for_lightning_module_log(metric_output, self.device)
-        self.log_dict(metric_output)
+        self.log_dict(metric_output, sync_dist=True)
         self.test_metrics.reset()
         # log and clear predictions
         # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
-        text_predictions = [[pred] for pred in self.predictions]
         # table = wandb.Table(data=text_predictions, columns=['text_predictions'])
-        self.logger.log_table(key='text_predictions', columns=['text_predictions'], data=text_predictions)  # assumes wandb logger
+        self.logger.log_table(key='results', columns=list(self.predictions.keys()), data=list(zip(*self.predictions.values())))  # assumes wandb logger
         self.predictions.clear()
 
     def configure_optimizers(self):
-        if self.global_rank == 0:
-            logger.info(
-                f"Using lr: {self.args.learning_rate}, weight decay: {self.args.weight_decay} and warmup steps: {self.args.lr_warmup}"
-            )
+        return get_default_optimizer(self.model.named_parameters(),
+                                     **asdict(self.args),
+                                     optimizer_class=self.optimizer_args.optimizer_class,
+                                     optimizer_kwargs=self.optimizer_args.optimizer_kwargs,
+                                     num_training_steps=self.trainer.max_steps,
+                                     rank=self.global_rank
+                                     )
 
-        named_parameters = list(self.model.named_parameters())
 
-        ### Filter out parameters that are not optimized (requires_grad == False)
-        named_parameters = list(
-            filter(lambda named_param: named_param[1].requires_grad, named_parameters)
-        )
+class SQLCoder(L.LightningModule):
+    def __init__(self, model_name_or_path: str, post_processing_fn=lambda x: [item.strip() for item in x], metric_function=str_match_accuracy, metric_name='str_match_accuracy', model_type_info=None):
+        super().__init__()
+        self.model = get_sqlcoder_model() if model_name_or_path.lower() == 'sqlcoder' else get_sqlcoder_model(model_name_or_path)
+        self.tokenizer = get_sqlcoder_tokenizer() if model_name_or_path.lower() == 'sqlcoder' else get_sqlcoder_tokenizer(model_name_or_path)
+        self.pipeline = get_sqlcoder_inference_pipeline(self.model, self.tokenizer)
+        self.model_specs = model_type_info or ModelTypeInfo(model_name_or_path)
+        self.post_processing_fn = post_processing_fn
+        self.metric_function = metric_function
+        self.metric_name = metric_name
+        self.predictions = {'text_predictions': [], 'processed_text_predictions': [], 'sql': [], 'question_ids': []}
+        metric_results = {key: [] for key in self.generation_metrics.keys()}
+        self.predictions.update(metric_results)
 
-        ### Do not include LayerNorm and bias terms for weight decay https://forums.fast.ai/t/is-weight-decay-applied-to-the-bias-term/73212/6
-        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-        optimizer_parameters = [
-            {
-                "params": [p for n, p in named_parameters if not any(nd in n for nd in no_decay)],
-                "weight_decay": self.args.weight_decay,
-            },
-            {
-                "params": [p for n, p in named_parameters if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-            },
-        ]
-        optimizer = self.optimizer_args.optimizer_class(optimizer_parameters,
-                                                        **self.optimizer_args.kwargs)
-        if self.args.lr_schedule == "reduce_on_plateau":
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, patience=5, verbose=True
-            )
-            if self.args.lr_warmup > 0:  # Wrap ReduceLROnPlateau to enable LR warmup
-                scheduler = GradualWarmupScheduler(
-                    optimizer,
-                    multiplier=1,
-                    total_epoch=self.args.lr_warmup,
-                    after_scheduler=scheduler,
+    def test_step(self, batch, batch_idx):
+        # generate predictions for batch contents
+        questions = batch['questions']
+        tables = batch['tables']
+        text_targets = batch['answers']
+        string_predictions, sql_predictions = sqlcoder_generation(questions, tables, self.model, self.tokenizer, self.pipeline)
+        self.predictions['text_predictions'].extend(string_predictions)
+        self.predictions['sql'].extend(sql_predictions)
+        self.predictions['question_ids'].extend(batch['question_id'])  # keep track of question_ids for sorting in correct order (distributed setting or shuffeled dataloader)
+        # process predictions and targets in the same way
+        processed_predictions = self.post_processing_fn(string_predictions)
+        processed_targets = self.post_processing_fn(text_targets)
+        self.predictions['processed_text_predictions'].extend(processed_predictions)
+        # calculate metrics
+        batch_metric_results = {}
+        for metric_name, metric_function in self.generation_metrics.items():
+            metric_outputs = metric_function(processed_predictions, processed_targets)
+            # log metric results
+            self.predictions[metric_name].extend([float(is_correct) for is_correct in metric_outputs[1]] if isinstance(metric_outputs, tuple) else metric_outputs)
+            # only consider first returned value if metric has multiple return values, which is main result by convention (others are supplemental information)
+            batch_metric_results[f"test/{self.metric_name}"] = metric_outputs[0] if isinstance(metric_outputs, tuple) else metric_outputs
+        self.log_dict(
+                batch_metric_results,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                batch_size=len(batch['questions']),
                 )
-            scheduler_config = {"frequency": self.args.val_frequency, "monitor": "train/loss"}
-        else:
-            scheduler_name = self.args.lr_schedule
-            if scheduler_name == "constant" and self.args.lr_warmup > 0:
-                scheduler_name += "_with_warmup"
-            scheduler = get_scheduler(
-                scheduler_name,
-                optimizer,
-                num_warmup_steps=self.args.lr_warmup,
-                num_training_steps=self.trainer.max_steps,
-            )
-            scheduler_config = {"frequency": 1}
 
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "interval": "step", **scheduler_config},
-        }
+    def on_test_epoch_end(self):
+        # log and clear predictions
+        self.logger.log_table(key='results', columns=list(self.predictions.keys()), data=list(zip(*self.predictions.values())))  # assumes wandb logger
+        self.predictions.clear()

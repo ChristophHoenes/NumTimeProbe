@@ -13,7 +13,7 @@ import datasets
 import dill
 
 
-log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
+log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 

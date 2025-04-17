@@ -6,8 +6,8 @@ from typing import List
 
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
-from numerical_table_questions.data_utils import cast_to_reduced_int
-from numerical_table_questions.metrics import str_match_accuracy
+from numerical_table_questions.utils.data_utils import cast_to_reduced_int
+from numerical_table_questions.metrics import str_match_accuracy, float_match_accuracy, absolute_distance
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
@@ -35,8 +35,8 @@ def tapex_model_type_info() -> dict:
         )
 
 
-def tapex_model():
-    model = transformers.BartForConditionalGeneration.from_pretrained("microsoft/tapex-base-finetuned-wtq")
+def tapex_model(hf_version_path: str = "microsoft/tapex-base-finetuned-wtq"):
+    model = transformers.BartForConditionalGeneration.from_pretrained(hf_version_path)
     # potentially change model config
     # model.config.xxx = 'xxx'
     return model
@@ -49,7 +49,17 @@ def tapex_config() -> dict:
                                    {
                                     'post_processing_fn': lambda x: [item.strip() for item in x],
                                     }
-                                   )
+                                   ),
+            'float_match_accuracy': (float_match_accuracy,
+                                     {
+                                      'post_processing_fn': lambda x: [item.strip() for item in x],
+                                      }
+                                     ),
+            'absolute_distance': (absolute_distance,
+                                  {
+                                   'post_processing_fn': lambda x: [item.strip() for item in x],
+                                   }
+                                  ),
             }
         )
     return config

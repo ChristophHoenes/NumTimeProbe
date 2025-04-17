@@ -321,7 +321,28 @@ class VLLM(TemplateLM):
             context, add_special_tokens=self.add_bos_token
         )
         with open("time_memory_debug_log.txt", "a") as file:
-            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) context_encoding len: {len(context_encoding)}, context lengths: {[len(context_encoding[i]) for i in range(len(context_encoding))]} \n")
+            context_hist = {1024: 0, 2048: 0, 4096: 0, 8192: 0, 16384: 0, 32768: 0, 65536: 0, 131072: 0, 'larger_130k': 0}
+            for i in range(len(context_encoding)):
+                if len(context_encoding[i]) <= 1024:
+                    context_hist[1024] += 1
+                elif len(context_encoding[i]) <= 2048:
+                    context_hist[2048] += 1
+                elif len(context_encoding[i]) <= 4096:
+                    context_hist[4096] += 1
+                elif len(context_encoding[i]) <= 8192:
+                    context_hist[8192] += 1
+                elif len(context_encoding[i]) <= 16384:
+                    context_hist[16384] += 1
+                elif len(context_encoding[i]) <= 32768:
+                    context_hist[32768] += 1
+                elif len(context_encoding[i]) <= 65536:
+                    context_hist[65536] += 1
+                elif len(context_encoding[i]) <= 131072:
+                    context_hist[131072] += 1
+                else:
+                    context_hist['larger_130k'] += 1
+            file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) context_encoding len: {len(context_encoding)}, context histogram: {context_hist} \n")
+            #file.write(f"({datetime.now().strftime('%d-%m-%Y %H:%M:%S')}) context_encoding len: {len(context_encoding)}, context lengths: {[len(context_encoding[i]) for i in range(len(context_encoding))]} \n")
         requests = [
             ((a, b), c) for a, b, c in zip(context, context_encoding, all_gen_kwargs)
         ]

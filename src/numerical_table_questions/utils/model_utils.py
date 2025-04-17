@@ -3,10 +3,13 @@ from dataclasses import dataclass, field
 from typing import Optional, Union, List, Dict
 
 import torch
+from transformers import AutoModel
 
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.tapas_model import tapas_model_type_info, tapas_model, tapas_config, tapas_generation
 from numerical_table_questions.tapex_model import tapex_model_type_info, tapex_model, tapex_config
+from numerical_table_questions.reastap_model import reastap_model
+from numerical_table_questions.sqlcoder_model import get_sqlcoder_model
 
 
 @dataclass
@@ -34,9 +37,22 @@ class ModelTypeInfo:
         pass
 
 
+def model_name_from_hf_path(model_name_or_path: str) -> str:
+    return model_name_or_path.split('/')[1].split('-')[0]
+
+
+def extract_model_name(model_name_or_path: str) -> str:
+    if '/' in model_name_or_path:
+        model_name = model_name_from_hf_path(model_name_or_path)
+    else:
+        model_name = model_name_or_path
+    return model_name
+
+
 def get_model_type_info(model_name_or_path: str):
-    match model_name_or_path.lower():
-        case 'tapex':
+    model_name = extract_model_name(model_name_or_path)
+    match model_name.lower():
+        case 'tapex' | 'omnitab' | 'reastap':
             return ModelTypeInfo(**tapex_model_type_info())
         case 'tapas':
             return ModelTypeInfo(**tapas_model_type_info())
@@ -44,22 +60,33 @@ def get_model_type_info(model_name_or_path: str):
             warnings.warn(f"Unknown model '{model_name_or_path}'! No ModelTypeInfo will be defined, relying on default config.")
 
 
-def get_model_module(model_name: str):
+def get_model_module(model_name_or_path: str):
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
+        # if model_name_or_path contains a path load that specific version, otherwise load the default version for the model name
         case 'tapex':
-            model = tapex_model()
+            model = tapex_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else tapex_model()
+        case 'omnitab':
+            # same base model as tapas just different weights
+            model = tapex_model(hf_version_path=model_name_or_path if '/' in model_name_or_path else 'neulab/omnitab-large-finetuned-wtq')
         case 'tapas':
-            model = tapas_model()
+            model = tapas_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else tapas_model()
+        case 'sqlcoder':
+            model = get_sqlcoder_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else get_sqlcoder_model()
+        case 'reastap':
+            model = reastap_model(hf_version_path=model_name_or_path) if '/' in model_name_or_path else reastap_model()
         case _:
-            # TODO try search path
-            raise NotImplementedError(f"No initialization implemented for model {model_name}!")
+            # TODO use logger instead of print
+            print(f"No model with the name {model_name} is explicitly implemented. Trying to load the model from Huggingface model hub...")
+            model = AutoModel.from_pretrained(model_name)
     return model
 
 
-def get_model_specific_config(model_name: str) -> dict:
+def get_model_specific_config(model_name_or_path: str) -> dict:
+    model_name = extract_model_name(model_name_or_path)
     model_type_info = get_model_type_info(model_name)
     match model_name.lower():
-        case 'tapex':
+        case 'tapex' | 'omnitab' | 'reastap':
             other_kwargs = tapex_config()
         case 'tapas':
             other_kwargs = tapas_config()
@@ -102,10 +129,11 @@ def get_sample_from_batch_dict(batch_dict: dict, idx: int, keep_dim: bool = True
             }
 
 
-def model_specific_generation(model_name, model, tokenizer, inputs, outputs=None, **kwargs) -> List[str]:
+def model_specific_generation(model_name_or_path: str, model, tokenizer, inputs, outputs=None, **kwargs) -> List[str]:
     """
         outputs are the outputs of a regular forward pass (some models e.g. tapas need it for generation).
     """
+    model_name = extract_model_name(model_name_or_path)
     match model_name.lower():
         case 'tapas':
             # current implementation only works with dict style batch

@@ -5,9 +5,9 @@ from typing import Optional, Union, Dict, Tuple
 import datasets
 import torch
 
-from numerical_table_questions.data_caching import caching
-from numerical_table_questions.data_utils import cutoff_num_questions, create_table_index
-from numerical_table_questions.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
+from numerical_table_questions.utils.data_caching import caching
+from numerical_table_questions.utils.data_utils import cutoff_num_questions, create_table_index
+from numerical_table_questions.utils.tokenizer_utils import get_tokenizer, prepare_for_tokenizer, model_specific_tokenizing, restore_metadata, convert_to_long_tensor_if_int_tensor
 
 
 def generate_question_index(table_dataset) -> Dict[int, Tuple[str, int]]:
@@ -48,7 +48,7 @@ def retrieve_table_from_table_dataset(table_search_id: str, table_dataset: Union
 
 
 class QuestionTableIndexDataset(torch.utils.data.Dataset):
-    def __init__(self, table_question_dataset: Union[str, Path, datasets.Dataset], data_dir: str = '/home/mamba/.cache', cutoff=None):
+    def __init__(self, table_question_dataset: Union[str, Path, datasets.Dataset], lm_eval_style: bool = False, data_dir: str = '/home/mamba/.cache', cutoff=None):
         if isinstance(table_question_dataset, (str, Path)):
             self.data_dir = data_dir
             self.dataset_version = table_question_dataset
@@ -67,6 +67,7 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         table_dataset_path = table_question_dataset[0].get('table_dataset_path')
         self.table_dataset = datasets.Dataset.load_from_disk(table_dataset_path) if table_dataset_path else None
         self.table_index = create_table_index(self.table_dataset, table_id_col_name='table_id') if self.table_dataset else None
+        self.lm_eval_style = lm_eval_style
 
     @property
     def features(self) -> dict:
@@ -94,6 +95,17 @@ class QuestionTableIndexDataset(torch.utils.data.Dataset):
         # maybe leave for collate for more flexibility
         # table = Table.from_state_dict(table_data['table'])
         # question = table_data['questions'][question_number]
+        if self.lm_eval_style:
+            return {
+                'table_idx': table_idx,
+                'question_number': question_number,
+                'question_id': idx,
+                'answer': data[0]['answers'][question_number],
+                'question': data[0]['questions'][question_number],
+                'aggregator': data[0]['aggregators'][question_number],
+                'aggregation_num_rows': data[0]['aggregation_num_rows'][question_number],
+                'table_dataset_path': data[0]['table_dataset_path'],
+                }
         return {'data': data, 'table_idx': table_idx, 'question_number': question_number, 'question_id': idx}
 
     def __iter__(self):
@@ -192,7 +204,7 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
         # apply row permutation
         tokenizer_inputs = []
         tokenizer_inputs.extend(
-            prepare_for_tokenizer(table_data, model_name=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding, is_eval=is_eval)
+            prepare_for_tokenizer(table_data, model_name_or_path=model_name, lazy=True, question_number=question_number, truncation=truncation, padding=padding, is_eval=is_eval)
             )
         tokenized_dict = model_specific_tokenizing(tokenizer, tokenizer_inputs, model_name, pad_token_id=pad_token_id, mask_token_id=mask_token_id, verbose=False, **tokenizing_args)
         # save tokenizer keys for default filter of keys in dict style batch
@@ -229,9 +241,9 @@ def table_collate(batch_of_index_ids, model_name, tokenizer, tokenizing_args,
     tokenized_batch['is_truncated'] = tokenized_batch['input_ids'] != pad_token_id  # if not ending with pad token assume truncation
     # for simplifying debugging include table / question id
     tokenized_batch['question_id'] = torch.LongTensor([sample['question_id'] for sample in batch_of_index_ids])  # global question id
-    tokenized_batch['table_id'] = [sample['table_data'][0]['table']
-                                   if isinstance(sample['table_data'][0]['table'], str)  # in case not the full table but only the ID is serialized
-                                   else sample['table_data'][0]['table']['table_id']
+    tokenized_batch['table_id'] = [sample['data'][0]['table']
+                                   if isinstance(sample['data'][0]['table'], str)  # in case not the full table but only the ID is serialized
+                                   else sample['data'][0]['table']['table_id']
                                    for sample in batch_of_index_ids
                                    ]
     tokenized_batch['table_idx'] = torch.LongTensor([sample['table_idx'] for sample in batch_of_index_ids])  # for index based access directly in QuestionTableIndexDataset

@@ -4,7 +4,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-import pytorch_lightning as L
+import lightning as L
 import wandb
 from lightning import Callback
 from lightning.pytorch.loggers import WandbLogger

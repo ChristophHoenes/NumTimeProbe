@@ -1,16 +1,28 @@
 import os
 import pickle
-from pathlib import PurePath
 
 import datasets
-from typing import Optional
 
-from numerical_table_questions.data_utils import create_table_index
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 
 
+PROMPT_TEMPLATE_QUESTION_FIRST = (
+        "Here is a table with {col_sep_repr} as the delimiter between columns and a newline as the delimiter between rows. Answer the question based on the table.\n\n"
+        'Question:\n"{question_text}"\n'
+        "Table:\n"
+        "{table_text}\n"
+    )
+
+PROMPT_TEMPLATE_TABLE_FIRST = (
+        "Table:\n"
+        "{table_text}\n"
+        "Note: {col_sep_repr} is the delimiter between columns; {row_sep_repr} is the delimiter between rows.\n"
+        'Question: "{question_text}"\n'
+        "Answer the question based on the table.\n"
+    )
+
 def process_docs(dataset: datasets.Dataset):
-    dataset = QuestionTableIndexDataset(dataset)
+    dataset = QuestionTableIndexDataset(dataset, lm_eval_style=True)
     print("Finished dataset preparation.")
     return dataset
 
@@ -45,18 +57,26 @@ def get_table_dataset(absolute_table_dataset_path: str) -> datasets.Dataset:
 
 def is_question_table_index_style_sample(question_data) -> bool:
     # QuestionTableIndexDataset style samples contain key 'data' as either datasets.Dataset or List[dict] type
-    return (isinstance(question_data.get('data'), datasets.Dataset) or
-            (isinstance(question_data.get('data'), list) and isinstance(question_data['data'][0], dict))
-            )
+    return (
+        'table_idx' in question_data.keys() or  # if self.lm_eval_style is True table_idx will be in the samples' keys
+        isinstance(question_data.get('data'), datasets.Dataset) or
+        (isinstance(question_data.get('data'), list) and isinstance(question_data['data'][0], dict))
+        )
 
 
-def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_format=True, cot=False, col_sep=', ', row_sep='\n', table_index_path='tmp_table_index.pickle'):
+def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_format=True, cot=False, deepseek=False, col_sep=', ', row_sep='\n', base_prompt=PROMPT_TEMPLATE_TABLE_FIRST, table_index_path='tmp_table_index.pickle'):
     if is_question_table_index_style_sample(question_data):
-        # reformat data to be consistent with other conditions
-        table_data = [question_data['data'][0]['table']]
-        question_data = {'questions': [question_data['data'][0]['questions'][question_data['question_number']]],
-                         'answers': [question_data['data'][0]['answers'][question_data['question_number']]],
-                         }
+        if 'table_dataset_path' in question_data.keys():
+            table_data = [datasets.Dataset.load_from_disk(question_data['table_dataset_path'])[question_data['table_idx']]['table']]
+            question_data = {'questions': [question_data['question']],
+                             'answers': [question_data['answer']],
+                             }
+        else:
+            # reformat data to be consistent with other conditions
+            table_data = [question_data['data'][0]['table']]
+            question_data = {'questions': [question_data['data'][0]['questions'][question_data['question_number']]],
+                             'answers': [question_data['data'][0]['answers'][question_data['question_number']]],
+                             }
     elif question_only_format:
         with open(table_index_path, 'rb') as f:
             table_index = pickle.load(f)
@@ -79,16 +99,12 @@ def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_fo
                 raise ValueError(f"Expected exactly one table to match given table_id {question_data['table']} but {len(table_data)} elements were found!")
     else:
         table_data = [question_data['table']]  # wrap in list to be consistent with question_only_format (Iterable of len() == 1)
-    prompt_template_short = (
-        "Table:\n"
-        "{table_text}\n\n"
-        "Note: {col_sep_repr} is the delimiter between columns; {row_sep_repr} is the delimiter between rows.\n\n"
-        'Question: "{question_text}"\n\n'
-        #"Answer the question based on the table.|||\n\n"  # (not sure where the ||| come from usful for some model or accident?)
-        "Answer the question based on the table.\n\n"
-        + ("Answer: {answer_text}" if not cot else "\nPlease reason step by step, and put your final answer within \\boxed{{}}.\n\\boxed{{{answer_text}}}")
+    prompt_template = (
+        base_prompt
+        + ("Answer: {answer_text}" if not cot else "\nPlease reason step by step, and put your final answer within \\boxed{{}}.\n{answer_text}")
     )
-    return prompt_template_short.format(
+    answer_text = question_data['answers'][0] if not cot else f"\\boxed{{{question_data['answers'][0]}}}"
+    return prompt_template.format(
         table_text=linearize_table_with_separators(table_data[0],  # the [0] is because we want a single sample (dict) not a datasets.Dataset with len() == 1
                                                    col_sep=col_sep,
                                                    row_sep=row_sep
@@ -96,7 +112,7 @@ def short_tabfact_sep_prompt(question_data, is_inference=False, question_only_fo
         col_sep_repr=repr(col_sep),
         row_sep_repr=repr(row_sep),
         question_text=question_data['questions'][0],  # TODO singular key: question and no index
-        answer_text=question_data['answers'][0] if not is_inference else ''  # TODO singular key: answer and no index
+        answer_text=answer_text if not is_inference else ('' if not deepseek else "<think>\n")  # TODO singular key: answer and no index
         )
 
 
@@ -106,5 +122,7 @@ def short_tabfact_sep_prompt_inference(table_data):
 
 def plain_single_answer(table_data):
     if is_question_table_index_style_sample(table_data):
+        if 'answer' in table_data.keys():
+            return table_data['answer']
         return table_data['data'][0]['answers'][table_data['question_number']]
     return table_data['answers'][0]

@@ -99,7 +99,7 @@ class SQLColumnExpression:
         match argument:
             case str():
                 return f'"{argument}"'
-            case int():
+            case int() | float():
                 return str(argument)
             case SQLColumnExpression():
                 return f'({argument.generate()})'

@@ -4,22 +4,22 @@ import logging
 import math
 import warnings
 import weakref
-from pathlib import PurePath
+from pathlib import PurePath, Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import datasets
 import numpy as np
 from tqdm import tqdm
 
-from numerical_table_questions.data_caching import caching, delete_dataset, save_version
+from numerical_table_questions.utils.data_caching import caching, delete_dataset, save_version
 from numerical_table_questions.data_synthesis.memmep_data_synth import (
     add_cached_field_to_dataset, create_table_batch_questions, deduplicate_field,
     extract_field_datasets, join_batch_datasets, flatten_table_batches, table_batches_add_pre_aggregation_row_counts
     )
-from numerical_table_questions.data_synthesis.question import TableQuestion, restore_table_from_id
+from numerical_table_questions.data_synthesis.question import TableQuestion, restore_table_from_id, QUESTION_FEATURES
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
-from numerical_table_questions.data_utils import get_cache_path, lazy_multi_processing_posthoc_order
+from numerical_table_questions.utils.data_utils import get_cache_path, lazy_multi_processing_posthoc_order
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent.parent / 'logging.ini')
 logging.config.fileConfig(log_file_init_path, disable_existing_loggers=False)
@@ -48,7 +48,6 @@ class TableQuestionDataSet:
 
     def __init__(self,
                  name: str,
-                 args,
                  description: Optional[str] = None,
                  question_templates: Optional[List[QuestionTemplate]] = None,
                  tables: Optional[Union[List[Table], datasets.Dataset]] = None,
@@ -57,10 +56,21 @@ class TableQuestionDataSet:
                  compute_coordinates=False,
                  allow_multiple_answers=True,
                  memory_mapped=True,
+                 num_proc: Optional[int] = None,
+                 max_num_value_samples: int = 10,
+                 max_value_length: Optional[int] = 256,
+                 max_questions_per_table: Optional[int] = None,
+                 # for datasets.Dataset .map operations (whether to try load from cache or recompute everything)
+                 load_from_cache: bool = True,
+                 # whether to delete intermediate cache files to conserve disk space or keep for caching instead of recomputing
+                 delete_intermediate_cache: bool = False,
                  ) -> None:
         self.name = name
         self.description = description
-        self.args = args
+        self.num_proc = num_proc
+        self.max_num_value_samples = max_num_value_samples
+        self.max_value_length = max_value_length
+        self.max_questions_per_table = max_questions_per_table
         self._question_templates = question_templates
         if isinstance(tables, datasets.Dataset):
             self._tables = tables
@@ -73,6 +83,8 @@ class TableQuestionDataSet:
                                                      compute_answers=compute_answers,
                                                      compute_alternatives=compute_alternatives,
                                                      memory_mapped=memory_mapped,
+                                                     load_from_cache=load_from_cache,
+                                                     delete_intermediate_cache=delete_intermediate_cache
                                                      )
         self._questions_by_table_id = lambda: None  # callable since weakref is also callable
 
@@ -200,7 +212,7 @@ class TableQuestionDataSet:
                             'aggregators': [question['operator']],
                             'aggregation_columns': [question['aggregation_column']],
                             #'aggregation_column_types': aggregation_column_types,  # missing for datasets.Dataset serialization
-                            'num_conditions': [len(question['condition_assignments'])],
+                            'num_conditions': [len(question['condition_assignments']) if question['condition_assignments'] is not None else 0],
                             'aggregation_num_rows': [str(question['num_rows_aggregated_in_answer'])],
                             }
                     else:
@@ -213,7 +225,7 @@ class TableQuestionDataSet:
                         table_batch['sql'].append(question['sql_query'])
                         table_batch['aggregators'].append(question['operator'])
                         table_batch['aggregation_columns'].append(question['aggregation_column'])
-                        table_batch['num_conditions'].append(len(question['condition_assignments']))
+                        table_batch['num_conditions'].append(len(question['condition_assignments']) if question['condition_assignments'] is not None else 0)
                         table_batch['aggregation_num_rows'].append(str(question['num_rows_aggregated_in_answer']))
                 return datasets.Dataset.from_list(list(hierarchy_dict.values()))
 
@@ -375,7 +387,9 @@ class TableQuestionDataSet:
                               compute_alternatives=False,
                               do_count_augmentation=True,
                               memory_mapped=True,
+                              load_from_cache=True,
                               delete_intermediate_cache=False,
+                              cache_path: str = '/home/mamba/.cache',
                               ) -> Union[List[TableQuestion], datasets.Dataset]:
         """Creates the quelstions from the datasets' question templates and tables.
 
@@ -419,20 +433,34 @@ class TableQuestionDataSet:
                 raise TypeError(f"Argument tables is expected to be of type List[Table], str (path to dataset) or datasets.Dataset, but found {type(tables)}!")
             template_datasets = []
             for question_template in question_templates:
+                # check if partial results for a template are already cached and load instead of re-creationg
+                template_cache = Path(f'{cache_path}/{self.name}_{question_template._template_hash}')
+                if template_cache.exists():
+                    # load cached template dataset and continue loop with next template
+                    flattened_questions = caching(template_cache.name, cache_path=cache_path)
+                    template_datasets.append(flattened_questions)
+                    continue
+                features = table_dataset.features
+                features['questions'] = [QUESTION_FEATURES]
+                features['count_questions'] = [QUESTION_FEATURES]
                 hierarcical_question_dataset = table_dataset.map(
                     create_table_batch_questions,
                     fn_kwargs=dict(
                         template_obj=question_template,
                         create_alternatives=compute_alternatives,
                         do_count_augmentation=do_count_augmentation,
-                        max_num_value_samples=self.args.max_num_value_samples,
-                        max_value_length=self.args.max_value_length,
-                        max_questions_per_table=self.args.max_questions_per_table,
+                        max_num_value_samples=self.max_num_value_samples,
+                        max_value_length=self.max_value_length,
+                        max_questions_per_table=self.max_questions_per_table,
                         memory_mapped=memory_mapped,
                         ),
                     desc="Create questions...",
                     #num_proc=1,  # maybe this is necessary or try torch.set_num_threads(1) (https://discuss.huggingface.co/t/using-num-proc-1-in-dataset-map-hangs/44310)
-                    num_proc=self.args.num_proc,
+                    num_proc=self.num_proc,
+                    load_from_cache_file=load_from_cache,
+                    # due to a bug in datasets library it is required to pass the features to the map function when multiprocessing with high number of workers whils low number of examples
+                    # see https://github.com/huggingface/datasets/issues/6020
+                    features=features,
                     )
                 """ need question dataset instead (not all questions in memory)
                 flattened_question_dataset, _ = hierarcical_question_dataset.map(
@@ -451,7 +479,8 @@ class TableQuestionDataSet:
                         object_class=TableQuestion,
                         ),
                     desc="Deduplicate questions...",
-                    num_proc=self.args.num_proc,
+                    num_proc=self.num_proc,
+                    load_from_cache_file=load_from_cache,
                     ), delete_dataset(hierarcical_question_dataset) if delete_intermediate_cache else None
 
                 # TODO before flatten make table batches and compute per table batch the answer
@@ -462,6 +491,7 @@ class TableQuestionDataSet:
                                                  ) -> dict:
                     table = Table.from_state_dict(sample[table_field])
                     answer_cache = {}
+                    multi_row_answer_cache = {}
                     #answers = []
                     for question_data in sample[question_field]:
                         question = TableQuestion.from_state_dict(question_data, table=table)
@@ -469,12 +499,15 @@ class TableQuestionDataSet:
                         if cached_answer := answer_cache.get(question_hash):
                             #answers.append(cached_answer)
                             question_data.update({'answer': cached_answer})
+                            question_data.update({'multi_row_answer': multi_row_answer_cache[question_hash]})
                         else:
                             question.compute_answer(compute_coordinates=self._compute_coordinates)
                             answer = str(question._answer)  # always convert answer to string
                             #answers.append(answer)
                             question_data.update({'answer': answer})
                             answer_cache[question_hash] = answer
+                            question_data.update({'multi_row_answer': question.multi_row_answer})
+                            multi_row_answer_cache[question_hash] = question.multi_row_answer
                     #sample[question_field].update({'answers': answers})  # add answers
                     return {question_field: sample[question_field]}
 
@@ -485,7 +518,8 @@ class TableQuestionDataSet:
                                    'cache_field': 'sql_query',
                                    },
                         desc='Computing answers to questions...',
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         ), delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                     self._is_answers_computed = compute_answers
 
@@ -496,7 +530,8 @@ class TableQuestionDataSet:
                                    'cache_field': 'count_hash',
                                    },
                         desc='Computing answers to count questions...',
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         ), delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
                     #print(deduplicated_question_dataset[0]['count_questions'][0]['answer'])
                     # determine which questions with count aggregator should be explicit questions in the dataset (rather than just for meta data)
@@ -512,12 +547,13 @@ class TableQuestionDataSet:
                                                 ]
                             },
                         desc="Filtering explicit count questions...",
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         )
                     # flatten the filtered hierarchical
                     flattened_explicit_count_questions, _ = flatten_table_batches(
                         explicit_count_questions,
-                        field_name='count_questions',
+                        field_names='count_questions',
                         delete_batches=delete_intermediate_cache,
                         ), delete_dataset(explicit_count_questions) if delete_intermediate_cache else None
 
@@ -531,20 +567,21 @@ class TableQuestionDataSet:
                     flattened_explicit_count_questions, _ = flattened_explicit_count_questions.map(
                         _count_answer_as_num_aggregated,
                         desc="Fill num_rows_aggregated_in_answer for explicit count questions...",
-                        num_proc=self.args.num_proc,
+                        num_proc=self.num_proc,
+                        load_from_cache_file=load_from_cache,
                         ), delete_dataset(flattened_explicit_count_questions) if delete_intermediate_cache else None
                     # TODO maybe do this part (adding num_rows_aggregated_in_answer) always and only skip the explicit count questions?
                     # depends on definition of do_count_augmentation
                     # get normal questions batched by table as their own dataset
-                    question_batches = extract_field_datasets(deduplicated_question_dataset, field_name='questions')
+                    question_batches = extract_field_datasets(deduplicated_question_dataset, field_names='questions')
                     # per table batch add num_rows_aggregated_in_answer from count cache
                     datasets.disable_progress_bar()
                     lazy_multi_processing_posthoc_order(
                         fn=table_batches_add_pre_aggregation_row_counts,
                         data_generator=enumerate(zip(question_batches, deduplicated_question_dataset)),
                         overwrite_data=question_batches,
-                        num_proc=self.args.num_proc,
-                        desc=f"Fill num_rows_aggregated_in_answer (table batches)... (num_proc={self.args.num_proc})"
+                        num_proc=self.num_proc,
+                        desc=f"Fill num_rows_aggregated_in_answer (table batches)... (num_proc={self.num_proc})"
                         )
                     """ too slow table batch per table batch -> parallelize table batches (see code above)
                     for b, batch in tqdm(enumerate(question_batches), desc="Fill num_rows_aggregated_in_answer (table batches)..."):
@@ -556,14 +593,14 @@ class TableQuestionDataSet:
                             'num_rows_aggregated_in_answer',
                             cache,
                             key='count_hash',
-                            num_proc=self.args.num_proc,
+                            num_proc=self.num_proc,
                             delete_old_version_cache=True,
                             )
                         question_batches[b] = updated_batch
                     """
                     datasets.enable_progress_bar()
                     # join table batches to a single dataset of all questions
-                    flattened_questions = join_batch_datasets(question_batches)
+                    flattened_questions = join_batch_datasets(question_batches, delete_batches=delete_intermediate_cache)
 
                     # add explicit cout questions
                     flattened_questions, _, _ = (
@@ -580,7 +617,16 @@ class TableQuestionDataSet:
                                                                 )
                 # release space of hierarchical dataset after flattened versions have been created
                 delete_dataset(deduplicated_question_dataset) if delete_intermediate_cache else None
-                template_datasets.append(flattened_questions)
+                save_version(flattened_questions, str(template_cache))  # TODO include template_schema hash
+                template_datasets.append(template_cache)
+
+            # load template datasets (if not a dataset yet) and concatenate them
+            template_datasets = [caching(template_cache_path_or_dataset.name, cache_path=cache_path)
+                                 if isinstance(template_cache_path_or_dataset, PurePath)
+                                 else template_cache_path_or_dataset
+                                 for template_cache_path_or_dataset in template_datasets
+                                 ]
+            # concatenate template datasets
             flattened_questions = datasets.concatenate_datasets(template_datasets)
             for dataset in template_datasets:
                 delete_dataset(dataset) if delete_intermediate_cache else None
@@ -595,9 +641,9 @@ class TableQuestionDataSet:
             question_batches, count_question_batches = zip(
                 *[question_template.create_questions(tables,
                                                      do_count_augmentation=do_count_augmentation,
-                                                     max_num_value_samples=self.args.max_num_value_samples,
-                                                     max_value_length=self.args.max_value_length,
-                                                     max_questions_per_table=self.args.max_questions_per_table,
+                                                     max_num_value_samples=self.max_num_value_samples,
+                                                     max_value_length=self.max_value_length,
+                                                     max_questions_per_table=self.max_questions_per_table,
                                                      )
                   for question_template in question_templates]
                 )
@@ -702,9 +748,9 @@ class TableQuestionDataSet:
 
     def _remove_unanswered_questions(self) -> None:
         if isinstance(self._questions, datasets.Dataset):
-            self._unanswerable_questions = self._questions.filter(lambda x: x['answer'] == '', desc="Saving unanswered/unanswerable questions...")
+            self._unanswerable_questions = self._questions.filter(lambda x: x['answer'] == '' or x['answer'] == 'None', desc="Saving unanswered/unanswerable questions...")
             # remove unanswerable_questions from questions
-            self._questions = self._questions.filter(lambda x: x['answer'] != '', desc="Removing unanswered/unanswerable questions...")
+            self._questions = self._questions.filter(lambda x: x['answer'] != '' or x['answer'] == 'None', desc="Removing unanswered/unanswerable questions...")
         else:
             self._unanswerable_questions.extend([question
                                                 for question in self._questions
@@ -716,7 +762,7 @@ class TableQuestionDataSet:
     def remove_multi_answer_questions(self) -> None:
         if isinstance(self._questions, datasets.Dataset):
             # remove unanswerable_questions from questions
-            self._questions = self._questions.filter(lambda x: x['multi_row_answer'] != 'True', desc="Removing multi_answer questions...")
+            self._questions = self._questions.filter(lambda x: x['multi_row_answer'] != 'True' or x['multi_row_answer'] is True, desc="Removing multi_answer questions...")
         else:
             self._questions = [question for question in self._questions
                                if not question._multi_row_answer
@@ -742,8 +788,8 @@ class TableQuestionDataSet:
                               "This may lead minor shifts in the data distribution compared to the deterministic case.")
                 self._questions = self._questions.filter(lambda x:
                                                          int(x['num_rows_aggregated_in_answer'] or -1) >= threshold
-                                                         and x['operator'] != ''
-                                                         and np.random.rand() <= tolerance,
+                                                         or x['operator'] == ''
+                                                         or np.random.rand() <= tolerance,
                                                          desc=f"Removing questions with agg_count lower {threshold} (tolerance {tolerance})..."
                                                          )
             else:

@@ -3,7 +3,7 @@ import logging
 import logging.config
 import warnings
 from pathlib import PurePath
-from typing import List, Optional, Union, Tuple
+from typing import List, Union, Tuple
 
 import pandas as pd
 import torch
@@ -13,7 +13,7 @@ from tqdm import tqdm
 from numerical_table_questions.answer_coordinates import AnswerCoordinates, compute_answer_coordinates
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet
-from numerical_table_questions.metrics import str_match_accuracy
+from numerical_table_questions.metrics import str_match_accuracy, float_match_accuracy, absolute_distance
 
 
 log_file_init_path = str(PurePath(__file__).parent.parent.parent / 'logging.ini')
@@ -35,8 +35,8 @@ def tapas_model_type_info() -> dict:
         )
 
 
-def tapas_model():
-    model = transformers.TapasForQuestionAnswering.from_pretrained("google/tapas-base-finetuned-wtq")
+def tapas_model(hf_version_path: str = "google/tapas-base-finetuned-wtq"):
+    model = transformers.TapasForQuestionAnswering.from_pretrained(hf_version_path)
     # change model config
     model.config.return_dict = True
     return model
@@ -49,7 +49,17 @@ def tapas_config() -> dict:
                                    {
                                     'post_processing_fn': lambda x: [item.strip() for item in x],
                                    }
-                                   )
+                                   ),
+            'float_match_accuracy': (float_match_accuracy,
+                                     {
+                                      'post_processing_fn': lambda x: [item.strip() for item in x],
+                                      }
+                                     ),
+            'absolute_distance': (absolute_distance,
+                                  {
+                                   'post_processing_fn': lambda x: [item.strip() for item in x],
+                                   }
+                                  ),
             }
         )
 
@@ -105,18 +115,37 @@ def get_aggregator_string(predicted_aggregation_indices) -> List[str]:
 
 
 # from examples on https://huggingface.co/docs/transformers/v4.41.3/en/model_doc/tapas#usage-inference
-def get_answer_cell_values(table: pd.DataFrame, predicted_answer_coordinates) -> List[str]:
+def get_answer_cell_values(table: pd.DataFrame, predicted_answer_coordinates, is_coordinate_start_idx_zero=True) -> List[str]:
+    num_rows = table.shape[0]
+    num_cols = table.shape[1]
+
+    if not is_coordinate_start_idx_zero:
+        predicted_answer_coordinates = [[(coordinate[0] - 1, coordinate[1] - 1)
+                                         for coordinate in coordinates
+                                         ]
+                                        for coordinates in predicted_answer_coordinates
+                                        ]
     answers = []
     for coordinates in predicted_answer_coordinates:
         if len(coordinates) == 1:
             # only a single cell:
-            answers.append(table.iat[coordinates[0]])
+            if coordinates[0][0] >= num_rows or coordinates[0][1] >= num_cols or coordinates[0][0] < 0 or coordinates[0][1] < 0:
+                warnings.warn("Answer coordinates out of bounds. Skipping cell...")
+                answers.append("")
+            else:
+                answers.append(table.iat[coordinates[0]])
         else:
             # multiple cells
             cell_values = []
             for coordinate in coordinates:
-                cell_values.append(table.iat[coordinate])
-            answers.append(", ".join(cell_values))
+                if coordinate[0] >= num_rows or coordinate[1] >= num_cols or coordinate[0] < 0 or coordinate[1] < 0:
+                    warnings.warn("Answer coordinates out of bounds. Skipping cell...")
+                else:
+                    cell_values.append(table.iat[coordinate])
+            if len(cell_values) > 0:
+                answers.append(", ".join(cell_values))
+            else:
+                answers.append("")
     return answers
 
 

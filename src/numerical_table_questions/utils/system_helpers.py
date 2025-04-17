@@ -58,6 +58,20 @@ def choose_auto_devices(accelerator: str):
             raise ValueError(f"Cannot use auto number of devices with accelerator {accelerator}.")
 
 
+def parse_auto_arguments(args):
+    ########### Specifiy auto arguments ###########
+    if args.accelerator == "auto":
+        args.accelerator = choose_auto_accelerator()
+    if args.num_devices == -1:
+        args.num_devices = choose_auto_devices(args.accelerator)
+    if args.cuda_device_ids:
+        cuda_device_count = torch.cuda.device_count()
+        if cuda_device_count < len(args.cuda_device_ids):
+            raise ValueError(
+                f"Requested {len(args.cuda_device_ids)} CUDA GPUs but only {cuda_device_count} are available."
+            )
+
+
 def handle_batch_size_logic_(args: "TrainingArgs"):
     """Calculates and sets effective batch size / gradient accumulation steps."""
     ACCELERATOR = args.accelerator.upper() if args.accelerator != "cuda" else "GPU"
@@ -68,7 +82,7 @@ def handle_batch_size_logic_(args: "TrainingArgs"):
         (
             args.batch_size_per_device,
             args.gradient_accumulation_steps,
-            effective_batch_size_per_step,
+            effective_batch_size_per_forward,
         ) = infer_batch_size_per_device(
             args.num_devices, args.effective_batch_size, args.batch_size_per_device
         )
@@ -80,15 +94,15 @@ def handle_batch_size_logic_(args: "TrainingArgs"):
             f"{args.gradient_accumulation_steps} gradient accumulation steps."
         )
     else:
-        effective_batch_size_per_step = args.num_devices * args.batch_size_per_device
-        args.effective_batch_size = effective_batch_size_per_step * args.gradient_accumulation_steps
+        effective_batch_size_per_forward = args.num_devices * args.batch_size_per_device
+        args.effective_batch_size = effective_batch_size_per_forward * args.gradient_accumulation_steps
         logger.info(
             f"Effective batch size {args.effective_batch_size} based on specified args "
             f"{args.num_devices} {ACCELERATOR}s, "
             f"{args.batch_size_per_device} batch size per {ACCELERATOR} and "
             f"{args.gradient_accumulation_steps} gradient accumulation steps."
         )
-    return effective_batch_size_per_step
+    return effective_batch_size_per_forward
 
 
 def log_slurm_info():

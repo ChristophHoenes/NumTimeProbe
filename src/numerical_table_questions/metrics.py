@@ -1,3 +1,4 @@
+from typing import List, Literal, Optional
 from time import time
 
 import torch
@@ -47,6 +48,53 @@ def accuracy_extract_target_position(model_outputs, ground_truth, compare_string
 def str_match_accuracy(predictions, targets):
     is_correct = [pred == targ for pred, targ in zip(predictions, targets)]
     return sum(is_correct)/len(is_correct), is_correct
+
+
+def float_match_accuracy(predictions, targets, tolerance=1e-7):
+    if not isinstance(predictions, list):
+        raise ValueError(f"Expected 'predictions' to be a list got a different type ({type(predictions)})!")
+    if not isinstance(targets, list):
+        raise ValueError(f"Expected 'targets' to be a list got a different type ({type(targets)})!")
+    if len(predictions) != len(targets):
+        raise ValueError("Length of predictions and targets must be equal!")
+    is_correct = []
+    for pred, target in zip(predictions, targets):
+        try:
+            if tolerance > 0:
+                is_correct.append(abs(float(target) - float(pred)) <= tolerance)
+            else:
+                is_correct.append(float(target) == float(pred))
+        except ValueError:
+            is_correct.append(False)
+    return sum(is_correct)/len(is_correct), is_correct
+
+
+def absolute_distance(predictions: List[str], targets: List[str], aggregation: Literal['mean', 'median'] = 'median', in_percent=True, nan_distance: Optional[float] = None):
+    target_values = [float(target) if target.lower() not in ['none', '', 'nan'] else float('-inf') for target in targets]
+    prediction_values = []
+    for pred in predictions:
+        try:
+            prediction_values.append(float(pred))
+        except ValueError:
+            prediction_values.append(None)
+    # what distance/penalty to use for nan values in predictions
+    if nan_distance is None:
+        target_magnitude = [abs(v) for v in target_values]
+        nan_distance = sum(target_magnitude)/len(target_magnitude) if aggregation == 'mean' else sorted(target_values)[len(target_values)//2]
+    distances = []
+    for pred, target_value in zip(prediction_values, target_values):
+        if in_percent:
+            if pred is None:
+                distances.append(10.0)
+            else:
+                distances.append(min(10.0, abs(target_value - pred) / abs(target_value + 1e-7)))
+        else:
+            if pred is None:
+                distances.append(nan_distance)
+            else:
+                distances.append(abs(target_value - float(pred)))
+    metric_result = sum(distances)/len(distances) if aggregation == 'mean' else sorted(distances)[len(distances)//2]
+    return metric_result, distances
 
 
 def token_accuracy(model_outputs, ground_truth):

@@ -5,47 +5,22 @@ from datetime import datetime
 from pathlib import PurePath
 
 import datasets
-from typing import Optional, Tuple, List, Union
+import numpy as np
+from dargparser import dargparse
+from typing import Dict, List, Optional, Tuple, Union
 
 from numerical_table_questions.arguments import DataProcessingArgs
-from numerical_table_questions.data_caching import save_version, caching
+from numerical_table_questions.utils.data_caching import save_version, caching
 from numerical_table_questions.data_synthesis.dataset import TableQuestionDataSet, ensure_table_dataset_on_disk
 from numerical_table_questions.data_synthesis.question_template import QuestionTemplate
 from numerical_table_questions.data_synthesis.table import Table
 from numerical_table_questions.data_synthesis.table_creation import create_table_dataset, load_table_dataset
-from numerical_table_questions.data_utils import get_cache_path
-from numerical_table_questions.sql_templates import (
+from numerical_table_questions.utils.data_utils import get_cache_path, apply_filter_condition
+from numerical_table_questions.data_synthesis.sql_templates import (
     SQLColumnExpression, SQLConditionTemplate, SQLOperator,
     MIN, MAX, SUM, AVG, COUNT, NOOP, find_template_variables,
 )
 
-
-BASIC_TEMPLATE = QuestionTemplate(
-    nl_template_string="What is the {op} of column {col1} given that {col2} has value {val1}?",
-    sql_main_expression=SQLColumnExpression(("{col1}",)),
-    sql_allowed_operators=tuple([MIN, MAX, AVG, SUM, COUNT]),  # not NOOP because it would be simple lookup without numerical skill
-    sql_conditions=(SQLConditionTemplate('{col2}', '=', '{val1}'),),
-    schema={
-        'variables': {
-            'col1': {
-                'type': 'column',
-                'allowed_dtypes': ['numeric']
-                },
-            'col2': {
-                'type': 'column',
-                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
-                },
-            'val1': {
-                'type': 'value',
-                'allowed_dtypes': ['numeric', 'text', 'alphanumeric']
-                }
-            },
-        'sample_strategy': 'random',
-        'value_pool': 'distinct_values',
-        'interpolation_args': dict(),
-        },
-    template_alternatives=None
-)
 
 BASIC_TEMPLATE = QuestionTemplate(
     nl_template_string="What is the {op} of column {col1} given that {col2} has value {val1}?",
@@ -197,10 +172,15 @@ def get_template_by_name(template_name: Union[str, List[str]]) -> Optional[Union
             case 'diff' | 'difference': template_list.append(DIFF_TEMPLATE)
             case 'ratio_no_filter': template_list.append(RATIO_NO_FILTER_TEMPLATE)
             case 'expression' | 'expr': template_list.append(EXPRESSION_TEMPLATE)
+            case 'standard_templates': template_list.extend(get_standard_templates())
+            case 'expression2': template_list.extend(get_expression2_templates())
             case _:
-                warnings.warn("No template could be found for the name {name}! Trying to find template dataset at this path.")
-                #raise ValueError("No template could be found for the name {name}! Please make sure you have crafted and registered the template correctly.")
-                template_list = None if not is_single_template else [None]
+                warnings.warn(f"No template(s) could be found for the name {name}! Trying to find template dataset at this path...")
+                try:
+                    template_list.extend(template_list_from_dataset(name))
+                except FileNotFoundError:
+                    warnings.warn(f"No template dataset could be found at the path {name}! Returning None. This might lead to errors in further processing.")
+                    template_list.append(None)
     if is_single_template:
         return template_list[0]
     return template_list
@@ -242,18 +222,17 @@ def create_templates(main_expr: SQLColumnExpression,
                           'allowed_dtypes': ['numeric']
                           },
         }
-
-    # TODO think of number of samples per group
-    # TODO rethink if excluding operators is necessary (post-hoc filters take care of it?)
     # definition of different basic condition setups that can be used with nearly any main expression
     condition_setups = [
-        ('=', all_aggregators, flex_type_condition_variable_schema),
-        ('!=', all_aggregators, flex_type_condition_variable_schema),
+        # TODO test difficulty and posthoc filter of NOOP questions (all_aggregators setting)
+        ('=', all_base_operators, flex_type_condition_variable_schema),  # because NOOP results in simple lookup
+        ('!=', all_base_operators, flex_type_condition_variable_schema),  # because NOOP results in simple lookup
         ('<', all_base_operators, numeric_condition_variable_schema),
         ('<=', all_base_operators, numeric_condition_variable_schema),
         ('>', all_base_operators, numeric_condition_variable_schema),
         ('>=', all_base_operators, numeric_condition_variable_schema),
-        (None, arithmetic_operators, {}),
+        # TODO test difficulty and posthoc filter of COUNT questions (arithmetic_operators setting)
+        (None, all_aggregators, {}),  # NOOP results in entire (multi-row answer) column COUNT always results in num_rows
     ]
     # ^ above stays same the following must be defined for every question type:
     # transform main expression to natural languagr template string
@@ -356,103 +335,148 @@ def create_templates(main_expr: SQLColumnExpression,
     return question_templates
 
 
-def get_standard_templates(save_path: Optional[str] = None) -> List[QuestionTemplate]:
-    basic_templates = create_templates(
-        SQLColumnExpression(("{col1}",)),
-        expression_description=" of column {col1}"
-        )
-    diff_templates = create_templates(
-        SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
-        expression_description=" of the difference between column {col1} and column {col2}"
-        )
-    ratio_templates = create_templates(
-        SQLColumnExpression(("{col1}", "{col2}"), operand='/'),
-        expression_description=" of the ratio of column {col1} to column {col2}"
-        )
-    """ nicer expression below
-    expression_templates = create_templates(
-        SQLColumnExpression(
-            (
-                SQLColumnExpression(
-                    (SQLColumnExpression(("{col1}", "{col2}"), operand='*'),
-                     SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
-                     ),
-                    operand='-',
-                    ),
-                SQLColumnExpression(
-                    (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
-                     SQLColumnExpression(
-                         (SQLColumnExpression(("{col2}", "{col2}"), operand='*'),
-                          "{col2}"
-                          ),
-                         operand='-',
-                         ),
-                     ),
-                    operand='+',
-                    )
-                ),
-            operand='/',
-            ),
-        )
-        """
-    expression_templates = create_templates(
-        SQLColumnExpression(
-            ("{col1}",
-             SQLColumnExpression(
-                 (SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
-                  SQLColumnExpression(
-                      (SQLColumnExpression((2, SQLColumnExpression(("{col1}", "{col2}"), operand='*')), operand='*'),
-                       SQLColumnExpression(
-                           (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
-                            SQLColumnExpression(("{col2}", "{col2}"), operand='*')
-                            ),
-                           operand='+'
-                           )
-                       ),
-                      operand='/'
-                      )
-                  ),
-                 operand='*'
-                 )
-             ),
-            operand='*'
+def get_standard_templates(save_path: Optional[str] = None, cache_dir: str = '/home/mamba/.cache') -> List[QuestionTemplate]:
+    try:
+        coalesce_save_path = save_path or cache_dir + '/templates/standard_templates'
+        # TODO implement logging instead of print
+        #logger.info(f"Try Loading standard templates from {save_path}...")
+        print(f"Try Loading standard templates from {coalesce_save_path} ...")
+        return template_list_from_dataset(coalesce_save_path)
+    except FileNotFoundError:
+        # TODO implement logging instead of print
+        #logger.info("No saved version was found. Creating standard templates...")
+        print("No saved version was found. Creating standard templates...")
+        basic_templates = create_templates(
+            SQLColumnExpression(("{col1}",)),
+            expression_description=" of column {col1}"
             )
-        )
-    templates = [template
-                 for spec in [basic_templates, diff_templates, ratio_templates, expression_templates]
-                 for template in spec
-                 ]
-    if save_path:
-        dataset = datasets.Dataset.from_list([template.to_state_dict() for template in templates])
-        dataset.save_to_disk(save_path)
-    return templates
+        diff_templates = create_templates(
+            SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
+            expression_description=" of the difference between column {col1} and column {col2}"
+            )
+        ratio_templates = create_templates(
+            SQLColumnExpression(("{col1}", "{col2}"), operand='/'),
+            expression_description=" of the ratio of column {col1} to column {col2}"
+            )
+        """ nicer expression below
+        expression_templates = create_templates(
+            SQLColumnExpression(
+                (
+                    SQLColumnExpression(
+                        (SQLColumnExpression(("{col1}", "{col2}"), operand='*'),
+                        SQLColumnExpression(("{col1}", "{col2}"), operand='+'),
+                        ),
+                        operand='-',
+                        ),
+                    SQLColumnExpression(
+                        (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+                        SQLColumnExpression(
+                            (SQLColumnExpression(("{col2}", "{col2}"), operand='*'),
+                            "{col2}"
+                            ),
+                            operand='-',
+                            ),
+                        ),
+                        operand='+',
+                        )
+                    ),
+                operand='/',
+                ),
+            )
+            """
+        expression_templates = create_templates(
+            SQLColumnExpression(
+                ("{col1}",
+                 SQLColumnExpression(
+                     (SQLColumnExpression(("{col1}", "{col2}"), operand='-'),
+                      SQLColumnExpression(
+                          (SQLColumnExpression((2, SQLColumnExpression(("{col1}", "{col2}"), operand='*')), operand='*'),
+                           SQLColumnExpression(
+                               (SQLColumnExpression(("{col1}", "{col1}"), operand='*'),
+                                SQLColumnExpression(("{col2}", "{col2}"), operand='*')
+                                ),
+                               operand='+'
+                               )
+                           ),
+                          operand='/'
+                          )
+                      ),
+                     operand='*'
+                     )
+                 ),
+                operand='*'
+                )
+            )
+        templates = [template
+                     for spec in [basic_templates, diff_templates, ratio_templates, expression_templates]
+                     for template in spec
+                     ]
+        if save_path:
+            dataset = datasets.Dataset.from_list([template.to_state_dict() for template in templates])
+            dataset.save_to_disk(save_path)
+        return templates
 
 
-def create_dataset(template_list,
+def get_expression2_templates(save_path: Optional[str] = None, cache_dir: str = '/home/mamba/.cache') -> List[QuestionTemplate]:
+    try:
+        coalesce_save_path = save_path or cache_dir + '/templates/expression2'
+        # TODO implement logging instead of print
+        #logger.info(f"Try Loading standard templates from {save_path}...")
+        print(f"Try Loading standard templates from {coalesce_save_path} ...")
+        return template_list_from_dataset(coalesce_save_path)
+    except FileNotFoundError:
+        # TODO implement logging instead of print
+        #logger.info("No saved version was found. Creating standard templates...")
+        print("No saved version was found. Creating standard templates...")
+        expression2_templates = create_templates(
+                SQLColumnExpression(
+                    (SQLColumnExpression((SQLColumnExpression(("{col1}", "{col2}"), operand='+'), 0.1), operand='-'),
+                     SQLColumnExpression((0.5, SQLColumnExpression(("{col2}", "{col1}"), operand='*')), operand='+')
+                     ),
+                    operand='/',
+                    )
+                )
+        if save_path:
+            dataset = datasets.Dataset.from_list([template.to_state_dict() for template in expression2_templates])
+            dataset.save_to_disk(save_path)
+        return expression2_templates
+
+
+def create_dataset(templates: Union[QuestionTemplate, List[QuestionTemplate]],
                    dataset_name: str,
                    description: Optional[str] = None,
                    table_corpus: str = 'wikitables',
                    split: Optional[str] = None,
-                   tables: Optional[List[Table]] = None,
-                   cache_path: str = './data/NumTabQA/.cache',
+                   tables: Optional[Union[List[Table], datasets.Dataset]] = None,
                    save: bool = True,
+                   args: Optional[DataProcessingArgs] = None,
                    ) -> TableQuestionDataSet:
+    if args is None:
+        args = DataProcessingArgs()  # get default args
+    if isinstance(templates, QuestionTemplate):
+        templates = [templates]  # make sure templates is a list
     # load table corpus
     if tables is not None:
         table_corpus = 'custom_' + table_corpus
     else:
-        tables = load_table_dataset(table_corpus, split, cache_path)
+        tables = load_table_dataset(table_corpus, split, args.cache_dir)
     if len(tables) == 0:
         warnings.warn("Empty taple corpus encountered. Nothing to generate!")
-    save_name = f"{table_corpus}_{dataset_name}"
+    save_name = f"{table_corpus}_{dataset_name}_{split or 'all'}"
     dataset = TableQuestionDataSet(
         save_name,
         description=description,
-        question_templates=[template_list],
-        tables=tables
+        question_templates=templates,
+        tables=tables,
+        num_proc=args.num_proc,
+        max_num_value_samples=args.max_num_value_samples,
+        max_value_length=args.max_value_length,
+        max_questions_per_table=args.max_questions_per_table,
+        load_from_cache=args.load_from_cache,
+        delete_intermediate_cache=args.delete_intermediate_cache,
         )
     if save:
-        save_version(dataset, cache_path, save_name)
+        save_version(dataset, args.cache_dir, save_name)
     return dataset
 
 
@@ -495,7 +519,6 @@ def create_basic_table_question_dataset(tables,
         }
         basic_template = QuestionTemplate(nl, main_expr, allowed_operators, conditions, schema)
         dataset = TableQuestionDataSet(name + '_basic',
-                                       args,
                                        description=base_description,
                                        question_templates=[basic_template],
                                        tables=tables,
@@ -522,7 +545,6 @@ def create_table_question_dataset(tables: Union[datasets.Dataset, List[Table]],
         main_expr = template.main_expression.generate() if isinstance(template, QuestionTemplate) else '?'
         auto_name = f"{len(tables)}_tables_{num_templates}_templates_{main_expr}_{num_conditions}_conditions_{datetime.now().strftime('%y%m%d_%H%M_%S_%f')}"
     dataset = TableQuestionDataSet(name or auto_name,
-                                   args,
                                    description=description,
                                    question_templates=[template] if isinstance(template, QuestionTemplate) else template,
                                    tables=tables,
@@ -941,21 +963,97 @@ def create_postprocessed_versions(data_version_function: Callable[..., TableQues
                               )
 
 
-def apply_quality_filters(dataset,
+def apply_quality_filters(dataset: Union[datasets.Dataset, TableQuestionDataSet],
                           remove_multi_answer: bool = True,
                           single_row_agg_tolerances: Tuple[float] = (0.2, 0.0),
+                          threshold: int = 2,
                           save: bool = True,
                           dataset_name: Optional[str] = None,
-                          cache_path: str = './data/NumTabQA/.cache',
+                          num_proc: Optional[int] = 12,
+                          cache_path: str = '/home/mamba/.cache',
                           ):
     if save and dataset_name is None:
+        # TODO infer from cache files
         raise ValueError("Need to provide dataset name if you want to save it!")
+    # remove invalid answers
+    if isinstance(dataset, datasets.Dataset):
+        dataset = dataset.map(lambda x: {'filter_condition': [x['answers'][i].lower() not in ['', 'none', 'nan', 'n/a']
+                                                              for i in range(len(x['questions']))
+                                                              ]
+                                         },
+                              desc="Prepare filter_condition: valid answer string...",
+                              num_proc=num_proc,
+                              )
+        dataset = apply_filter_condition(dataset, num_proc=num_proc)
+    else:
+        dataset._remove_unanswered_questions()
+
+    # remove invalid ordinal comparison with empty string
+    if isinstance(dataset, datasets.Dataset):
+        # more exact condition? TODO/import is_numeric:
+        # any([ordinal_comparator in x['sql'][i] and is_numeric(x['sql'][i].split(ordinal_comparator)[-1].strip()) for ordinal_comparator in [' < ', ' > ', ' <= ', ' >= ']])
+        dataset = dataset.map(lambda x: {'filter_condition': ["than ''?" not in x['questions'][i]
+                                                              for i in range(len(x['questions']))
+                                                              ]
+                                         },
+                              desc="Prepare filter_condition: valid ordinal comparison...",
+                              num_proc=num_proc,
+                              )
+        dataset = apply_filter_condition(dataset, num_proc=num_proc)
+
+    # remove multi-answer questions
     if remove_multi_answer:
-        dataset.remove_multi_answer_questions()
+        if isinstance(dataset, datasets.Dataset):
+            dataset = dataset.map(lambda x: {'filter_condition': [x['is_multy_row_answer'][i].lower() == 'false'
+                                                                  if isinstance(x['is_multy_row_answer'][i], str)
+                                                                  else x['is_multy_row_answer'][i] is False
+                                                                  for i in range(len(x['questions']))
+                                                                  ]
+                                             },
+                                  desc="Prepare filter_condition: multi_answer questions...",
+                                  num_proc=num_proc,
+                                  )
+            dataset = apply_filter_condition(dataset, num_proc=num_proc)
+        else:
+            dataset.remove_multi_answer_questions()
         if save:
             save_version(dataset, cache_path, dataset_name + '_filtered_multi_answer')
-    for tolerance in sorted(single_row_agg_tolerances, reverse=True):  # filter higher tolerances first subsequent removal
-        dataset.remove_questions_with_lower_aggregation_count(tolerance=tolerance)
+
+    # remove questions with low aggregation count
+    old_dataset = dataset  # keep reference to original dataset for subsequent removal of questions with lower tolerance
+    for tolerance in sorted(single_row_agg_tolerances, reverse=True):  # filter higher tolerances first subsequent removal <- TODO check if this is still necessary
+        if isinstance(dataset, TableQuestionDataSet):
+            # TODO revisit if in-place removal makes sense in this context with subsequent tolerances
+            dataset.remove_questions_with_lower_aggregation_count(threshold=threshold, tolerance=tolerance)
+        else:
+            if not isinstance(dataset, datasets.Dataset):
+                raise ValueError(f"Dataset must be either a TableQuestionDataSet or a datasets.Dataset (not {type(dataset)})!")
+            # Analogous to remove_questions_with_lower_aggregation_count() from TableQuestionDataSet just for post hock huggingface datasets serialization
+            if tolerance > 1.0 or tolerance < 0.0:
+                raise ValueError(f"tolerance must be between 0 and 1 but was {tolerance}!"
+                                 "It represents the allowed proportion of questions with aggregation of rows with less than threshold.")
+            if tolerance == 0.0:
+                dataset = dataset.map(lambda x: {'filter_condition': [x['aggregators'][i] == '' or int(x['aggregation_num_rows'][i] or -1) >= threshold
+                                                                      for i in range(len(x['questions']))
+                                                                      ]
+                                                 },
+                                      desc=f"Prepare filter_condition: questions with agg_count lower {threshold}...",
+                                      num_proc=num_proc,
+                                      )
+                dataset = apply_filter_condition(dataset, num_proc=num_proc)
+            else:
+                warnings.warn("For datasets.Dataset serialization the tolerance is approximated through probabalistic sampling. "
+                              "This may lead minor shifts in the data distribution compared to the deterministic case.")
+                dataset = old_dataset.map(lambda x: {'filter_condition': [int(x['aggregation_num_rows'][i] or -1) >= threshold
+                                                                          or x['aggregators'][i] == ''
+                                                                          or np.random.rand() <= tolerance
+                                                                          for i in range(len(x['questions']))
+                                                                          ],
+                                                     },
+                                          desc=f"Prepare filter_condition: questions with agg_count lower {threshold} (tolerance {tolerance})...",
+                                          num_proc=num_proc,
+                                          )
+                dataset = apply_filter_condition(dataset, num_proc=num_proc)
         if save:
             save_version(dataset, cache_path, dataset_name + f"{'_filtered_multi_answer' if remove_multi_answer else ''}_filter_agg_count_{int(tolerance*100)}")
     return dataset
@@ -1033,57 +1131,89 @@ def main(single_version: bool = True, table_corpus: str = 'wikitablequestions', 
 
 def template_list_from_dataset(dataset: Union[datasets.Dataset, str, PurePath]) -> List[QuestionTemplate]:
     if isinstance(dataset, (str, PurePath)):
-        dataset = datasets.load_from_disk(dataset)
+        dataset = datasets.Dataset.load_from_disk(dataset)
     return [QuestionTemplate.from_state_dict(template) for template in dataset]
 
 
-def generate_questions_from_templates(templates: Union[datasets.Dataset, str, PurePath],
+def process_template_names(template_names: Union[str, List[str]]) -> str:
+    if isinstance(template_names, str):
+        template_names = [template_names]  # always make it a list
+    processed_names = []
+    for name in template_names:
+        # check if name is a path and extract name
+        if '/' in name:
+            processed_names.append(PurePath(name).name)  # if saved with save_version should be .parent.name because of timestamp
+        else:
+            processed_names.append(name)
+    return '_'.join(processed_names)
+
+
+def generate_questions_from_templates(templates: Union[datasets.Dataset, str, List[str], PurePath],
                                       table_corpus: str,
                                       dataset_splits: Union[str, List[str]] = 'test',
                                       dataset_name: Optional[str] = None,
                                       dataset_description: str = '',
-                                      cache_path: str = './data/NumTabQA/.cache',
-                                      ) -> None:
+                                      args: Optional[DataProcessingArgs] = None,
+                                      ) -> Union[datasets.Dataset, Dict[str, datasets.Dataset]]:
+    if args is None:
+        # TODO think if also complete initialization from args is possible
+        args = DataProcessingArgs()  # use default arguments
+    # type check fpr templates
+    if not isinstance(templates, (datasets.Dataset, str, list, PurePath)):
+        raise ValueError(f"templates must be either a datasets.Dataset, a PurePath, a string or a list of strings but {type(templates)} was passed!")
+    # make sure dataset_splits is a list
     if isinstance(dataset_splits, str):
-        dataset_splits = [dataset_splits]  # make sure it is a list
+        dataset_splits = [dataset_splits]
+    # determine dataset_name if not provided
     if dataset_name is None:
-        # load template dataset to extract name from cache path
-        if isinstance(templates, (str, PurePath)):
-            templates = datasets.load_from_disk(templates)
-        dataset_name = (table_corpus +
-                        str(PurePath(templates.cache_files[0]).parent.name)  # if saved with save_version should be .parent.parent.name because of timestamp
-                        )
-    # if dataset_name argument was None (and templates argument was originally str or Path) templates will already be of type datasets.Dataset
-    # and does not need to be loaded by template_list_from_dataset again
-    template_list = template_list_from_dataset(templates)
-    for split in dataset_splits:
-        dataset = create_dataset(template_list,
-                                 dataset_name=dataset_name,
-                                 description=dataset_description,
-                                 table_corpus=table_corpus,
-                                 split=split,
-                                 )
-        save_version(dataset, cache_path=cache_path, dataset_name=dataset_name + f'_{split}')
+        if isinstance(templates, (str, list)):
+            dataset_name = process_template_names(templates)
+        else:
+            if isinstance(templates, PurePath):
+                templates = datasets.load_from_disk(templates)  # TODO use caching
+            # from here on templates should be a datasets.Dataset (either loaded from PurePath or passed as datasets.Dataset directly)
+            dataset_name = str(PurePath(templates.cache_files[0]).parent.name)  # if saved with save_version should be .parent.parent.name because of timestamp
+    # get template list from name or Dataset
+    if isinstance(templates, str):
+        template_list = get_template_by_name([templates])  # make sure putput is a list, by passing a list
+    elif isinstance(templates, list):
+        template_list = get_template_by_name(templates)
+    else:  # either PurePath (if dataset_name was passed not as None) or datasets.Dataset (either passed explicitly or loaded in dataset_name resolution)
+        template_list = template_list_from_dataset(templates)
 
+    split_dict = {}
+    for split in dataset_splits:
+        split_dict[split] = create_dataset(template_list,
+                                           dataset_name=dataset_name,
+                                           description=dataset_description,
+                                           table_corpus=table_corpus,
+                                           split=split,
+                                           save=True,
+                                           args=args,
+                                           )
+    if len(dataset_splits) == 1:
+        return split_dict[dataset_splits[0]]
+    return split_dict
 
 
 if __name__ == "__main__":
     # TODO refactor functions should do one thing (e.g apply quality filter should not save dataset version) -> have script instead that only executes all required functions
     # TODO separate template creation and dataset creation modules
-    table_corpus = 'wikitablequestions'
-    dataset_splits = ['test', 'train', 'validation']
-    template_set_name = 'standard_templates'
-    cache_path = './data/NumTabQA/.cache'
-    generate_questions_from_templates(templates='./data/NumTabQA/.cache/templates/standard_templates',
-                                      table_corpus=table_corpus,
-                                      dataset_splits=dataset_splits,
-                                      dataset_name=table_corpus + '_' + template_set_name,
-                                      dataset_description='All combinations of standard templates with the wikitablequestion corpus.',
-                                      cache_path=cache_path)
-    for split in dataset_splits:
-        dataset_name = f"{table_corpus}_{template_set_name}_{split}"
-        dataset = caching(dataset_name, cache_path=cache_path)
-        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=cache_path, save=True)
+    args = dargparse(DataProcessingArgs)
+
+    generate_questions_from_templates(templates=args.template_names,  #template_path or args.cache_dir + '/templates/' + template_name,
+                                      table_corpus=args.table_corpus,
+                                      dataset_splits=args.splits,
+                                      dataset_name=args.dataset_name,
+                                      dataset_description='All combinations of standard templates with the gittables_group_filtered corpus.',
+                                      args=args,
+                                      )
+
+    # apply quality filters and save filtered versions
+    for split in args.splits:
+        dataset_name = f"{args.table_corpus}_{args.dataset_name or process_template_names(args.template_names)}_{split}"
+        dataset = caching(dataset_name, cache_path=args.cache_dir)
+        apply_quality_filters(dataset, dataset_name=dataset_name, cache_path=args.cache_dir, save=True)
     #main()
     # gittables example
     # table_dataset = load_table_dataset(table_corpus='gittables_subset_10', split='train', cache_path='/home/mamba/.cache')
