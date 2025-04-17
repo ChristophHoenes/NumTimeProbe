@@ -50,7 +50,13 @@ def str_match_accuracy(predictions, targets):
     return sum(is_correct)/len(is_correct), is_correct
 
 
-def float_match_accuracy(predictions, targets, tolerance=0.0):
+def float_match_accuracy(predictions, targets, tolerance=1e-7):
+    if not isinstance(predictions, list):
+        raise ValueError(f"Expected 'predictions' to be a list got a different type ({type(predictions)})!")
+    if not isinstance(targets, list):
+        raise ValueError(f"Expected 'targets' to be a list got a different type ({type(targets)})!")
+    if len(predictions) != len(targets):
+        raise ValueError("Length of predictions and targets must be equal!")
     is_correct = []
     for pred, target in zip(predictions, targets):
         try:
