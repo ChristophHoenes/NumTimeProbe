@@ -25,6 +25,7 @@ dependencies:
   - tqdm
   - pynvml
   - matplotlib
+  - seaborn
   - accelerate
 
   # Dev dependencies
