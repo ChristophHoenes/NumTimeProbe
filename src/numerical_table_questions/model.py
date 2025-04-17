@@ -316,7 +316,7 @@ class LightningWrapper(L.LightningModule):
             # retrieve loss
             loss = outputs[self.model_specs.loss_out_id]
 
-        self.log("train/loss", loss.item(), on_step=True, on_epoch=True)
+        self.log("train/loss", loss.item(), on_step=True, on_epoch=True, sync_dist=True)
         # compute and log torchmetrics at every step
         self.train_metrics(outputs, target)
         self.log_dict(self.train_metrics)
@@ -396,7 +396,7 @@ class LightningWrapper(L.LightningModule):
         metric_output = self.valid_metrics.compute()
         # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
         metric_output = convert_type_and_device_for_lightning_module_log(metric_output, self.device)
-        self.log_dict(metric_output)
+        self.log_dict(metric_output, sync_dist=True)
         self.valid_metrics.reset()
 
     def test_step(self, batch, batch_idx):
@@ -519,7 +519,7 @@ class LightningWrapper(L.LightningModule):
         metric_output = self.test_metrics.compute()
         # convert every value to scalar if possible and move non-scalar tensors to current device for sync_dist
         metric_output = convert_type_and_device_for_lightning_module_log(metric_output, self.device)
-        self.log_dict(metric_output)
+        self.log_dict(metric_output, sync_dist=True)
         self.test_metrics.reset()
         # log and clear predictions
         # TODO check if this is on GPU and could lead to memory leak (e.g. is released after logging?)
