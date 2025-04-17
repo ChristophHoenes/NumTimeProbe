@@ -447,8 +447,9 @@ def aggregate_statistics_map(dataset: datasets.Dataset) -> dict:
 
 
 def create_table_index(table_dataset: datasets.Dataset, table_id_col_name: str = 'table_id') -> dict:
-    index = {}
-    if 'table' in table_dataset.column_names and table_dataset[0]['table'].get(table_id_col_name) is not None:
+    if 'table' in table_dataset.column_names and isinstance(table_dataset[0]['table'], str):
+        index = {table_dataset[i]['table']: i for i in range(len(table_dataset))}
+    elif 'table' in table_dataset.column_names and table_dataset[0]['table'].get(table_id_col_name) is not None:
         index = {table_dataset[i]['table'][table_id_col_name]: i for i in range(len(table_dataset))}
     elif table_dataset.get(table_id_col_name) is not None:
         index = {table_dataset[i][table_id_col_name]: i for i in range(len(table_dataset))}
@@ -553,9 +554,22 @@ def add_template_classes(dataset: datasets.Dataset, num_proc: int = 12) -> datas
     return dataset
 
 
+def added_questions(sample : dict, update_dicts={}, replace_columns=[]) -> dict:
+    """ Adds question instances to the dataset that are specified in update_dicts.
+        update_dicts contains all questions that should be added grouped by table id
+    """
+    if len(update_dicts) == 0 or len(replace_columns) == 0:
+        warnings.warn("update_dicts and replace_columns must be provided otherwise this map will have no effect!")
+    table_id = sample['table'] if isinstance(sample['table'], str) else sample['table']['table_id']
+    update_data = update_dicts.get(table_id)
+    if update_data is None:
+        return {}
+    return {col: sample[col] + update_data[col] for col in replace_columns}
+
+
 def patch_expression_dataset(original_dataset: datasets.Dataset, new_expression_dataset: datasets.Dataset, num_proc: int = 12, save_path: Optional[str] = None) -> datasets.Dataset:
     # filter all expression questions from original dataset
-    original_dataset = original_dataset.map(lambda x: {'main_expression': question_to_main_expression(x['question'])}, desc="Prepare main_expression...", num_proc=num_proc)
+    original_dataset = original_dataset.map(lambda x: {'main_expression': [question_to_main_expression(q) for q in x['questions']]}, desc="Prepare main_expression...", num_proc=num_proc)
     original_dataset = original_dataset.map(lambda x: {'expression_count': sum([i == 'expression' for i in x['main_expression']])}, desc="Count expression_questions...", num_proc=num_proc)
     original_dataset = original_dataset.map(
         lambda x: {'filter_condition': [x['main_expression'][i].lower() != 'expression'
@@ -570,10 +584,19 @@ def patch_expression_dataset(original_dataset: datasets.Dataset, new_expression_
     index = create_table_index(new_expression_dataset)
     excess_in_new_cnt = {}
     not_available_in_new_cnt = {}
+    update_dicts = {}
+    replace_columns = [col for col in original_dataset.column_names
+                       if isinstance(original_dataset[0][col], list)
+                       and len(original_dataset[0][col]) == len(original_dataset[0]['questions'])
+                       and col not in ['main_expression', 'expression_count']  # because new_expression_dataset does not have them
+                       ]
     for s, sample in enumerate(original_dataset):
         # only if expression questions were deleted
         if sample['expression_count'] > 0:
-            table_id = sample['table']['table_id']
+            if isinstance(sample['table'], str):
+                table_id = sample['table']
+            else:
+                table_id = sample['table']['table_id']
             new_sample_idx = index.get(table_id)
             # if new expression questions are not available for this table mark the missed samples and skip
             if new_sample_idx is None:
@@ -588,10 +611,15 @@ def patch_expression_dataset(original_dataset: datasets.Dataset, new_expression_
                 elif expression_sample_difference > 0:
                     not_available_in_new_cnt[s] = expression_sample_difference
                 # add new expression questions to original dataset
-                for col in original_dataset.column_names:
-                    if isinstance(sample[col], list) and len(sample[col]) == len(sample['questions']):
-                        for i in range(min(sample['expression_count'], len(new_sample['questions']))):
-                            sample[col].append(new_sample[col][i])
+                update_dict = {}
+                for col in replace_columns:
+                    update_dict[col] = new_sample[col][:min(sample['expression_count'], len(new_sample['questions']))]
+            update_dicts[table_id] = update_dict
+    original_dataset = original_dataset.map(added_questions,
+                                            fn_kwargs={'update_dicts': update_dicts, 'replace_columns': replace_columns},
+                                            desc="Add new expression questions to original dataset...",
+                                            num_proc=num_proc,
+                                            )
     # if new expression questions are not available for some questions try to replace with excess questions from other tables
     if sum(not_available_in_new_cnt.values()) > 0:
         warnings.warn(f"New expression questions are not available for {len(not_available_in_new_cnt)} questions in the original dataset!"
