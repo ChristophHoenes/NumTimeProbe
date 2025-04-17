@@ -10,7 +10,7 @@ from torch import multiprocessing
 @dataclass
 class TrainingArgs:
     model_name_or_path: str = dArg(
-        default="tapex",
+        default="microsoft/tapex-large-finetuned-wtq",
         help="HuggingFace model identifier. This is used to construct the model architecture and load pretrained weights if not specified otherwise.",  # noqa: E501
         aliases="--model",
     )
