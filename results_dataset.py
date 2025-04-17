@@ -1,5 +1,6 @@
 import builtins
 import json
+import statistics
 import sys
 import warnings
 from datetime import datetime
@@ -13,7 +14,7 @@ from numerical_table_questions.data_loading import path_from_components
 from numerical_table_questions.metrics import float_match_accuracy, absolute_distance
 from numerical_table_questions.lazy_data_processing import QuestionTableIndexDataset
 from numerical_table_questions.utils.data_caching import save_version, caching
-from numerical_table_questions.utils.data_utils import add_template_classes
+from numerical_table_questions.utils.data_utils import add_template_classes, create_table_index, question_to_main_expression
 from numerical_table_questions.utils.plots import grouped_plot
 from numerical_table_questions.utils.wandb_utils import get_artifact, get_run
 
@@ -94,10 +95,12 @@ def convert_jsonl_dataset_schema(file_path: str, rename_fields: Dict[str, str], 
 
 
 def calculate_posthoc_metrics(dataset: datasets.Dataset, metrics: Dict[str, Callable], fn_kwargs: dict = {}, num_proc: int = 12, save_path: Optional[str] = None, infer_save_path: bool = False) -> datasets.Dataset:
-    new_dataset = dataset.map(lambda x: {metric_name: metric_func(x['filtered_resps'], [x['answer']])[0]
+    new_dataset = dataset.map(lambda x: {metric_name: metric_func(x['filtered_resps'] if isinstance(x['filtered_resps'], list) else [x['filtered_resps']],
+                                                                  [x['answer']],
+                                                                  **fn_kwargs.get(metric_name, {}),
+                                                                  )[0]  # only return the metric value not the list of booleans
                                          for metric_name, metric_func in metrics.items()},
                               desc=f"Computing metrics {list(metrics.keys())} posthoc from responses...",
-                              fn_kwargs=fn_kwargs,
                               num_proc=num_proc,
                               )
     if save_path is not None:
@@ -221,6 +224,11 @@ def results_datasets_from_wandb(wandb_run_id: str,
                                 ) -> List[datasets.Dataset]:
     wandb_run = get_run(wandb_run_id)
     run_arguments = wandb_run.config
+    if 'training_args' not in run_arguments.keys():
+        sqlcoder = True
+    else:
+        sqlcoder = False
+    #sqlcoder = True  # for tapas fine
     results_table = get_artifact(wandb_run_id, artifact_name=results_table_name, return_local_path=True)
     # TODO get underlying dataset and extract fields
     # fields: List[str] = ['table_idx', 'question_number', 'answer', 'aggregator', 'aggregation_num_rows']
@@ -230,9 +238,12 @@ def results_datasets_from_wandb(wandb_run_id: str,
     #    raise e
     # TODO check what happens to latest version vs. run version is caching used?
     # for runs on KISZ node the training args are saved as string representation of the TrainingArgs class -> need to parse them
-    if isinstance(run_arguments['training_args'], str):
+    if not sqlcoder and isinstance(run_arguments['training_args'], str):
         run_arguments['training_args'] = eval(run_arguments['training_args'].replace('TrainingArgs', 'dict'))
-    dataset_path = path_from_components(run_arguments['training_args']['table_corpus_name'], run_arguments['training_args']['dataset_suffix'], 'test', data_dir=run_arguments['training_args']['data_dir'])
+    if sqlcoder:
+        dataset_path = path_from_components('wikitablequestions', 'final', 'test', data_dir='/home/mamba/.cache')
+    else:
+        dataset_path = path_from_components(run_arguments['training_args']['table_corpus_name'], run_arguments['training_args']['dataset_suffix'], 'test', data_dir=run_arguments['training_args']['data_dir'])
     artifact_shard_datasets = []
     for artifact_shard_id, file_path in enumerate(results_table):
         with open(file_path, 'r') as file:
@@ -243,7 +254,7 @@ def results_datasets_from_wandb(wandb_run_id: str,
                 wandb_fields = {'doc_id': data[col_to_id_mapping['question_ids']],
                                 'resps': data[col_to_id_mapping['text_predictions']],
                                 'filtered_resps': data[col_to_id_mapping['processed_text_predictions']],
-                                'model_name': run_arguments['training_args']['model_name_or_path'],
+                                'model_name': run_arguments['training_args']['model_name_or_path'] if not sqlcoder else 'sqlcoder',
                                 'artifact_shard_id': artifact_shard_id,
                                 }
                 # add all metrics specified in metrics map
@@ -273,6 +284,8 @@ def grouped_results(dataset: datasets.Dataset, group_by_cols: List[str], row_fil
     if len(group_by_cols) > 1:
         #arrays = [df[col].values for col in group_by_cols]
         #index = pd.MultiIndex.from_arrays(arrays, names=group_by_cols)
+        df.set_index(group_by_cols, inplace=True)
+    else:
         df.set_index(group_by_cols, inplace=True)
     #df = df.groupby(level=group_by_cols)[select_cols].mean()
     aggregations = {col: ['mean', 'count'] for col in select_cols}
@@ -356,28 +369,28 @@ def parse_axes_labels(x_col: Optional[str] = None, y_col: Optional[str] = None):
     return axes_args
 
 
-def dat_to_line(dat, x_col='aggregation_num_rows', y_col='float_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, num_bins=5, bin_mode='equal_count', bin_ranges=[0, 3, 10, 50, 100]):
+def dat_to_line(dat, x_col='aggregation_num_rows', y_col='float_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, num_bins=5, bin_mode='equal_count', bin_ranges=[0, 3, 10, 50, 100], axes_args: dict = {}, font_scale: float = 1.5):
     dat_bin = create_bins(dat, bin_col=x_col, num_bins=num_bins, mode=bin_mode, bin_ranges=bin_ranges)
     df = grouped_results(dat_bin, group_by_cols=['model_name', 'boundary'], row_filters=row_filters, select_cols=[y_col.replace('_mean', '').replace('_count', '')])
     df_long_form = df.reset_index()
     df_long_form.columns = ['_'.join([c for c in col if c != '']) for col in df_long_form.columns]
-    axes_args = parse_axes_labels(x_col=x_col, y_col=y_col)
-    grouped_plot(df_long_form, x='boundary', y=y_col, kind='line', axes_args=axes_args)
+    axes_args.update(parse_axes_labels(x_col=x_col, y_col=y_col))
+    grouped_plot(df_long_form, x='boundary', y=y_col, kind='line', axes_args=axes_args, font_scale=font_scale)
 
 
-def dat_to_bar(dat, category='aggregator', y_col='float_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}):
+def dat_to_bar(dat, category='aggregator', y_col='float_match_mean', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, axes_args: dict = {}, font_scale: float = 1.5):
     df = grouped_results(dat, group_by_cols=['model_name', category], row_filters=row_filters, select_cols=[y_col.replace('_mean', '').replace('_count', '')])
     df_long_form = df.reset_index()
     df_long_form.columns = ['_'.join([c for c in col if c != '']) for col in df_long_form.columns]
-    axes_args = parse_axes_labels(x_col=category, y_col=y_col)
-    grouped_plot(df_long_form, x=category, y=y_col, kind='bar', axes_args=axes_args)
+    axes_args.update(parse_axes_labels(x_col=category, y_col=y_col))
+    grouped_plot(df_long_form, x=category, y=y_col, kind='bar', axes_args=axes_args, font_scale=font_scale)
 
 
-def dat_to_hist(dat, x_col='main_expression', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}):
+def dat_to_hist(dat, x_col='main_expression', row_filters={'aggregation_num_rows': lambda x: int(x) > 0}, axes_args: dict = {}, font_scale: float = 1.5):
     df = grouped_results(dat, group_by_cols=['model_name', x_col], row_filters=row_filters, select_cols=['doc_id'])
     df_long_form = df.reset_index()
-    axes_args = parse_axes_labels(x_col=x_col)
-    grouped_plot(df_long_form, x=x_col, kind='hist', axes_args=axes_args)
+    axes_args.update(parse_axes_labels(x_col=x_col))
+    grouped_plot(df_long_form, x=x_col, kind='hist', axes_args=axes_args, font_scale=font_scale)
 
 
 def debug_expression_answers(dat_expr):
@@ -390,11 +403,11 @@ def debug_expression_answers(dat_expr):
     print(hist)
 
 
-def standard_plots(dataset: datasets.Dataset):
-    dat_to_bar(dataset, category='aggregator')
-    dat_to_bar(dataset, category='main_expression')
-    dat_to_bar(dataset, category='condition')
-    dat_to_line(dataset)
+def standard_plots(dataset: datasets.Dataset, axes_args: dict = {}, font_scale: float = 1.5):
+    dat_to_bar(dataset, category='aggregator', axes_args=axes_args, font_scale=font_scale)
+    dat_to_bar(dataset, category='main_expression', axes_args=axes_args, font_scale=font_scale)
+    dat_to_bar(dataset, category='condition', axes_args=axes_args, font_scale=font_scale)
+    dat_to_line(dataset, axes_args=axes_args, font_scale=font_scale)
 
 
 def extract_metadata(jsonl_file: PurePath) -> dict:
@@ -421,6 +434,98 @@ def extract_metadata(jsonl_file: PurePath) -> dict:
     return metadata
 
 
+def get_num_questions(sample) -> int:
+    return len(sample['questions'])
+
+
+def get_avg_pre_aggregation_count(sample) -> float:
+    return sum([int(s) for s in sample['aggregation_num_rows']]) / len(sample['aggregation_num_rows'])
+
+
+def get_count_template_type(sample, template_type='single column') -> int:
+    return len([s for s in sample['main_expression'] if s.lower().replace('_', '').replace(' ', '') == template_type.lower().replace('_', '').replace(' ', '')])
+
+
+def get_num_rows(sample) -> int:
+    return len(sample['table']['data_dict']['rows'])
+
+
+def get_num_cols(sample) -> int:
+    return len(sample['table']['deduplicated_column_names'])
+
+
+def get_num_numeric_cols(sample) -> int:
+    return len([s for s in sample['table']['inferred_column_types'] if s.lower() == 'numeric'])
+
+
+def dataset_statistics(dataset: datasets.Dataset, save_path: Optional[str] = None, num_proc: int = 12) -> dict:
+    dataset = dataset.map(lambda x: {'num_questions': get_num_questions(x)}, num_proc=num_proc, desc="Adding num_questions...")
+    dataset = dataset.filter(lambda x: x['num_questions'] > 0, num_proc=num_proc, desc="Filtering out samples without questions...")
+    dataset = dataset.map(lambda x: {'avg_pre_aggregation_count': get_avg_pre_aggregation_count(x)}, num_proc=num_proc, desc="Adding avg_pre_aggregation_count...")
+    dataset = dataset.map(lambda x: {'main_expression': [question_to_main_expression(q) for q in x['questions']]}, num_proc=num_proc, desc="Adding main_expresion...")
+    dataset = dataset.map(lambda x: {'single_column_cnt': get_count_template_type(x, template_type='single_column')}, num_proc=num_proc, desc="Adding single_column_cnt...")
+    dataset = dataset.map(lambda x: {'difference_cnt': get_count_template_type(x, template_type='difference')}, num_proc=num_proc, desc="Adding difference_cnt...")
+    dataset = dataset.map(lambda x: {'ratio_cnt': get_count_template_type(x, template_type='ratio')}, num_proc=num_proc, desc="Adding ratio_cnt...")
+    dataset = dataset.map(lambda x: {'expression_cnt': get_count_template_type(x, template_type='expression')}, num_proc=num_proc, desc="Adding expression_cnt...")
+
+    table_dataset = datasets.Dataset.load_from_disk(dataset[0]['table_dataset_path'])
+    table_index = create_table_index(table_dataset)
+    table_dataset = table_dataset.map(lambda x: {'num_rows': get_num_rows(x)}, num_proc=num_proc, desc="Adding num_rows...")
+    table_dataset = table_dataset.map(lambda x: {'num_cols': get_num_cols(x)}, num_proc=num_proc, desc="Adding num_cols...")
+    table_dataset = table_dataset.map(lambda x: {'num_numeric_cols': get_num_numeric_cols(x)}, num_proc=num_proc, desc="Adding num_numeric_cols...")
+
+    # this needs to run after filtering dataset for samples without questions
+    avg_num_rows = []
+    avg_num_cols = []
+    avg_num_numeric_cols = []
+    for sample in dataset:  # only consider tables that are in question dataset
+        table_idx = table_index.get(sample['table'])
+        if table_idx is None:
+            raise warnings.warn(f"Table ID {sample['table']} was not found in the table_index!")
+            continue
+        avg_num_rows.append(table_dataset[table_idx]['num_rows'])
+        avg_num_cols.append(table_dataset[table_idx]['num_cols'])
+        avg_num_numeric_cols.append(table_dataset[table_idx]['num_numeric_cols'])
+
+    num_tables_found = len(avg_num_rows)
+    avg_num_rows = sum(avg_num_rows) / len(avg_num_rows)
+    avg_num_cols = sum(avg_num_cols) / len(avg_num_cols)
+    avg_num_numeric_cols = sum(avg_num_numeric_cols) / len(avg_num_numeric_cols)
+
+    num_tables = len(dataset)
+    if num_tables != num_tables_found:
+        warnings.warn(f"Number of tables in dataset ({num_tables}) does not match number of tables extracted from table_dataset ({len(avg_num_rows)}).")
+
+    num_questions = sum(dataset['num_questions'])
+    avg_questions_per_table = num_questions / num_tables
+    std_questions_per_table = statistics.stdev(dataset['num_questions'])
+    avg_agg_cnt = sum(dataset['avg_pre_aggregation_count']) / num_tables
+    single_column_cnt = sum(dataset['single_column_cnt'])
+    difference_cnt = sum(dataset['difference_cnt'])
+    ratio_cnt = sum(dataset['ratio_cnt'])
+    expression_cnt = sum(dataset['expression_cnt'])
+
+    stats_dict = {'num_tables': num_tables,
+                  'avg_num_rows': avg_num_rows,
+                  'avg_num_cols': avg_num_cols,
+                  'avg_num_numeric_cols': avg_num_numeric_cols,
+                  'num_questions': num_questions,
+                  'avg_questions_per_table': avg_questions_per_table,
+                  'std_questions_per_table': std_questions_per_table,
+                  'avg_agg_cnt': avg_agg_cnt,
+                  'single_column_cnt': single_column_cnt,
+                  'difference_cnt': difference_cnt,
+                  'ratio_cnt': ratio_cnt,
+                  'expression_cnt': expression_cnt,
+                  }
+
+    if save_path is not None:
+        with open(save_path, 'w+') as f:
+            json.dump(stats_dict, f)
+
+    return stats_dict
+
+
 if __name__ == '__main__':
     arguments = sys.argv[1:]
     lm_eval_results_path = arguments[0]
@@ -431,13 +536,16 @@ if __name__ == '__main__':
     #lm_eval_results_path = '/home/mamba/.cache/results/wikitablequestions/250209'
     #dummy_path = '/home/mamba/.cache/results/dummy'
     #lm_eval_results_path = dummy_path
-    lm_eval_combined_name = 'combined'
-    lm_eval_combined_path = Path(lm_eval_results_path) / lm_eval_combined_name
-    if lm_eval_combined_path.is_dir():
-        lm_eval_results = caching(str(lm_eval_combined_path.name), cache_path=str(lm_eval_combined_path.parent))
+    if lm_eval_results_path != '-':  # option to skip lm_eval results
+        lm_eval_combined_name = 'combined'
+        lm_eval_combined_path = Path(lm_eval_results_path) / lm_eval_combined_name
+        if lm_eval_combined_path.is_dir():
+            lm_eval_results = caching(str(lm_eval_combined_path.name), cache_path=str(lm_eval_combined_path.parent))
+        else:
+            lm_eval_results = extract_all_from_dir(lm_eval_results_path, save_path=str(lm_eval_combined_path))
+        standard_plots(lm_eval_results)
     else:
-        lm_eval_results = extract_all_from_dir(lm_eval_results_path, save_path=str(lm_eval_combined_path))
-    standard_plots(lm_eval_results)
+        lm_eval_results = None
 
     # wandb datasets
     if Path(wandb_run_ids[0]).is_dir():
@@ -456,14 +564,15 @@ if __name__ == '__main__':
             standard_plots(wandb_results)
         else:
             wandb_results = wandb_run_datasets[0]
-        # all results combined
-        all_combined_name = 'combined'
-        all_combined_path = Path(lm_eval_results_path).parent / all_combined_name
-        if all_combined_path.is_dir():
-            combined_results = caching(str(all_combined_path.name), cache_path=str(all_combined_path.parent))
-        else:
-            combined_results = combine_datasets([lm_eval_results, wandb_results], save_path=str(all_combined_path))
-        standard_plots(combined_results)
+        if lm_eval_results_path != '-':  # option to skip lm_eval results
+            # all results combined
+            all_combined_name = 'combined'
+            all_combined_path = Path(lm_eval_results_path).parent / all_combined_name
+            if all_combined_path.is_dir():
+                combined_results = caching(str(all_combined_path.name), cache_path=str(all_combined_path.parent))
+            else:
+                combined_results = combine_datasets([lm_eval_results, wandb_results], save_path=str(all_combined_path))
+            standard_plots(combined_results)
     else:
         combined_results = lm_eval_results
 
