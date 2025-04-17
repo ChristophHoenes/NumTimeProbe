@@ -231,7 +231,7 @@ class QuestionTemplate:
                             if self._schema['variables'][variable]['type'] == 'column']
         # mapping of column name to inferred data type
         infered_types = {name: typ for name, typ in zip(table.column_names, table._inferred_column_types)}
-        if max_value_length is not None:
+        if max_num_questions is not None:
             allowed_cols_by_col_var = {col_var: [col_name for col_name, col_typ in infered_types.items() if col_typ in self._schema['variables'][col_var]['allowed_dtypes']] for col_var in column_variables}
             column_variable_bindings = sample_assignments(allowed_cols_by_col_var, diversity_factor*max_num_questions, retries)
         else:
